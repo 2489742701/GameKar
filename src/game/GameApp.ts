@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import type { FrameInfo } from '@engine/core/GameLoop';
 import { GameLoop } from '@engine/core/GameLoop';
 import type { GridPos } from '@engine/math/Grid';
-import { cellToWorld, inBounds, pos, worldToCell } from '@engine/math/Grid';
+import { cellToWorld, footprintRect, inBounds, pos, worldToCell } from '@engine/math/Grid';
 import { Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
@@ -145,12 +145,14 @@ export class GameApp {
     this.bus.on('building:placed', (b) => {
       this.buildingView.add(b);
       this.ground.markOccupied(b.origin, b.cols, b.rows, true);
+      this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), true);
       this.world.select({ kind: 'building', building: b });
     });
 
     this.bus.on('building:removed', (b) => {
       this.buildingView.remove(b.id);
       this.ground.markOccupied(b.origin, b.cols, b.rows, false);
+      this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), false);
     });
 
     this.bus.on('selection:changed', () => this.syncSelection());

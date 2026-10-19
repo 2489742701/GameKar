@@ -27,6 +27,8 @@ export class GroundView {
   private land!: THREE.InstancedMesh;
   private sea!: THREE.InstancedMesh;
   private readonly index = new Map<number, { mesh: THREE.InstancedMesh; slot: number }>();
+  /** 每格建图时的抖动色：拆除后要还原成它，而不是还原成没有抖动的基色 */
+  private readonly baseColor = new Map<number, THREE.Color>();
   private readonly dummy = new THREE.Object3D();
   private readonly color = new THREE.Color();
 
@@ -98,7 +100,9 @@ export class GroundView {
       this.color.copy(BASE_COLOR.get(type)!).offsetHSL(0, jitter * 0.06, jitter * 0.09);
       mesh.setColorAt(slot, this.color);
 
-      this.index.set(row * stride + col, { mesh, slot });
+      const key = row * stride + col;
+      this.baseColor.set(key, this.color.clone());
+      this.index.set(key, { mesh, slot });
     }
 
     mesh.instanceMatrix.needsUpdate = true;
@@ -106,7 +110,7 @@ export class GroundView {
     return mesh;
   }
 
-  /** 盖上建筑后把地块压暗，视觉上"地被占用了"。 */
+  /** 盖上建筑把地块压暗；拆除则还原成建图时那一份带抖动的色。 */
   markOccupied(origin: { col: number; row: number }, cols: number, rows: number, occupied: boolean): void {
     const stride = this.map.size.cols;
     for (let r = 0; r < rows; r++) {
@@ -114,13 +118,8 @@ export class GroundView {
         const key = (origin.row + r) * stride + (origin.col + c);
         const entry = this.index.get(key);
         if (!entry) continue;
-        if (occupied) {
-          entry.mesh.setColorAt(entry.slot, PAID);
-        } else {
-          const pos = { col: origin.col + c, row: origin.row + r };
-          const type = this.map.terrainAt(pos) ?? 'grass';
-          entry.mesh.setColorAt(entry.slot, BASE_COLOR.get(type)!);
-        }
+        const restored = this.baseColor.get(key) ?? BASE_COLOR.get(this.map.terrainAt({ col: origin.col + c, row: origin.row + r }) ?? 'grass')!;
+        entry.mesh.setColorAt(entry.slot, occupied ? PAID : restored);
         if (entry.mesh.instanceColor) entry.mesh.instanceColor.needsUpdate = true;
       }
     }

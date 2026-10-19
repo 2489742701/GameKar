@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { pos } from '@engine/math/Grid';
 import { TERRAIN_ORDER, WORLD, type TerrainType } from '@game/config';
+import { PropScatter } from '@game/world/PropScatter';
 import { findNearestClearSpot, generateTerrain } from '@game/world/TerrainGenerator';
 import { TileMap } from '@game/world/TileMap';
 
@@ -98,5 +100,41 @@ describe('TileMap 占位', () => {
     expect(map.isFree(rock!.pos)).toBe(false);
     expect(map.terrainAt(pos(-1, 0))).toBeNull();
     expect(map.isFree(pos(-1, 0))).toBe(false);
+  });
+});
+
+describe('地表装饰与建筑共存', () => {
+  /** 所有实例矩阵的快照：还原是否"逐字节回到原位"，只有这么量才算数 */
+  const snapshot = (scatter: PropScatter): number[][] => {
+    const out: number[][] = [];
+    scatter.group.traverse((o) => {
+      if (o instanceof THREE.InstancedMesh) out.push(Array.from(o.instanceMatrix.array));
+    });
+    return out;
+  };
+
+  it('盖楼压掉这格的树，拆除后按原矩阵分毫不差地放回', () => {
+    const map = generateTerrain(plan(WORLD.seed));
+    const scatter = new PropScatter(map, WORLD.seed);
+    expect(scatter.propCount).toBeGreaterThan(50);
+
+    const cell = [...map].find((t) => scatter.hasPropAt(t.pos))!.pos;
+    const before = snapshot(scatter);
+
+    scatter.setHidden([cell], true);
+    expect(snapshot(scatter)).not.toEqual(before);
+
+    scatter.setHidden([cell], false);
+    expect(snapshot(scatter)).toEqual(before);
+  });
+
+  it('同一格不会被两批规则各放一件（不会长出套娃树）', () => {
+    const map = generateTerrain(plan(WORLD.seed));
+    const scatter = new PropScatter(map, WORLD.seed);
+
+    // 有装饰的格子数必须等于装饰件数：一旦某格塞了两件，两个数就会分叉
+    let cellsWithProp = 0;
+    for (const tile of map) if (scatter.hasPropAt(tile.pos)) cellsWithProp++;
+    expect(cellsWithProp).toBe(scatter.propCount);
   });
 });
