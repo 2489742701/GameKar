@@ -38,8 +38,17 @@
   width: min(258px, 64vw);
 }
 
-.hud > * {
+/* 谁吃指针、谁让路，一条条写明。
+   之前用 `.hud > * { pointer-events: auto }` 图省事，结果整块透明的 .hud__mid
+   也变成交互层，铺满屏幕中央 —— 拖不动、点不中，一个事件都到不了 canvas。 */
+.hud__top,
+.hud__dock,
+.hud__side {
   pointer-events: auto;
+}
+
+.hud__mid {
+  pointer-events: none;
 }
 
 /* ---------- 横屏（手机横版 & 电脑横版共用） ---------- */

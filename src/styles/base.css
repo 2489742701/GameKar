@@ -102,10 +102,6 @@ body {
   pointer-events: none;
 }
 
-#ui > * {
-  pointer-events: auto;
-}
-
 /* ---------- 通用原子 ---------- */
 
 .panel {

@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import type { FrameInfo } from '@engine/core/GameLoop';
 import { GameLoop } from '@engine/core/GameLoop';
 import type { GridPos } from '@engine/math/Grid';
-import { cellToWorld, footprintRect, inBounds, pos, worldToCell } from '@engine/math/Grid';
+import { cellToWorld, footprintRect, inBounds, pos, samePos, worldToCell } from '@engine/math/Grid';
 import { Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
@@ -146,7 +146,6 @@ export class GameApp {
       this.buildingView.add(b);
       this.ground.markOccupied(b.origin, b.cols, b.rows, true);
       this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), true);
-      this.world.select({ kind: 'building', building: b });
     });
 
     this.bus.on('building:removed', (b) => {
@@ -156,6 +155,10 @@ export class GameApp {
     });
 
     this.bus.on('selection:changed', () => this.syncSelection());
+
+    // 放置模式的变化只有一个源头：控制器自己广播，
+    // 这样"许可用完那一刻的自动取消"和"玩家按取消"走的是同一条线
+    this.placement.onActiveChange = (id) => this.bus.emit('placing:changed', id);
   }
 
   /** 起手：镜头回城 + 送一座议事厅。它是全场唯一不靠抽卡得到的建筑，因为它是抽卡的发动机。 */
@@ -223,20 +226,33 @@ export class GameApp {
     else this.markers.showHover(cell, this.world.map.surfaceY(cell));
   }
 
-  /** 点击：放置模式里是"确认落位"，否则是"选中"。 */
+  /** 点击：放置模式里是"确认落位"，否则是"选中/取消选中"。 */
   private handleTap(cssX: number, cssY: number): void {
     const cell = this.cellAt(cssX, cssY) ?? this.hoverCell;
     if (!cell) return;
 
     if (this.placement.isActive) {
-      if (!this.placement.commit(cell)) {
-        this.markers.showHover(cell, this.world.map.surfaceY(cell));
-      }
+      const placed = this.placement.commit(cell);
+      if (placed) this.world.select({ kind: 'building', building: placed });
+      else this.markers.showHover(cell, this.world.map.surfaceY(cell));
       return;
     }
 
     const buildingId = this.world.map.buildingAt(cell);
     const building = buildingId !== null ? this.world.buildings.get(buildingId) : undefined;
+    const sel = this.world.selection;
+
+    // 再点一次已经选中的东西就是取消：竖屏上没有"点空白"这种便宜目标，
+    // 自己就是最容易按到的那个取消键
+    if (building && sel?.kind === 'building' && sel.building.id === building.id) {
+      this.world.select(null);
+      return;
+    }
+    if (!building && sel?.kind === 'tile' && samePos(sel.pos, cell)) {
+      this.world.select(null);
+      return;
+    }
+
     this.world.select(building ? { kind: 'building', building } : { kind: 'tile', pos: cell });
   }
 
@@ -274,14 +290,12 @@ export class GameApp {
   /** 进入放置模式。返回 false 表示这张卡手上没有许可。 */
   build(buildingId: string): boolean {
     const ok = this.placement.begin(buildingId);
-    this.bus.emit('placing:changed', ok ? buildingId : null);
     if (!ok) this.bus.emit('toast', { text: '手上没有这张建造许可', tone: 'warn' });
     return ok;
   }
 
   cancelBuild(): void {
     this.placement.cancel();
-    this.bus.emit('placing:changed', null);
   }
 
   /** 跳过交互直接落位：给脚本、回放和单测用。 */

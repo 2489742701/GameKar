@@ -18,6 +18,12 @@ export class PlacementController {
   private buildingId: string | null = null;
   private valid = false;
 
+  /**
+   * 模式变化的唯一出口。自动取消（许可用完那一刻）也走这里，
+   * 否则建造槽会停在"取消 · 田庄"的亮着状态，而实际上手里已经没东西可放了。
+   */
+  onActiveChange?: (buildingId: string | null) => void;
+
   constructor(
     private readonly world: GameWorld,
     private readonly library: ModelLibrary,
@@ -35,10 +41,14 @@ export class PlacementController {
 
   /** 进入放置模式。没有许可直接返回 false，UI 据此提示"先去抽"。 */
   begin(buildingId: string): boolean {
-    if (this.world.permitCount(buildingId) <= 0) return false;
+    if (this.world.permitCount(buildingId) <= 0) {
+      this.cancel();
+      return false;
+    }
     if (this.buildingId !== buildingId) {
       this.disposeGhost();
       this.ghost = this.library.create(buildingDef(buildingId).model);
+      this.ghost.name = 'ghost';
       this.scene.add(this.ghost);
       this.valid = false;
       this.paintTint();
@@ -46,14 +56,17 @@ export class PlacementController {
     this.buildingId = buildingId;
     if (this.ghost) this.ghost.visible = false;
     this.markers.hideFootprint();
+    this.onActiveChange?.(buildingId);
     return true;
   }
 
   cancel(): void {
+    const wasActive = this.buildingId !== null;
     this.buildingId = null;
     this.valid = false;
     this.disposeGhost();
     this.markers.hideFootprint();
+    if (wasActive) this.onActiveChange?.(null);
   }
 
   /** 悬停格变了：幽灵跟着走，颜色跟着判定走。 */

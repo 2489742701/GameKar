@@ -12,8 +12,6 @@ export interface LightingOptions {
   sunIntensity?: number;
   skyColor?: number;
   groundColor?: number;
-  fogColor?: number;
-  fogDensity?: number;
 }
 
 /** 太阳相对目标的偏移方向（世界坐标，乘以 shadowReach 得到实际灯位）。 */
@@ -49,7 +47,6 @@ export class LightingRig {
     this.rim.position.set(0.7, 0.5, -0.9);
 
     scene.add(this.sun, this.sun.target, this.hemi, this.rim);
-    scene.fog = new THREE.FogExp2(options.fogColor ?? 0x0b1220, options.fogDensity ?? 0.011);
     this.target.visible = false;
     scene.add(this.target);
   }
@@ -82,6 +79,12 @@ export class LightingRig {
   dispose(scene: THREE.Scene): void {
     scene.remove(this.sun, this.sun.target, this.hemi, this.rim, this.target);
     this.sun.dispose();
-    scene.fog = null;
   }
 }
+
+/**
+ * 这里刻意没有雾。
+ * 正交俯视角下相机到地面的距离是恒定的 standoff，
+ * FogExp2 按距离算衰减 ⇒ 整张图吃同一个雾系数（实测 82%），
+ * 画面被雾色整体压暗，看着像"渲染坏了"。要做景深得按屏幕纵坐标造假，不是现在这套距离雾。
+ */

@@ -8,7 +8,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 76 条回归
+npm run check        # 类型检查 + 81 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -54,7 +54,7 @@ src/
 │  └─ systems/        Placement.ts（绿/红幽灵与落位确认）
 ├─ ui/                dom.ts + 五个部件 + Hud.ts（组装）
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
-tests/                grid · random · terrain · world · gacha · data · geometry —— 共 76 条
+tests/                grid · random · terrain · world · gacha · data · geometry · placement —— 共 81 条
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**

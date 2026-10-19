@@ -69,9 +69,16 @@ export class PointerInput {
 
   private readonly onDown = (e: PointerEvent) => {
     const { x, y } = this.local(e);
-    this.el.setPointerCapture?.(e.pointerId);
+    // 先登记，再抢捕获：setPointerCapture 对"当前不活跃的 pointerId"会抛 NotFoundError，
+    // 写在前面会让这根手指根本进不了表 —— 双指捻合就是这么变成空手势的
     this.pointers.set(e.pointerId, { x, y, startX: x, startY: y, startAt: performance.now() });
     this.dragging = false;
+
+    try {
+      this.el.setPointerCapture(e.pointerId);
+    } catch {
+      // 抢不到捕获不影响手势判定，顶多是手指划出元素后收不到 move
+    }
 
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
@@ -134,7 +141,11 @@ export class PointerInput {
   private readonly onUp = (e: PointerEvent) => {
     const tracked = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
-    if (this.el.hasPointerCapture?.(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
+    try {
+      if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
+    } catch {
+      // 同上：捕获本来就没抢到，释放失败不是错误
+    }
 
     if (this.pointers.size < 2) {
       this.pinchDist = 0;
