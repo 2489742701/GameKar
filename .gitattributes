@@ -1,0 +1,23 @@
+# 换行策略写在文件里，不改任何人的 git 配置。
+# 源码统一 LF：编辑器、diff、脚本里的字节锚点都只看这一种。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.svg text eol=lf
+
+# 将来进来的模型与音频资产
+*.glb binary
+*.gltf text eol=lf
+*.fbx binary
+*.mp3 binary
+*.ogg binary
+*.wav binary
+
+*.ttf binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN" data-orientation="portrait">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#080b12" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>GAMEKAR · 抽卡即时战略</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      /* 关键首屏样式：避免白闪，真正的样式表由 src/styles 加载 */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #080b12;
+        color: #e8edf7;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 14px;
+        font: 500 14px/1.6 system-ui, sans-serif;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: #6d7b95;
+        z-index: 999;
+        transition: opacity 0.45s ease;
+      }
+      #boot[data-done] {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #boot::after {
+        content: '';
+        width: 120px;
+        height: 2px;
+        margin: 0 auto;
+        background: linear-gradient(90deg, transparent, #d8b25a, transparent);
+        animation: bootSweep 1.1s linear infinite;
+      }
+      @keyframes bootSweep {
+        from {
+          transform: translateX(-70%);
+        }
+        to {
+          transform: translateX(70%);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="stage"></canvas>
+      <div id="ui"></div>
+    </div>
+    <div id="boot">正在载入战场</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

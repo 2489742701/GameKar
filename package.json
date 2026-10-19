@@ -1,0 +1,24 @@
+{
+  "name": "gamekar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "抽卡驱动的 2.5D 即时战略游戏引擎",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "check": "npm run typecheck && vitest run"
+  },
+  "dependencies": {
+    "three": "^0.171.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.171.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}

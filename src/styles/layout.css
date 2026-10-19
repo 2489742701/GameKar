@@ -1,0 +1,98 @@
+/* ==========================================================================
+   外壳布局 — 竖屏为默认档位；横屏只做"重排"，不重定义样式
+   ========================================================================== */
+
+.hud {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    'top'
+    'mid'
+    'dock';
+  gap: var(--gap);
+  padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px)
+    calc(var(--safe-bottom) + 8px) calc(var(--safe-left) + 8px);
+  pointer-events: none;
+}
+
+.hud__top {
+  grid-area: top;
+}
+.hud__mid {
+  grid-area: mid;
+  position: relative;
+  min-height: 0;
+}
+.hud__dock {
+  grid-area: dock;
+}
+
+/* 选中信息卡：竖屏贴在视窗左下，横屏交给右侧栏 */
+.hud__side {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: min(258px, 64vw);
+}
+
+.hud > * {
+  pointer-events: auto;
+}
+
+/* ---------- 横屏（手机横版 & 电脑横版共用） ---------- */
+
+html[data-orientation='landscape'] .hud {
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr minmax(196px, 25vw);
+  grid-template-areas:
+    'top   top'
+    'mid   side'
+    'dock  side';
+}
+
+html[data-orientation='landscape'] .hud__side {
+  position: static;
+  width: auto;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* ---------- 弹层（抽卡结算等） ---------- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--safe-top) + 16px) calc(var(--safe-right) + 16px)
+    calc(var(--safe-bottom) + 16px) calc(var(--safe-left) + 16px);
+  background: radial-gradient(120% 90% at 50% 40%, rgba(6, 10, 20, 0.62), rgba(4, 6, 12, 0.92));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  z-index: 40;
+  pointer-events: auto;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+/* ---------- 开发者读数 ---------- */
+
+.telemetry {
+  position: absolute;
+  left: calc(var(--safe-left) + 10px);
+  top: calc(var(--safe-top) + 10px);
+  font-family: var(--font-num);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+  pointer-events: none;
+  white-space: pre;
+  text-shadow: 0 1px 3px #000;
+}
