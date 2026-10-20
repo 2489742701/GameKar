@@ -33,6 +33,8 @@ export interface TerrainSpec {
   buildable: boolean;
   /** 行走与视野阻挡 */
   blocksSight: boolean;
+  /** 盖上去会毁掉这份资源，需要先过一道确认弹窗 */
+  destructible?: boolean;
 }
 
 export const TERRAIN: Record<TerrainType, TerrainSpec> = {
@@ -40,10 +42,28 @@ export const TERRAIN: Record<TerrainType, TerrainSpec> = {
   sand: { label: '沙地', color: 0xc2ab74, thickness: 0.46, buildable: true, blocksSight: false },
   rock: { label: '岩脊', color: 0x7d8595, thickness: 0.78, buildable: false, blocksSight: true },
   water: { label: '水域', color: 0x2f6f96, thickness: 0.3, buildable: false, blocksSight: false },
-  vein: { label: '晶脉', color: 0x6c5aa6, thickness: 0.56, buildable: true, blocksSight: false },
+  vein: { label: '晶脉', color: 0x6c5aa6, thickness: 0.56, buildable: true, blocksSight: false, destructible: true },
 };
 
 export const TERRAIN_ORDER: readonly TerrainType[] = ['grass', 'sand', 'rock', 'water', 'vein'];
+
+/**
+ * 采矿的物理模型 —— 产量不是凭空给的加成，而是"小人跑一趟要多久"算出来的：
+ *
+ *   每秒趟数 = 脚程速度 ÷ (往返格数)      往返 = 2 × 直线格数
+ *   每秒产出 = 每秒趟数 × 每趟载重
+ *
+ * 所以同一栋楼，矿越远产得越少；走得快的楼（精炼厂）在同样距离下就是高产。
+ * 一格晶脉同一时刻只允许被一栋楼包工，否则两个矿井挤一个矿点会白送产量。
+ */
+export const VEIN_WORK = {
+  /** 超出这个格数就不派人了（切比雪夫距离，跟占地/邻接一个口径） */
+  reach: 7,
+  /** 最近也省不掉的那点开销：装卸、排队。分母下限，避免 d=0 时产量爆炸 */
+  overheadTiles: 1,
+  /** 被压掉之后地块变成什么：开采过的裸土 */
+  ruinedTerrain: 'sand' as TerrainType,
+};
 
 export const RESOURCE_META = {
   gold: { label: '金币', color: 0xffd36b },

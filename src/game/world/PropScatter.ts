@@ -85,6 +85,31 @@ export class PropScatter {
     for (const mesh of dirty) mesh.instanceMatrix.needsUpdate = true;
   }
 
+  /**
+   * 晶脉被建筑压掉之后，它上面的装饰要**永久**撤走：
+   * 只是 setHidden(true) 的话，将来拆楼会把晶簇又放回来——可矿脉已经不存在了。
+   * 所以这里直接把它们从登记表里删掉，拆除还原时自然找不到。
+   */
+  ruin(cells: GridPos[]): void {
+    const dirty = new Set<THREE.InstancedMesh>();
+    for (const cell of cells) {
+      const key = this.keyOf(cell);
+      const entry = this.placed.get(key);
+      if (entry) {
+        entry.mesh.setMatrixAt(entry.slot, HIDDEN);
+        dirty.add(entry.mesh);
+        this.placed.delete(key);
+      }
+      const cluster = this.clusters.get(key);
+      if (cluster) {
+        cluster.visible = false;
+        cluster.removeFromParent();
+        this.clusters.delete(key);
+      }
+    }
+    for (const mesh of dirty) mesh.instanceMatrix.needsUpdate = true;
+  }
+
   /** 这一格有没有落到装饰（树/灌/岩/晶簇）。给测试和后续"清理地表"用。 */
   hasPropAt(cell: GridPos): boolean {
     const key = this.keyOf(cell);

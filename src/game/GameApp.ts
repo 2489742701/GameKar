@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import type { FrameInfo } from '@engine/core/GameLoop';
 import { GameLoop } from '@engine/core/GameLoop';
 import type { GridPos } from '@engine/math/Grid';
-import { cellToWorld, footprintRect, inBounds, pos, samePos, worldToCell } from '@engine/math/Grid';
+import { cellToWorld, footprintCenter, footprintRect, inBounds, pos, samePos, worldToCell } from '@engine/math/Grid';
 import { Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
@@ -22,8 +22,10 @@ import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { PointerInput } from '@engine/input/PointerInput';
 import { Viewport, type OrientationMode } from '@engine/viewport/Viewport';
 import { CAMERA, SIM_HZ, WORLD } from '@game/config';
+import { buildingName } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService, type Purchase } from '@game/gacha/GachaService';
+import { Prefs } from '@game/prefs';
 import { ModelLibrary } from '@game/models/registry';
 import { BuildingView } from '@game/world/BuildingView';
 import { GroundView } from '@game/world/GroundView';
@@ -73,6 +75,10 @@ export class GameApp {
 
   private hoverCell: GridPos | null = null;
   private lastFrame: FrameInfo = { delta: 0, time: 0, fps: 60 };
+  /** 等玩家回话的那一次落位：按下时压着晶脉，必须先确认才能盖 */
+  private awaiting: { cell: GridPos } | null = null;
+
+  readonly prefs = new Prefs();
 
   private constructor(options: GameAppOptions) {
     this.seed = options.seed ?? WORLD.seed;
@@ -122,6 +128,7 @@ export class GameApp {
       onZoom: (factor, x, y) => this.rig.zoomBy(factor, x, y),
       onRotate: (deg) => this.rig.rotateBy(deg),
       onTap: (x, y) => this.handleTap(x, y),
+      onLongPress: (x, y) => this.handleLongPress(x, y),
       onHover: (x, y) => this.handleHover(x, y),
     });
 
@@ -152,6 +159,12 @@ export class GameApp {
       this.buildingView.remove(b.id);
       this.ground.markOccupied(b.origin, b.cols, b.rows, false);
       this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), false);
+    });
+
+    // 晶脉被压掉：地块重涂成裸土，矿簇永久撤走（拆楼也不会回来）
+    this.bus.on('vein:destroyed', (cells) => {
+      this.ground.recolor(cells);
+      this.props.ruin(cells);
     });
 
     this.bus.on('selection:changed', () => this.syncSelection());
@@ -232,7 +245,19 @@ export class GameApp {
     if (!cell) return;
 
     if (this.placement.isActive) {
-      const placed = this.placement.commit(cell);
+      const state = this.placement.stateOf(cell);
+
+      // 压着晶脉又不肯直接放行：先问一次。勾了"不再提示"就跳过这一问
+      if (state === 'warn' && !this.prefs.neverAskDestroyVein) {
+        this.awaiting = { cell };
+        this.bus.emit('confirm:vein', {
+          cells: this.placement.veinsAtRisk(cell),
+          buildingName: buildingName(this.placement.activeBuildingId!),
+        });
+        return;
+      }
+
+      const placed = this.placement.commit(cell, state === 'warn');
       if (placed) this.world.select({ kind: 'building', building: placed });
       else this.markers.showHover(cell, this.world.map.surfaceY(cell));
       return;
@@ -254,6 +279,18 @@ export class GameApp {
     }
 
     this.world.select(building ? { kind: 'building', building } : { kind: 'tile', pos: cell });
+  }
+
+  /** 长按 = 查详情。气泡由 UI 挂在建筑头顶，跟"点一下选中"是两条独立的路。 */
+  private handleLongPress(cssX: number, cssY: number): void {
+    const cell = this.cellAt(cssX, cssY);
+    if (!cell) {
+      this.bus.emit('inspect:target', null);
+      return;
+    }
+    const id = this.world.map.buildingAt(cell);
+    const building = id !== null ? (this.world.buildings.get(id) ?? null) : null;
+    this.bus.emit('inspect:target', building);
   }
 
   private syncSelection(): void {
@@ -295,13 +332,29 @@ export class GameApp {
   }
 
   cancelBuild(): void {
+    this.awaiting = null;
     this.placement.cancel();
   }
 
+  /**
+   * 确认框的回话。agree=false 就什么都不做——一格都不动，许可也不扣。
+   * neverAsk=true 时把"不再提示"记下来，此后压矿脉直接放行（破坏照样发生）。
+   */
+  resolveConfirm(agree: boolean, neverAsk = false): Building | null {
+    const pending = this.awaiting;
+    this.awaiting = null;
+    if (neverAsk) this.prefs.setNeverAskDestroyVein(true);
+    if (!agree || !pending || !this.placement.isActive) return null;
+
+    const placed = this.placement.commit(pending.cell, true);
+    if (placed) this.world.select({ kind: 'building', building: placed });
+    return placed;
+  }
+
   /** 跳过交互直接落位：给脚本、回放和单测用。 */
-  place(buildingId: string, where: GridPos): Building | null {
+  place(buildingId: string, where: GridPos, allowDestroy = false): Building | null {
     if (this.world.permitCount(buildingId) <= 0) this.world.addPermits(buildingId, 1);
-    const building = this.world.build(buildingId, where);
+    const building = this.world.build(buildingId, where, allowDestroy);
     if (building) this.world.select({ kind: 'building', building });
     return building;
   }
@@ -314,6 +367,32 @@ export class GameApp {
     const home = pos(Math.floor(this.world.size.cols / 2), Math.floor(this.world.size.rows / 2));
     const center = cellToWorld(home);
     this.rig.centerOnWorld(center.x, center.z);
+  }
+
+  /**
+   * 世界坐标 -> 以画布左上角为原点的 CSS 像素。
+   * UI 要把气泡钉在建筑头顶时用它，这样 three 的投影公式只留在一处。
+   */
+  screenOfWorld(x: number, y: number, z: number): { x: number; y: number; inFront: boolean } {
+    const v = new THREE.Vector3(x, y, z).project(this.rig.camera);
+    const { cssWidth, cssHeight } = this.viewport.snapshot;
+    return {
+      x: (v.x * 0.5 + 0.5) * cssWidth,
+      y: (-v.y * 0.5 + 0.5) * cssHeight,
+      // 正交相机下 z 出界意味着这点跑到相机背后，投影出来的位置是假的
+      inFront: v.z <= 1,
+    };
+  }
+
+  /** 钉在楼顶上方一点，别压住屋顶。 */
+  screenOfBuilding(building: Building): { x: number; y: number; inFront: boolean } {
+    const center = footprintCenter({
+      origin: building.origin,
+      cols: building.cols,
+      rows: building.rows,
+    });
+    const top = building.surfaceY + this.buildingView.heightOf(building.id) + 0.35;
+    return this.screenOfWorld(center.x, top, center.z);
   }
 
   setOrientation(mode: OrientationMode): void {

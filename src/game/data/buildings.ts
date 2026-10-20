@@ -6,7 +6,18 @@
  */
 
 import type { FlatSize } from '@engine/math/Grid';
-import type { ResourceId, TerrainType } from '@game/config';
+import type { ResourceId } from '@game/config';
+
+/** 派小人去附近晶脉采矿的配置；缺省表示这栋楼不采矿。 */
+export interface VeinWorkSpec {
+  resource: ResourceId;
+  /** 一个来回背回来的量 */
+  perTrip: number;
+  /** 小人脚程，格/秒。同样距离下走得快的就是高产 */
+  speed: number;
+  /** 同时包工的矿点数上限 */
+  capacity: number;
+}
 
 export interface BuildingDef {
   id: string;
@@ -22,10 +33,10 @@ export interface BuildingDef {
   population: number;
   /** 提供人口上限 */
   populationCap?: number;
-  /** 每秒产出（仅建成之后计入） */
+  /** 每秒固定产出（仅建成之后计入，与采矿无关） */
   yields?: Partial<Record<ResourceId, number>>;
-  /** 只允许盖在某种地形上 */
-  requiresTerrain?: TerrainType;
+  /** 采矿：产量由"附近有没有晶脉、多远"决定 */
+  veinWork?: VeinWorkSpec;
   /** 全场唯一（议事厅） */
   unique?: boolean;
 }
@@ -83,13 +94,13 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   mine: {
     id: 'mine',
     name: '矿井',
-    blurb: '晶钻的主要来源，随便盖在哪都出矿，但盖在晶脉上翻倍。',
+    blurb: '派小人去附近的晶脉采矿。矿越远，路上耗得越多，产量越低；附近没矿就一分钱不产。',
     model: 'mine',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 110 },
     buildSeconds: 9,
     population: 2,
-    yields: { crystal: 0.5 },
+    veinWork: { resource: 'crystal', perTrip: 2, speed: 1.2, capacity: 2 },
   },
 
   market: {
@@ -118,14 +129,13 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   refinery: {
     id: 'refinery',
     name: '精炼厂',
-    blurb: '必须压在晶脉上，晶钻产出是矿井的三倍。抽到图纸就赶紧找矿。',
+    blurb: '同样靠附近的晶脉吃饭，但小人脚程快、能同时包三个矿点，所以高产。',
     model: 'refinery',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 180 },
     buildSeconds: 12,
     population: 3,
-    yields: { crystal: 1.6 },
-    requiresTerrain: 'vein',
+    veinWork: { resource: 'crystal', perTrip: 2.2, speed: 3.2, capacity: 3 },
   },
 };
 
@@ -141,6 +151,3 @@ export function buildingDef(id: string): BuildingDef {
 export function buildingName(id: string): string {
   return BUILDINGS[id]?.name ?? id;
 }
-
-/** 建在晶脉上的额外加成，写在系统层之外的这里，方便调。 */
-export const TERRAIN_BONUS: Partial<Record<TerrainType, number>> = { vein: 2 };

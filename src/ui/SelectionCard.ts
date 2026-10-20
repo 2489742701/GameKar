@@ -4,9 +4,9 @@
  * 内容随选中重建（一次最多十几个节点），比逐字段 diff 更好读，也不会漏更。
  */
 
-import { TERRAIN, RESOURCE_META, type ResourceId } from '@game/config';
-import type { Building, Selection } from '@game/world/GameWorld';
-import type { TileMap } from '@game/world/TileMap';
+import { TERRAIN } from '@game/config';
+import type { Building, GameWorld, Selection } from '@game/world/GameWorld';
+import { buildingFacts, tileMeaning } from './facts';
 import { cssColor, make, type HudWidget } from './dom';
 
 export class SelectionCard implements HudWidget {
@@ -16,9 +16,13 @@ export class SelectionCard implements HudWidget {
   private lastBuilt = false;
 
   constructor(
-    private readonly map: TileMap,
+    private readonly world: GameWorld,
     private readonly onDemolish: (id: number) => void,
   ) {}
+
+  private get map() {
+    return this.world.map;
+  }
 
   render(selection: Selection): void {
     this.chip = null;
@@ -57,21 +61,24 @@ export class SelectionCard implements HudWidget {
 
   private renderTile(p: { col: number; row: number }): void {
     const terrain = this.map.terrainAt(p);
-    const spec = terrain ? TERRAIN[terrain] : null;
-    const holder = this.map.buildingAt(p);
+    const label = terrain ? TERRAIN[terrain].label : '边界外';
+    const meaning = tileMeaning(this.world, p);
+    const buildable = meaning === '可建造';
 
     this.el.append(
       make('div', { class: 'selcard__head' }, [
-        make('span', { class: 'selcard__name', text: spec?.label ?? '边界外' }),
+        make('span', { class: 'selcard__name', text: label }),
         make('span', {
           class: 'chip',
-          text: spec?.buildable ? '可建造' : '不可建造',
-          attrs: { style: `color:${cssColor(spec?.buildable ? 0x5fd07a : 0xff6b6b)}` },
+          text: meaning,
+          attrs: {
+            style: `color:${cssColor(buildable ? 0x5fd07a : meaning === '盖这里要毁掉矿脉' ? 0xd9b25c : 0xff6b6b)}`,
+          },
         }),
       ]),
       this.rows([
         ['坐标', `${p.col}, ${p.row}`],
-        ['占用', holder === null ? '无' : `建筑 #${holder}`],
+        ['占用', this.map.buildingAt(p) === null ? '无' : `建筑 #${this.map.buildingAt(p)}`],
       ]),
     );
   }
@@ -87,20 +94,14 @@ export class SelectionCard implements HudWidget {
       attrs: { style: `color:${cssColor(b.built ? 0x5fd07a : 0xd9b25c)}` },
     });
 
-    const yieldText =
-      b.built && b.def.yields
-        ? Object.entries(b.def.yields)
-            .map(([res, rate]) => `${RESOURCE_META[res as ResourceId].label} +${rate}/s`)
-            .join('　')
-        : '—';
+    const facts = buildingFacts(this.world, b);
 
     this.el.append(
       make('div', { class: 'selcard__head' }, [make('span', { class: 'selcard__name', text: b.def.name }), this.chip]),
       make('div', { class: 'label', text: b.def.blurb }),
       this.rows([
         ['坐标', `${b.origin.col}, ${b.origin.row}`],
-        ['人口占用', `${b.def.population}`],
-        ['产出', yieldText],
+        ...facts.map((f): [string, string] => ['', f]),
       ]),
       make('button', { class: 'btn', text: '拆除', onClick: () => this.onDemolish(b.id) }),
     );

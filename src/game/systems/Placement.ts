@@ -10,13 +10,19 @@ import type { GridPos } from '@engine/math/Grid';
 import { footprintCenter } from '@engine/math/Grid';
 import { buildingDef } from '@game/data/buildings';
 import { ghostMaterialFor, type ModelLibrary } from '@game/models/registry';
-import { TINT_NO, TINT_OK, type MarkerLayer } from '@game/world/Markers';
+import { TINT_NO, TINT_OK, TINT_WARN, type FootprintState, type MarkerLayer } from '@game/world/Markers';
 import type { Building, GameWorld } from '@game/world/GameWorld';
+
+const GHOST_TINT: Record<FootprintState, number> = {
+  ok: TINT_OK,
+  warn: TINT_WARN,
+  no: TINT_NO,
+};
 
 export class PlacementController {
   private ghost: THREE.Group | null = null;
   private buildingId: string | null = null;
-  private valid = false;
+  private state: FootprintState = 'no';
 
   /**
    * 模式变化的唯一出口。自动取消（许可用完那一刻）也走这里，
@@ -50,7 +56,7 @@ export class PlacementController {
       this.ghost = this.library.create(buildingDef(buildingId).model);
       this.ghost.name = 'ghost';
       this.scene.add(this.ghost);
-      this.valid = false;
+      this.state = 'no';
       this.paintTint();
     }
     this.buildingId = buildingId;
@@ -63,10 +69,25 @@ export class PlacementController {
   cancel(): void {
     const wasActive = this.buildingId !== null;
     this.buildingId = null;
-    this.valid = false;
+    this.state = 'no';
     this.disposeGhost();
     this.markers.hideFootprint();
     if (wasActive) this.onActiveChange?.(null);
+  }
+
+  /** 这一格当前的三种脸色：不能盖 / 能盖但要毁晶脉 / 随便盖。 */
+  stateOf(cell: GridPos): FootprintState {
+    if (!this.buildingId) return 'no';
+    const def = buildingDef(this.buildingId);
+    if (this.world.inspectPlacement(def, cell) !== null) return 'no';
+    return this.veinsAtRisk(cell).length > 0 ? 'warn' : 'ok';
+  }
+
+  /** 盖在这一格会被压掉的晶脉格子。 */
+  veinsAtRisk(cell: GridPos): GridPos[] {
+    if (!this.buildingId) return [];
+    const { cols, rows } = buildingDef(this.buildingId).footprint;
+    return this.world.veinsUnder(cell, cols, rows);
   }
 
   /** 悬停格变了：幽灵跟着走，颜色跟着判定走。 */
@@ -75,16 +96,16 @@ export class PlacementController {
     const def = buildingDef(this.buildingId);
     const { cols, rows } = def.footprint;
 
-    const nowValid = this.world.inspectPlacement(def, cell) === null;
+    const next = this.stateOf(cell);
     const center = footprintCenter({ origin: cell, cols, rows });
     const surfaceY = this.world.map.footprintSurfaceY(cell, cols, rows);
 
     this.ghost.visible = true;
     this.ghost.position.set(center.x, surfaceY, center.z);
-    this.markers.showFootprint(cell, cols, rows, surfaceY, nowValid);
+    this.markers.showFootprint(cell, cols, rows, surfaceY, next);
 
-    if (nowValid !== this.valid) {
-      this.valid = nowValid;
+    if (next !== this.state) {
+      this.state = next;
       this.paintTint();
     }
   }
@@ -94,11 +115,15 @@ export class PlacementController {
     this.markers.hideFootprint();
   }
 
-  /** 确认落位。成功返回建筑；许可还有剩就留在放置模式，方便连续盖。 */
-  commit(cell: GridPos): Building | null {
+  /**
+   * 确认落位。压着晶脉时必须是明确同意过的（allowDestroy），
+   * 否则世界层会原样退回来 —— 这条闸门放在世界而不是放在点击里，
+   * 脚本和回放也绕不过去。
+   */
+  commit(cell: GridPos, allowDestroy = false): Building | null {
     if (!this.buildingId) return null;
     const id = this.buildingId;
-    const building = this.world.build(id, cell);
+    const building = this.world.build(id, cell, allowDestroy);
     if (!building) {
       this.preview(cell);
       return null;
@@ -111,7 +136,7 @@ export class PlacementController {
   /** 材质走全局缓存：换颜色只是换个引用，不产生新的着色器程序。 */
   private paintTint(): void {
     if (!this.ghost) return;
-    const material = ghostMaterialFor(this.valid ? TINT_OK : TINT_NO);
+    const material = ghostMaterialFor(GHOST_TINT[this.state]);
     this.ghost.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.material = material;

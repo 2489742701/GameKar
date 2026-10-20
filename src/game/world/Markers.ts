@@ -12,6 +12,8 @@ import { TILE_SIZE, cellToWorld } from '@engine/math/Grid';
 const HOVER = 0xf3e2a9;
 export const TINT_OK = 0x63d98a;
 export const TINT_NO = 0xff6b6b;
+/** 能盖、但会毁掉晶脉：既不是放行也不是拒绝，得单独一个颜色，否则玩家以为直接就能盖 */
+export const TINT_WARN = 0xd9b25c;
 const SELECTED = 0xd9b25c;
 
 export interface SelectionShape {
@@ -44,6 +46,14 @@ function groundQuad(color: number, opacity: number): THREE.Mesh {
   mesh.frustumCulled = false;
   return mesh;
 }
+
+export type FootprintState = 'ok' | 'warn' | 'no';
+
+const FOOTPRINT_TINT: Record<FootprintState, number> = {
+  ok: TINT_OK,
+  warn: TINT_WARN,
+  no: TINT_NO,
+};
 
 export class MarkerLayer {
   readonly group = new THREE.Group();
@@ -79,12 +89,12 @@ export class MarkerLayer {
     this.hoverFrame.visible = this.hoverFill.visible = true;
   }
 
-  /** 放置预览：占地色块 + 外框，tint 由"能不能盖"的判定结果驱动。 */
-  showFootprint(origin: GridPos, cols: number, rows: number, surfaceY: number, valid: boolean): void {
+  /** 放置预览：占地色块 + 外框，state 同时表达"能不能盖"和"会不会毁矿"。 */
+  showFootprint(origin: GridPos, cols: number, rows: number, surfaceY: number, state: FootprintState): void {
     const cx = (origin.col + cols / 2) * TILE_SIZE;
     const cz = (origin.row + rows / 2) * TILE_SIZE;
 
-    const color = valid ? TINT_OK : TINT_NO;
+    const color = FOOTPRINT_TINT[state];
     (this.footprintFill.material as THREE.MeshBasicMaterial).color.setHex(color);
 
     this.footprintFill.position.set(cx, surfaceY + 0.02, cz);

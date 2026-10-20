@@ -7,12 +7,21 @@
 
 import { EventBus } from '@engine/core/EventBus';
 import type { FlatSize, GridPos } from '@engine/math/Grid';
-import { footprintRect, inBounds } from '@engine/math/Grid';
-import { ECONOMY, TERRAIN, type ResourceId } from '@game/config';
-import { TERRAIN_BONUS, buildingDef, type BuildingDef } from '@game/data/buildings';
+import { footprintRect, inBounds, toKey } from '@engine/math/Grid';
+import { ECONOMY, TERRAIN, VEIN_WORK, type ResourceId } from '@game/config';
+import { buildingDef, type BuildingDef } from '@game/data/buildings';
 import { CARDS, type CardDef } from '@game/data/cards';
 import type { Purchase, PullOutcome } from '@game/gacha/GachaService';
 import type { TileMap } from './TileMap';
+
+/** 一条被包工的矿脉，以及它按脚程折算出来的每秒产出。 */
+export interface VeinClaim {
+  vein: GridPos;
+  /** 占地边缘到矿点的格数 */
+  tiles: number;
+  resource: ResourceId;
+  perSecond: number;
+}
 
 export interface Building {
   id: number;
@@ -50,6 +59,11 @@ export interface WorldEvents {
   'building:placed': Building;
   'building:built': Building;
   'building:removed': Building;
+  'vein:destroyed': GridPos[];
+  /** 玩家想盖的这一格压着晶脉，需要一次明确同意 */
+  'confirm:vein': { cells: GridPos[]; buildingName: string };
+  /** 长按某个建筑 = 查详情；null 表示收起 */
+  'inspect:target': Building | null;
   'permit:changed': { buildingId: string; count: number };
   'population:changed': { cap: number; used: number };
   'pull:done': Purchase;
@@ -75,9 +89,15 @@ export class GameWorld {
   readonly seenCards = new Set<string>();
   readonly pullHistory: PullOutcome[] = [];
 
-  populationCap = ECONOMY.basePopulationCap;
+  /** 来自卡牌的永久人口上限增量；建筑提供的那部分走 populationCap getter 现算 */
+  private bonusPopulationCap = 0;
   selection: Selection = null;
   time = 0;
+
+  /** 采矿分配（谁在采哪条矿）。任何改变"谁在场"的动作都要把它挂脏。 */
+  private readonly claims = new Map<number, VeinClaim[]>();
+  private planValid = false;
+  private plannedBuilt = -1;
 
   private nextId = 1;
 
@@ -101,6 +121,17 @@ export class GameWorld {
     return this.permits.get(buildingId) ?? 0;
   }
 
+  /**
+   * 人口上限 = 底子上限 + 卡牌增量 + 在场建筑提供的上限。
+   * 写成现算而不是一个可写字段：之前那种"谁来了就 += 一下"的记法，
+   * 盖民居不会涨、拆民居不会掉，卡牌和建筑两条路迟早对不上账。
+   */
+  get populationCap(): number {
+    let cap = ECONOMY.basePopulationCap + this.bonusPopulationCap;
+    for (const b of this.buildings.values()) cap += b.def.populationCap ?? 0;
+    return cap;
+  }
+
   populationUsed(): number {
     let used = 0;
     for (const b of this.buildings.values()) used += b.def.population;
@@ -115,15 +146,27 @@ export class GameWorld {
     return Object.entries(cost).every(([res, need]) => this.resources[res as ResourceId] >= (need ?? 0));
   }
 
-  /** 单座建筑的每秒产出，已含"盖在晶脉上翻倍"这类地形加成。 */
+  /**
+   * 单座建筑的每秒产出 = 固定产出 + 各条矿脉按脚程算出来的产出。
+   * 没晶脉可采的矿井就是 0，这不是惩罚，是把"选址"变成真决策。
+   */
   yieldOf(b: Building): Partial<Record<ResourceId, number>> {
-    if (!b.built || !b.def.yields) return {};
-    const bonus = this.terrainBonus(b);
+    if (!b.built) return {};
+    this.ensureVeinPlan();
     const out: Partial<Record<ResourceId, number>> = {};
-    for (const [res, rate] of Object.entries(b.def.yields)) {
-      out[res as ResourceId] = (rate ?? 0) * bonus;
+    for (const [res, rate] of Object.entries(b.def.yields ?? {})) {
+      out[res as ResourceId] = (out[res as ResourceId] ?? 0) + (rate ?? 0);
+    }
+    for (const claim of this.claims.get(b.id) ?? []) {
+      out[claim.resource] = (out[claim.resource] ?? 0) + claim.perSecond;
     }
     return out;
+  }
+
+  /** 这栋楼现在派人在采哪几条矿、分别多远、各贡献多少。给气泡和信息卡读。 */
+  claimsOf(b: Building): VeinClaim[] {
+    this.ensureVeinPlan();
+    return this.claims.get(b.id) ?? [];
   }
 
   /** 全局每秒进账，UI 的 "+3.2/s" 和系统结算共用同一个口径。 */
@@ -137,13 +180,92 @@ export class GameWorld {
     return rates;
   }
 
-  private terrainBonus(b: Building): number {
-    let best = 1;
-    for (const cell of footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows })) {
-      const t = this.map.terrainAt(cell);
-      if (t && TERRAIN_BONUS[t]) best = Math.max(best, TERRAIN_BONUS[t]!);
+  // ---------------------------------------------------------------- 采矿分配
+
+  /**
+   * 谁去采哪条矿：按建造顺序处理，每栋楼从最近的未认领矿脉开始挑，挑满自己的包工上限。
+   * 一条矿脉只归一栋楼 —— 否则两个矿井挤同一处矿点等于白送产量。
+   */
+  private planVeins(): void {
+    this.claims.clear();
+    const claimed = new Set<number>();
+
+    const workers = [...this.buildings.values()]
+      .filter((b) => b.built && b.def.veinWork)
+      .sort((a, b) => a.id - b.id);
+
+    for (const b of workers) {
+      const spec = b.def.veinWork!;
+      const candidates: { cell: GridPos; tiles: number }[] = [];
+      for (const tile of this.map) {
+        if (tile.terrain !== 'vein') continue;
+        if (claimed.has(toKey(tile.pos))) continue;
+        const tiles = this.tilesTo(b, tile.pos);
+        if (tiles > VEIN_WORK.reach) continue;
+        candidates.push({ cell: tile.pos, tiles });
+      }
+      // 近的优先；一样近时按格子顺序，保证同 seed 同布局得到同一个分配
+      candidates.sort((x, y) => x.tiles - y.tiles || toKey(x.cell) - toKey(y.cell));
+
+      const picks = candidates.slice(0, spec.capacity);
+      for (const p of picks) claimed.add(toKey(p.cell));
+
+      this.claims.set(
+        b.id,
+        picks.map((p) => ({
+          vein: p.cell,
+          tiles: p.tiles,
+          resource: spec.resource,
+          // 来回两趟路，所以除以 2×格数；下限用 overhead 兜住，避免零距离时产量爆表
+          perSecond: (spec.speed / Math.max(VEIN_WORK.overheadTiles, 2 * p.tiles)) * spec.perTrip,
+        })),
+      );
+    }
+    this.planValid = true;
+    this.plannedBuilt = this.builtCount();
+  }
+
+  /** 占地边缘到矿点的切比雪夫距离（斜着走也算一步，跟邻接口径一致）。 */
+  private tilesTo(b: Building, v: GridPos): number {
+    let best = Number.POSITIVE_INFINITY;
+    for (let r = 0; r < b.rows; r++) {
+      for (let c = 0; c < b.cols; c++) {
+        best = Math.min(best, Math.max(Math.abs(v.col - (b.origin.col + c)), Math.abs(v.row - (b.origin.row + r))));
+      }
     }
     return best;
+  }
+
+  private ensureVeinPlan(): void {
+    // 除了显式挂脏，再自校一条：在建楼数一变就说明"谁在场"变了。
+    // 少了这道保险，任何绕过 tick() 直接改 built 的写法（测试、回放快进、调试台）
+    // 都会读到一份"这栋楼还没封顶"的旧分配，表现为明明有矿却说附近没矿。
+    if (this.planValid && this.builtCount() === this.plannedBuilt) return;
+    this.planVeins();
+  }
+
+  private builtCount(): number {
+    let n = 0;
+    for (const b of this.buildings.values()) if (b.built) n++;
+    return n;
+  }
+
+  /** 任何会改变"谁在场"的事都要挂脏：盖楼、拆楼、封顶、矿脉被压掉。 */
+  private invalidateVeinPlan(): void {
+    this.planValid = false;
+  }
+
+  /** 这格占地上有哪些晶脉会被压掉，用来决定要不要弹确认框。 */
+  veinsUnder(origin: GridPos, cols: number, rows: number): GridPos[] {
+    return footprintRect({ origin, cols, rows }).filter((c) => this.map.terrainAt(c) === 'vein');
+  }
+
+  /** 压掉晶脉：地块变成开采过的裸土，从此再也采不出东西，是不可逆的。 */
+  destroyVeins(cells: GridPos[]): void {
+    if (cells.length === 0) return;
+    for (const cell of cells) this.map.setTerrain(cell, VEIN_WORK.ruinedTerrain);
+    this.invalidateVeinPlan();
+    this.bus.emit('vein:destroyed', cells);
   }
 
   // ---------------------------------------------------------------- 落位判定
@@ -153,10 +275,8 @@ export class GameWorld {
     const cells = footprintRect({ origin, cols: def.footprint.cols, rows: def.footprint.rows });
     if (!cells.every((c) => inBounds(c, this.map.size))) return 'out-of-bounds';
 
-    if (def.requiresTerrain) {
-      const onRequired = cells.some((c) => this.map.terrainAt(c) === def.requiresTerrain);
-      if (!onRequired) return 'terrain';
-    }
+    // 晶脉是"可以压但会毁资源"，不是"地形允许"：这里放行，
+    // 要不要压由 veinsUnder + 确认框那一层决定
     if (!cells.every((c) => TERRAIN[this.map.terrainAt(c) ?? 'rock'].buildable)) return 'terrain';
 
     const holder = cells.map((c) => this.map.buildingAt(c)).find((id) => id !== null);
@@ -183,7 +303,7 @@ export class GameWorld {
   }
 
   addPopulationCap(amount: number): void {
-    this.populationCap = Math.max(0, this.populationCap + amount);
+    this.bonusPopulationCap += amount;
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
   }
 
@@ -230,11 +350,18 @@ export class GameWorld {
   }
 
   /** 建造：全部判定通过才动账，任何一步失败都不留半个建筑。 */
-  build(buildingId: string, origin: GridPos): Building | null {
+  build(buildingId: string, origin: GridPos, allowDestroy = false): Building | null {
     const def = buildingDef(buildingId);
     const block = this.inspectPlacement(def, origin);
     if (block) {
       this.bus.emit('toast', { text: `盖不了：${BLOCK_TEXT[block]}`, tone: 'warn' });
+      return null;
+    }
+
+    // 压晶脉是不可逆的，所以这一关放在世界层：交互、脚本、回放都绕不过去
+    const atRisk = this.veinsUnder(origin, def.footprint.cols, def.footprint.rows);
+    if (atRisk.length > 0 && !allowDestroy) {
+      this.bus.emit('toast', { text: `这里压着 ${atRisk.length} 格晶脉，得先确认才会毁掉`, tone: 'warn' });
       return null;
     }
 
@@ -257,6 +384,8 @@ export class GameWorld {
 
     this.map.claim(origin, building.cols, building.rows, building.id);
     this.buildings.set(building.id, building);
+    if (atRisk.length > 0) this.destroyVeins(atRisk);
+    this.invalidateVeinPlan();
     this.bus.emit('building:placed', building);
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
     if (building.built) this.bus.emit('building:built', building);
@@ -268,6 +397,7 @@ export class GameWorld {
     if (!b) return;
     this.map.release(id);
     this.buildings.delete(id);
+    this.invalidateVeinPlan();
     if (this.selection?.kind === 'building' && this.selection.building.id === id) this.select(null);
     this.bus.emit('building:removed', b);
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
@@ -289,6 +419,7 @@ export class GameWorld {
       b.progress = Math.min(1, b.progress + dt / Math.max(0.01, b.def.buildSeconds));
       if (b.progress >= 1) {
         b.built = true;
+        this.invalidateVeinPlan();
         this.bus.emit('building:built', b);
       }
     }

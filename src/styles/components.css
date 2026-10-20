@@ -383,3 +383,111 @@ html[data-orientation='landscape'] .gacha__grid {
 .toast[data-tone='ok'] {
   border-color: rgba(95, 208, 122, 0.6);
 }
+
+/* ---------- 长按气泡：钉在建筑头顶 ---------- */
+
+.bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: min(240px, 62vw);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+  z-index: 30;
+  /* transform 由每帧投影写入，这里只管外观 */
+  will-change: transform;
+}
+
+.bubble[hidden] {
+  display: none;
+}
+
+.bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  transform: rotate(45deg);
+  background: var(--panel-solid);
+  border-right: 1px solid var(--panel-line);
+  border-bottom: 1px solid var(--panel-line);
+}
+
+.bubble__name {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--gold-hi);
+}
+
+.bubble__blurb {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.bubble__fact {
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+/* ---------- 确认框 ---------- */
+
+.overlay--dialog {
+  z-index: 70;
+}
+
+.confirm {
+  width: min(420px, 92vw);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.confirm__head h2,
+.confirm__head {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
+.confirm__body {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.confirm__check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.confirm__check[hidden] {
+  display: none;
+}
+
+.confirm__check-input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--gold);
+}
+
+.confirm__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.confirm__actions .btn {
+  min-width: 92px;
+}

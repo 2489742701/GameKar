@@ -7,6 +7,8 @@
 
 import type { GameApp } from '@game/GameApp';
 import { ActionDock } from './ActionDock';
+import { BuildingBubble } from './BuildingBubble';
+import { ConfirmDialog } from './ConfirmDialog';
 import { GachaPanel } from './GachaPanel';
 import { ResourceBar } from './ResourceBar';
 import { SelectionCard } from './SelectionCard';
@@ -22,6 +24,8 @@ export class Hud {
   private readonly dock: ActionDock;
   private readonly card: SelectionCard;
   private readonly panel: GachaPanel;
+  private readonly confirm: ConfirmDialog;
+  private readonly bubble: BuildingBubble;
   private readonly toasts = new Toasts();
   private readonly telemetry = make('div', { class: 'telemetry' });
 
@@ -36,7 +40,7 @@ export class Hud {
     const world = app.world;
 
     this.resbar = new ResourceBar(world);
-    this.card = new SelectionCard(world.map, (id) => app.demolish(id));
+    this.card = new SelectionCard(world, (id) => app.demolish(id));
     this.dock = new ActionDock(world, {
       onPull: (count) => {
         const purchase = app.pull(count);
@@ -47,6 +51,8 @@ export class Hud {
       onFocusHome: () => app.focusHome(),
     });
     this.panel = new GachaPanel(() => this.panel.hide());
+    this.confirm = new ConfirmDialog();
+    this.bubble = new BuildingBubble(world);
 
     this.shell.append(
       place(this.resbar.el, 'hud__top'),
@@ -54,11 +60,24 @@ export class Hud {
       place(this.dock.el, 'hud__dock'),
     );
 
-    host.append(this.shell, this.toasts.el, this.panel.el, this.telemetry);
+    host.append(this.shell, this.toasts.el, this.panel.el, this.confirm.el, this.bubble.el, this.telemetry);
 
     world.bus.on('selection:changed', (sel) => this.card.render(sel));
     world.bus.on('placing:changed', (id) => this.dock.setPlacing(id));
     world.bus.on('toast', ({ text, tone }) => this.toasts.push(text, tone ?? 'ok'));
+    world.bus.on('inspect:target', (building) => this.bubble.show(building));
+    world.bus.on('building:removed', (b) => this.bubble.forget(b.id));
+    world.bus.on('confirm:vein', ({ cells, buildingName }) => {
+      this.confirm.show(
+        {
+          title: '要压掉晶脉吗',
+          body: `在这里建${buildingName}会毁掉 ${cells.length} 格晶脉，毁掉之后这块地方再也采不出东西。确定吗？`,
+          confirmText: '确定建造',
+          dontAskText: '不再提示',
+        },
+        (agree, neverAsk) => this.app.resolveConfirm(agree, neverAsk),
+      );
+    });
 
     this.card.render(world.selection);
     // 先落一次读数：刷新循环靠 rAF，页面在后台时 rAF 根本不触发，
@@ -81,7 +100,10 @@ export class Hud {
         break;
       }
       case 'Escape':
-        if (this.panel.open) this.panel.hide();
+        // 谁在最上面就先收谁：确认框 > 开包 > 气泡 > 建造模式
+        if (this.confirm.open) this.confirm.hide();
+        else if (this.panel.open) this.panel.hide();
+        else if (this.bubble.targetBuilding) this.bubble.show(null);
         else this.app.cancelBuild();
         break;
       case 'h':
@@ -101,6 +123,8 @@ export class Hud {
     this.previous = performance.now();
     const step = (now: number) => {
       this.handle = requestAnimationFrame(step);
+      // 气泡要贴着建筑，一帧都不能落后，所以它每帧跟；其余读数 10Hz 刷
+      this.positionBubble();
       this.sinceLast += now - this.previous;
       this.previous = now;
       if (this.sinceLast < REFRESH_MS) return;
@@ -108,6 +132,14 @@ export class Hud {
       this.refresh();
     };
     this.handle = requestAnimationFrame(step);
+  }
+
+  private positionBubble(): void {
+    const target = this.bubble.targetBuilding;
+    if (!target) return;
+    const p = this.app.screenOfBuilding(target);
+    // 楼被拆掉那一帧 heightOf 已经查不到了，投影会跳到原点：直接收起来
+    this.bubble.place(p.x, p.y, p.inFront && this.app.world.buildings.has(target.id));
   }
 
   stop(): void {

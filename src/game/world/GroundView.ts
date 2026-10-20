@@ -30,7 +30,6 @@ export class GroundView {
   /** 每格建图时的抖动色：拆除后要还原成它，而不是还原成没有抖动的基色 */
   private readonly baseColor = new Map<number, THREE.Color>();
   private readonly dummy = new THREE.Object3D();
-  private readonly color = new THREE.Color();
 
   constructor(private readonly map: TileMap) {
     this.build();
@@ -96,18 +95,46 @@ export class GroundView {
       mesh.setMatrixAt(slot, this.dummy.matrix);
 
       // 同色微抖动：没有它整片草原会像一张色卡
-      const jitter = fbm(col * 3.1, row * 2.7, { seed: 4242, frequency: 1, octaves: 1 }) - 0.5;
-      this.color.copy(BASE_COLOR.get(type)!).offsetHSL(0, jitter * 0.06, jitter * 0.09);
-      mesh.setColorAt(slot, this.color);
+      mesh.setColorAt(slot, this.terrainColor(col, row, type));
 
       const key = row * stride + col;
-      this.baseColor.set(key, this.color.clone());
+      this.baseColor.set(key, this.terrainColor(col, row, type));
       this.index.set(key, { mesh, slot });
     }
 
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     return mesh;
+  }
+
+  /**
+   * 一格的颜色 = 地形基色 + 由坐标决定的抖动。
+   * 抖动公式只此一份：建图和地形变了要重涂（比如晶脉被压掉）必须得是同一条，
+   * 否则同一格两次算出两个色，看上去就像闪了一下。
+   */
+  private terrainColor(col: number, row: number, type: TerrainType): THREE.Color {
+    const jitter = fbm(col * 3.1, row * 2.7, { seed: 4242, frequency: 1, octaves: 1 }) - 0.5;
+    return new THREE.Color(BASE_COLOR.get(type)!).offsetHSL(0, jitter * 0.06, jitter * 0.09);
+  }
+
+  /** 地形变了（晶脉被压成裸土）之后重涂这几格，并更新还原基色。 */
+  recolor(cells: { col: number; row: number }[]): void {
+    const stride = this.map.size.cols;
+    const touched = new Set<THREE.InstancedMesh>();
+
+    for (const cell of cells) {
+      const key = cell.row * stride + cell.col;
+      const entry = this.index.get(key);
+      if (!entry) continue;
+      const type = this.map.terrainAt(cell) ?? 'grass';
+      const color = this.terrainColor(cell.col, cell.row, type);
+      this.baseColor.set(key, color);
+      entry.mesh.setColorAt(entry.slot, color);
+      touched.add(entry.mesh);
+    }
+    for (const mesh of touched) {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   }
 
   /** 盖上建筑把地块压暗；拆除则还原成建图时那一份带抖动的色。 */

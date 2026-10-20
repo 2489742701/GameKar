@@ -139,7 +139,7 @@ export const CARDS: Record<string, CardDef> = {
     name: '精炼厂图纸',
     kind: 'building',
     rarity: 'epic',
-    blurb: '只能盖在晶脉上的晶钻工厂。整张图的收益拐点。',
+    blurb: '精炼厂建造许可。小人脚程快，能同时包三个矿点，是收益拐点。',
     effects: [{ kind: 'permit', buildingId: 'refinery', count: 1 }],
   },
   recruitDecree: {
@@ -181,7 +181,7 @@ export const CARDS: Record<string, CardDef> = {
     name: '晶脉共鸣',
     kind: 'economy',
     rarity: 'legendary',
-    blurb: '每秒晶钻永久 +1.2 —— 抽卡速度翻倍。',
+    blurb: '每秒晶钻永久 +1.2，比议事厅自己产的还多。',
     effects: [{ kind: 'yield', resource: 'crystal', perSecond: 1.2 }],
   },
   goldenHorde: {

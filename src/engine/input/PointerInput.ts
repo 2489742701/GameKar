@@ -8,6 +8,8 @@
 export interface PointerHandlers {
   onPan?(dx: number, dy: number): void;
   onTap?(x: number, y: number): void;
+  /** 按住不动超过 LONG_PRESS_MS：查详情用的手势，跟"点一下"互斥 */
+  onLongPress?(x: number, y: number): void;
   onZoom?(factor: number, x: number, y: number): void;
   onRotate?(degrees: number, x: number, y: number): void;
   onHover?(x: number, y: number): void;
@@ -23,6 +25,7 @@ interface Tracked {
 
 const TAP_SLOP = 9; // px
 const TAP_MS = 450;
+const LONG_PRESS_MS = 380;
 
 export class PointerInput {
   private readonly pointers = new Map<number, Tracked>();
@@ -30,6 +33,8 @@ export class PointerInput {
   private pinchDist = 0;
   private pinchAngle = 0;
   private attached = false;
+  private longPressTimer: number | null = null;
+  private longPressFired = false;
 
   constructor(
     private readonly el: HTMLElement,
@@ -58,6 +63,8 @@ export class PointerInput {
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.preventMenu);
     this.pointers.clear();
+    // 摘掉还没到点的长按定时器，否则它会在解绑之后回调一次
+    this.clearLongPress();
   }
 
   private readonly preventMenu = (e: Event) => e.preventDefault();
@@ -81,11 +88,29 @@ export class PointerInput {
     }
 
     if (this.pointers.size === 2) {
+      // 第二根手指落下来就是双指手势，长按判定作废
+      this.clearLongPress();
       const [a, b] = [...this.pointers.values()];
       this.pinchDist = Math.hypot(b!.x - a!.x, b!.y - a!.y);
       this.pinchAngle = Math.atan2(b!.y - a!.y, b!.x - a!.x);
+      return;
     }
+
+    this.longPressFired = false;
+    this.clearLongPress();
+    this.longPressTimer = window.setTimeout(() => {
+      if (this.dragging || this.pointers.size !== 1) return;
+      this.longPressFired = true;
+      this.h.onLongPress?.(x, y);
+    }, LONG_PRESS_MS);
   };
+
+  private clearLongPress(): void {
+    if (this.longPressTimer !== null) {
+      window.clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+  }
 
   private readonly onMove = (e: PointerEvent) => {
     const tracked = this.pointers.get(e.pointerId);
@@ -111,6 +136,7 @@ export class PointerInput {
 
     if (!this.dragging && Math.hypot(x - tracked.startX, y - tracked.startY) > TAP_SLOP) {
       this.dragging = true;
+      this.clearLongPress();
     }
     if (this.dragging) this.h.onPan?.(dx, dy);
     else if (e.pointerType === 'mouse') this.h.onHover?.(x, y);
@@ -141,6 +167,7 @@ export class PointerInput {
   private readonly onUp = (e: PointerEvent) => {
     const tracked = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
+    this.clearLongPress();
     try {
       if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
     } catch {
@@ -155,10 +182,14 @@ export class PointerInput {
 
     const moved = Math.hypot(tracked.x - tracked.startX, tracked.y - tracked.startY);
     const held = performance.now() - tracked.startAt;
-    if (!this.dragging && moved <= TAP_SLOP && held <= TAP_MS) {
+    // 长按已经替玩家做了"看详情"，松手就不要再补一次点击选中
+    if (!this.dragging && !this.longPressFired && moved <= TAP_SLOP && held <= TAP_MS) {
       this.h.onTap?.(tracked.x, tracked.y);
     }
-    if (this.pointers.size === 0) this.dragging = false;
+    if (this.pointers.size === 0) {
+      this.dragging = false;
+      this.longPressFired = false;
+    }
   };
 
   private readonly onWheel = (e: WheelEvent) => {
