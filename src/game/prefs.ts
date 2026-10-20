@@ -48,6 +48,7 @@ function browserStore(): KeyValueStore {
 const KEY = {
   neverAskDestroyVein: 'gamekar.pref.neverAskDestroyVein',
   theme: 'gamekar.pref.theme',
+  save: 'gamekar.save',
 } as const;
 
 export class Prefs {
@@ -77,5 +78,18 @@ export class Prefs {
 
   setThemeId(id: string): void {
     this.store.set(KEY.theme, id);
+  }
+
+  /** 回合结算时自动写的存档（JSON 串）。读不出来或版本不符时由 world/save 判掉。 */
+  get save(): string | null {
+    return this.store.get(KEY.save);
+  }
+
+  setSave(json: string): void {
+    this.store.set(KEY.save, json);
+  }
+
+  clearSave(): void {
+    this.store.set(KEY.save, '');
   }
 }

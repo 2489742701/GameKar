@@ -6,6 +6,7 @@
 
 import { TERRAIN } from '@game/config';
 import type { Building, GameWorld, Selection } from '@game/world/GameWorld';
+import type { Combat } from '@game/systems/Combat';
 import { buildingFacts, tileMeaning } from './facts';
 import { cssColor, make, type HudWidget } from './dom';
 
@@ -19,6 +20,7 @@ export class SelectionCard implements HudWidget {
     private readonly world: GameWorld,
     private readonly onDemolish: (id: number) => void,
     private readonly runnersOf?: (id: number) => number,
+    private readonly combat?: Combat,
   ) {}
 
   private get map() {
@@ -95,7 +97,7 @@ export class SelectionCard implements HudWidget {
       attrs: { style: `color:${cssColor(b.built ? 0x5fd07a : 0xd9b25c)}` },
     });
 
-    const facts = buildingFacts(this.world, b, this.runnersOf);
+    const facts = buildingFacts(this.world, b, this.runnersOf, this.combat);
 
     this.el.append(
       make('div', { class: 'selcard__head' }, [make('span', { class: 'selcard__name', text: b.def.name }), this.chip]),

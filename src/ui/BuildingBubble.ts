@@ -5,6 +5,7 @@
  * 内容重建便宜，位置重建贵，两件事分开才不会拖慢渲染。
  */
 
+import type { Combat } from '@game/systems/Combat';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 import { buildingFacts } from './facts';
 import { make, setText, type HudWidget } from './dom';
@@ -18,6 +19,7 @@ export class BuildingBubble implements HudWidget {
   constructor(
     private readonly world: GameWorld,
     private readonly runnersOf?: (id: number) => number,
+    private readonly combat?: Combat,
   ) {
     this.el.append(this.name, this.lines);
   }
@@ -34,7 +36,7 @@ export class BuildingBubble implements HudWidget {
     }
     this.el.hidden = false;
     setText(this.name, building.def.name);
-    const facts = [...buildingFacts(this.world, building, this.runnersOf)];
+    const facts = [...buildingFacts(this.world, building, this.runnersOf, this.combat)];
     if (!building.built) facts.push(`建造中 ${Math.round(building.progress * 100)}%`);
     this.lines.replaceChildren(
       make('div', { class: 'bubble__blurb', text: building.def.blurb }),

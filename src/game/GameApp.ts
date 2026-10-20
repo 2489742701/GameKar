@@ -36,6 +36,7 @@ import { findNearestClearSpot, generateTerrain } from '@game/world/TerrainGenera
 import { PlacementController } from '@game/systems/Placement';
 import { FlagPocket } from '@game/systems/FlagPocket';
 import { Combat } from '@game/systems/Combat';
+import { applySave, parseSave, snapshot } from '@game/world/save';
 import { BattleFx } from '@game/fx/BattleFx';
 import { loadPack, type DudePack } from '@game/dudes/pack';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
@@ -102,7 +103,7 @@ export class GameApp {
   private readonly placement: PlacementController;
   /** 手里握着的集合旗（一次一面） */
   readonly flags = new FlagPocket();
-  private readonly seed: number;
+  readonly seed: number;
   /** 素材包为 null 时整套小人视觉静默关闭，玩法不受影响 */
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
@@ -136,7 +137,7 @@ export class GameApp {
       veins: VEIN_COUNT,
       clearingRadius: 4,
     });
-    this.world = new GameWorld(map);
+    this.world = new GameWorld(map, { seed: this.seed });
 
     // ---------------------------------------------------------------- 渲染管线
     this.renderer = new Renderer(options.canvas);
@@ -167,6 +168,8 @@ export class GameApp {
     this.combat.on('defeat', () => {
       this.defeated = true;
       this.bus.emit('toast', { text: '议事厅被打掉了，这一局到此', tone: 'warn' });
+      // 'game:over' 不在这里发：判负事件是在楼被拆掉**之前**发的，
+      // 那时候"还剩几栋楼"会把议事厅自己也算进去。等它真从账上消失再说。
     });
     // 回合的"敌人还在不在"由战斗内核回答：这就是 prep/raid 的唯一交接点
     this.world.raidActive = () => this.combat.enemiesAlive() > 0;
@@ -217,8 +220,15 @@ export class GameApp {
     });
 
     this.wireEvents();
-    this.bootstrap();
+    // 有档就读档，没档才走开局（bootstrap 会白送一座议事厅，读档时不能再送一次）
+    this.restored = this.tryRestore();
+    if (!this.restored) this.bootstrap();
   }
+
+  /** 读档期间不许回写存档：adopt 会发 building:placed，那是读不是写。 */
+  private restored = false;
+  /** 判负只广播一次（议事厅那栋楼真从账上消失的那一刻）。 */
+  private overSent = false;
 
   /**
    * 起机器：素材包要异步加载（4 张图 + 一份 json），所以这里是 async。
@@ -259,11 +269,40 @@ export class GameApp {
    * 视图只订阅世界事件，不被任何人直接调用。
    * 这样"脚本落位""点击落位""开局落位"三条路走的是同一套同步逻辑。
    */
+  /** 存档点：盖楼、拆楼、回合结算。战场上的兵与弹不存 —— 刷新就是回到上一次结算。 */
+  private autosave(): void {
+    if (this.restoring) return; // 读档时 adopt 也会发 building:placed，那是读不是写
+    this.prefs.setSave(JSON.stringify(snapshot(this.world, this.combat)));
+  }
+
+  private restoring = false;
+
+  private tryRestore(): boolean {
+    const saved = parseSave(this.prefs.save);
+    if (!saved) return false;
+    // seed 不符就整份丢掉：楼是按格子记的，换张图去盖它们等于凭空造 bug
+    if (saved.seed !== this.seed) {
+      console.warn(`[GameApp] 存档是 seed ${saved.seed} 的，当前 ${this.seed}，不读`);
+      return false;
+    }
+    this.restoring = true;
+    const skipped = applySave(this.world, this.combat, saved);
+    this.restoring = false;
+    if (skipped > 0) console.warn(`[GameApp] 存档里有 ${skipped} 栋楼没摆回去（格子被占或越界）`);
+    return true;
+  }
+
+  /** 重开：先清档，否则读档会把"已经输了的那局"再端回来。跳转由 UI 层做。 */
+  restart(): void {
+    this.prefs.clearSave();
+  }
+
   private wireEvents(): void {
     this.bus.on('building:placed', (b) => {
       this.buildingView.add(b);
       this.ground.markOccupied(b.origin, b.cols, b.rows, true);
       this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), true);
+      this.autosave();
     });
 
     this.bus.on('building:removed', (b) => {
@@ -273,6 +312,11 @@ export class GameApp {
       // 楼没了，手里那面旗不能继续指向一个空号
       this.flags.forget(b.id);
       this.emitFlag();
+      this.autosave();
+      if (this.defeated && !this.overSent) {
+        this.overSent = true;
+        this.bus.emit('game:over', { round: this.world.roundIndex });
+      }
     });
 
     // 晶脉被压掉：地块重涂成裸土，矿簇永久撤走（拆楼也不会回来）
@@ -286,6 +330,9 @@ export class GameApp {
     this.bus.on('vein:replanned', () => this.crew?.sync());
 
     this.bus.on('selection:changed', () => this.syncSelection());
+
+    // 回合结算是唯一的"落盘时刻"：账、许可、塔等级、人口快照都在这一刻定型
+    this.bus.on('round:settled', () => this.autosave());
 
     // 回合进入接敌 = 这一波敌人进场。准备阶段什么都不发生，正是用户要的"不涨钱"
     this.bus.on('round:changed', ({ phase, index }) => {
@@ -613,6 +660,12 @@ export class GameApp {
     const cell = this.world.rallyOf(building);
     const world = cellToWorld(cell);
     return this.screenOfWorld(world.x, this.world.map.surfaceY(cell) + 0.9, world.z);
+  }
+
+  /** 任意一格地面的屏幕位置（来犯预告旗标用它）。 */
+  screenOfCell(cell: GridPos): { x: number; y: number; inFront: boolean } {
+    const world = cellToWorld(cell);
+    return this.screenOfWorld(world.x, this.world.map.surfaceY(cell) + 0.7, world.z);
   }
 
   setOrientation(mode: OrientationMode): void {

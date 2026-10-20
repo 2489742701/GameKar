@@ -8,7 +8,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 207 条回归
+npm run check        # 类型检查 + 217 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -58,13 +58,17 @@ src/
 │  ├─ models/         kit.ts（建模套件）· buildings.ts · props.ts · registry.ts
 │  ├─ dudes/          小人：pack.ts(读素材包) anims.ts(帧表) recolor.ts(换色) style.ts(长相)
 │  │                  atlas.ts(烘图集) DudeView.ts(3D 卡片) Miners.ts(运输队) roster.ts(兵种长相) UnitView.ts(士兵)
+│  ├─ systems/        Placement.ts（三态幽灵 + 毁矿闸门）· FlagPocket.ts（旗子袋状态机）
+│  │                  Combat.ts（兵/塔/弹/波次 + 流场寻路）· Readouts.ts（头顶条的唯一算处）
+│  ├─ world/save.ts   回合之间落盘的存档：只存账本，不存战场上的兵与弹
 │  ├─ fx/             BattleFx.ts（2D 箭 / 3D 铁弹 / 爆炸与像素烟雾 / 炮口火光）
-│  ├─ prefs.ts        玩家偏好（"不再提示"），存储不可用时自动退回内存
-│  └─ systems/        Placement.ts（三态幽灵 + 毁矿闸门）· FlagPocket.ts（旗子袋状态机）· Combat.ts（兵/塔/弹/波次 + 流场）
-├─ ui/                dom.ts · facts.ts · theme.ts(噪声材质) · themePrefs.ts(参数↔ID) + 十二个部件 + Hud.ts（组装）
+│  └─ prefs.ts        玩家偏好与存档（"不再提示"、界面材质 ID、这局的档），存储不可用时退回内存
+├─ ui/                dom.ts · facts.ts · theme.ts(噪声材质) · themePrefs.ts(参数↔ID)
+│                     + 十五个部件（资源栏 / 操作坞 / 信息卡 / 开包 / 气泡 / 旗子 / 菜单 / 缺员徽章 /
+│                       头顶条 / 来犯预告 / 判负 / 吐司 / 确认框 / 材质面板）+ Hud.ts（组装）
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
-                      roster · rally · combat · rounds · theme —— 共 207 条
+                      roster · rally · combat · rounds · theme · readouts —— 共 217 条
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**
@@ -145,6 +149,32 @@ tests/                grid · random · terrain · world · gacha · data · geo
 - 点取消 → 一格都不动，许可也不扣。点确定 → 楼起来，那几格永久变成裸土（拆楼也不变回来）。
 - 弹窗下方有"不再提示"，勾了就记在本地（`Prefs`，无痕模式自动退回内存存储）。
 - 幽灵三种脸色：绿=随便盖，**琥珀=能盖但会毁矿**，红=盖不了。这个判断和落位用的是同一个函数。
+
+### 屏幕上现在看得见什么
+
+战斗内核里的数早就有了，缺的一直是"露出来"。这一轮补上六样：
+
+| 位置 | 内容 | 什么时候出现 |
+| --- | --- | --- |
+| 楼头顶 | **血条六格**（剩两格以下翻红） | 掉过血才挂；满血不挂，一屏幕条等于没有信息 |
+| 楼头顶 | **生产读条** + 一句 `生产中 40%` / `补 2/3 · 储备 1` / `满编 3/3` | 兵没满编时 |
+| 楼头顶 | **弹夹**：`Lv2 · 装填 3.4s` / `Lv1 · 弹夹 5/6` | 塔打空或装填中 |
+| 楼头顶 | 人口头像 + ✕ | 排不到人手（缺员的塔不开火、兵营不产兵） |
+| 来点格上 | `第 3 波 · 从这边来 · 8s` | 准备阶段最后 15 秒 |
+| 全屏 | 判负面板：撑过第几回合、还剩几栋楼、场上几只敌人 + 「重开这一局」 | 议事厅被打掉 |
+
+判负那句"还剩几栋楼"**不含议事厅自己**：它是在楼真从账上消失之后才广播的，
+早一步统计就会把刚塌的心脏算成"还在"。这条踩过一次，锁在 `tests/readouts.test.ts`。
+
+### 存档落在回合之间
+
+- 盖楼、拆楼、回合结算三个时刻自动写本地；**战场上的兵与弹不存**，
+  所以刷新 = 回到上一次结算，正在打的这一波重新来。文案里就这么写，不假装能续战斗。
+- 档里带版本号与 seed：**版本不符或 seed 不符就整份丢掉**，不猜、不迁移——
+  猜错的存档比没有存档更坏（楼是按格子记的，换张图去盖它们等于凭空造 bug）。
+- 读档走 `adopt()`：走盖楼的全部副作用（占地、矿脉计划、事件），但**不扣资源、不扣许可**。
+  这条有专门的锁：一个许可都不发的新世界，读档照样把楼摆回来，金币与许可数与源局全等。
+- 「重开这一局」先清档再跳同一张图（`?seed=` 带过去），不清的话读档会把已经输掉的那局再端回来。
 
 ### 操作
 
@@ -229,5 +259,5 @@ tests/                grid · random · terrain · world · gacha · data · geo
 - **武器仍然画不出来**：本包 base 表 90,363 个不透明像素里"武器色"只占 300 个，剑攻击帧里武器色 = 0。
   兵种识别现在靠头型 + 动作 + 色带。三个走法（就这样 / 代码内嵌极小武器 / 换完整数据包）还没定。
 - 士兵还不会绕过岩脊群：流场只挡水与岩，遇到"贴着岩缝"的极端摆法会来回蹭。
-- 存档：`GameWorld` 与 `Combat` 全是可序列化字段，等接入。
+- 存档只到"回合之间"这一档：不存多局、不存战斗中的兵、也不存抽卡历史（`pullHistory` 没进档）。
 - 小地图、战争迷雾、音效、多路来犯、玩家直接操兵。

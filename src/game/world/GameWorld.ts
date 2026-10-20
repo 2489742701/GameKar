@@ -101,6 +101,8 @@ export interface WorldEvents {
   'round:changed': { index: number; phase: RoundPhase; secondsLeft: number };
   /** 一次结算完成：进账明细 + 快照重算后的缺员名单 */
   'round:settled': { index: number; gains: Partial<Record<ResourceId, number>>; understaffed: number };
+  /** 议事厅被打掉：HUD 弹判负面板，玩家按重开 */
+  'game:over': { round: number };
   'pull:done': Purchase;
   'placing:changed': string | null;
   'selection:changed': Selection;
@@ -111,10 +113,13 @@ const zeroWallet = (): Record<ResourceId, number> => ({ gold: 0, crystal: 0, bre
 
 export interface WorldOptions {
   bus?: EventBus<WorldEvents>;
+  /** 这一局的地图种子。存档认它：seed 不符的档一律不读 */
+  seed?: number;
 }
 
 export class GameWorld {
   readonly bus: EventBus<WorldEvents>;
+  readonly seed: number;
   readonly buildings = new Map<number, Building>();
   readonly resources: Record<ResourceId, number> = zeroWallet();
   readonly cardYields: Record<ResourceId, number> = zeroWallet();
@@ -125,7 +130,12 @@ export class GameWorld {
   readonly pullHistory: PullOutcome[] = [];
 
   /** 来自卡牌的永久人口上限增量；建筑提供的那部分走 populationCap getter 现算 */
-  private bonusPopulationCap = 0;
+  private bonusCap = 0;
+
+  /** 存档要读写它，所以留个只读口（写的口子只有 addPopulationCap 与 loadLedger 两个）。 */
+  get bonusPopulationCap(): number {
+    return this.bonusCap;
+  }
   selection: Selection = null;
   time = 0;
 
@@ -157,6 +167,7 @@ export class GameWorld {
     readonly map: TileMap,
     options: WorldOptions = {},
   ) {
+    this.seed = options.seed ?? 0;
     this.bus = options.bus ?? new EventBus<WorldEvents>();
     for (const res of Object.keys(this.resources) as ResourceId[]) {
       this.resources[res] = ECONOMY.starting[res] ?? 0;
@@ -181,7 +192,7 @@ export class GameWorld {
    * 盖民居不会涨、拆民居不会掉，卡牌和建筑两条路迟早对不上账。
    */
   get populationCap(): number {
-    let cap = ECONOMY.basePopulationCap + this.bonusPopulationCap;
+    let cap = ECONOMY.basePopulationCap + this.bonusCap;
     for (const b of this.buildings.values()) cap += b.def.populationCap ?? 0;
     return cap;
   }
@@ -503,7 +514,7 @@ export class GameWorld {
   }
 
   addPopulationCap(amount: number): void {
-    this.bonusPopulationCap += amount;
+    this.bonusCap += amount;
     this.raiseApproved();
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
   }
@@ -673,6 +684,82 @@ export class GameWorld {
   get hallAlive(): boolean {
     for (const b of this.buildings.values()) if (b.def.id === 'hall') return true;
     return false;
+  }
+
+  // ---------------------------------------------------------------- 读档
+
+  /** 当前回合状态（存档与顶栏倒计时共用一份）。 */
+  get roundState(): { index: number; phase: RoundPhase; left: number; approved: number } {
+    return { index: this.roundIndex, phase: this.phase, left: this.phaseLeft, approved: this.approvedPopulation };
+  }
+
+  /** 把账本整份灌回来：资源、卡牌增量、许可、见过的卡、人口增量、时间。 */
+  loadLedger(ledger: {
+    resources: Record<ResourceId, number>;
+    cardYields: Record<ResourceId, number>;
+    permits: [string, number][];
+    seenCards: string[];
+    bonusPopulationCap: number;
+    time: number;
+  }): void {
+    for (const res of Object.keys(this.resources) as ResourceId[]) {
+      this.resources[res] = ledger.resources[res] ?? 0;
+      this.cardYields[res] = ledger.cardYields[res] ?? 0;
+    }
+    this.permits.clear();
+    for (const [id, n] of ledger.permits) this.permits.set(id, n);
+    this.seenCards.clear();
+    for (const id of ledger.seenCards) this.seenCards.add(id);
+    this.bonusCap = ledger.bonusPopulationCap;
+    this.time = ledger.time;
+    this.invalidateVeinPlan();
+  }
+
+  /** 回合号、阶段、剩余时间、人口快照一起回来。 */
+  loadRound(round: { index: number; phase: RoundPhase; left: number; approved: number }): void {
+    this.roundIndex = round.index;
+    this.phase = round.phase;
+    this.phaseLeft = round.left;
+    this.approvedPopulation = round.approved;
+    this.bus.emit('round:changed', { index: this.roundIndex, phase: this.phase, secondsLeft: this.phaseSecondsLeft });
+    this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
+  }
+
+  /**
+   * 落一栋**已经存在**的楼：走盖楼的全部副作用（占地、矿脉计划、事件），
+   * 但不扣资源、不扣许可、不判地形 —— 那些事在当初盖它的时候已经判过一遍了。
+   * 位置不合法（越界或被占）时返回 null，让调用方决定怎么报告。
+   */
+  adopt(
+    defId: string,
+    origin: GridPos,
+    state: { progress: number; built: boolean; hp: number; rally: GridPos | null; placedAt: number },
+  ): Building | null {
+    const def = buildingDef(defId);
+    const cells = footprintRect({ origin, cols: def.footprint.cols, rows: def.footprint.rows });
+    if (!cells.every((c) => inBounds(c, this.map.size))) return null;
+    if (cells.some((c) => this.map.buildingAt(c) !== null)) return null;
+
+    const building: Building = {
+      id: this.nextId++,
+      def,
+      origin,
+      cols: def.footprint.cols,
+      rows: def.footprint.rows,
+      progress: state.progress,
+      built: state.built,
+      surfaceY: this.map.footprintSurfaceY(origin, def.footprint.cols, def.footprint.rows),
+      placedAt: state.placedAt,
+      rally: state.rally,
+      hp: state.hp,
+    };
+    this.map.claim(origin, building.cols, building.rows, building.id);
+    this.buildings.set(building.id, building);
+    this.raiseApproved();
+    this.invalidateVeinPlan();
+    this.bus.emit('building:placed', building);
+    if (building.built) this.bus.emit('building:built', building);
+    return building;
   }
 
   select(selection: Selection): void {

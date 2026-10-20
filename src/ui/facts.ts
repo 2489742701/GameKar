@@ -7,16 +7,21 @@
 
 import { RESOURCE_META, TERRAIN, type ResourceId } from '@game/config';
 import { buildingName } from '@game/data/buildings';
+import type { Combat } from '@game/systems/Combat';
+import { readoutOf, squadNames } from '@game/systems/Readouts';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 
 /**
  * 建筑的读数行。
- * `runnersOf` 由调用方给（小人数量是视图侧的状态，世界层不该知道它）。
+ * `runnersOf` 由调用方给（小人数量是视图侧的状态，世界层不该知道它）；
+ * `combat` 可空 —— 没有战斗内核时（早期夹具、素材未加载）血条/小队/弹夹这几行就不出，
+ * 而不是给一堆 0 骗人。
  */
 export function buildingFacts(
   world: GameWorld,
   b: Building,
   runnersOf?: (id: number) => number,
+  combat?: Combat,
 ): string[] {
   const out: string[] = [];
   const yields = world.yieldOf(b);
@@ -42,10 +47,19 @@ export function buildingFacts(
   }
   if (b.def.breadPerRound) {
     const fields = world.adjacentOf(b, 'field');
-    out.push(`每回合面包 +${b.def.breadPerRound.base + b.def.breadPerRound.perAdjacentField * fields}（贴了 ${fields} 块田）`);
+    out.push(
+      `每回合面包 +${b.def.breadPerRound.base + b.def.breadPerRound.perAdjacentField * fields}（贴了 ${fields} 块田）`,
+    );
   }
   if (b.def.requiresAdjacent) {
     out.push(`必须贴着${buildingName(b.def.requiresAdjacent)}`);
+  }
+
+  if (combat) {
+    const r = readoutOf(world, combat, b);
+    if (r.squad) out.push(`${squadNames(b)} · ${r.squad.line}`);
+    if (r.ammo) out.push(r.ammo.line);
+    if (r.hp.frac < 1) out.push(`血量 ${r.hp.hp}/${r.hp.max}`);
   }
   return out;
 }

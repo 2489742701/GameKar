@@ -369,6 +369,17 @@ export class Combat {
     return s;
   }
 
+  /** 读档用：把塔的等级摆回去（不花钱、不判许可）。 */
+  setTowerLevel(buildingId: number, level: number): void {
+    const b = this.opts.world.buildings.get(buildingId);
+    const spec = b?.def.tower;
+    if (!b || !spec) return;
+    const st = this.towerState(b);
+    st.level = Math.min(spec.upgrades.length + 1, Math.max(1, Math.round(level)));
+    st.magazine = spec.magazine;
+    st.reloading = 0;
+  }
+
   /** 升级：只花钱与水晶，不碰许可。返回 false = 钱不够或已满级。 */
   upgrade(b: Building): boolean {
     const spec = b.def.tower;

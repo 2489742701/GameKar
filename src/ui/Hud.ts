@@ -9,10 +9,13 @@ import type { GameApp } from '@game/GameApp';
 import { hasRally } from '@game/data/buildings';
 import type { Building } from '@game/world/GameWorld';
 import { ActionDock } from './ActionDock';
+import { BuildingBars } from './BuildingBars';
 import { BuildingBubble } from './BuildingBubble';
+import { DefeatPanel, restartUrl } from './DefeatPanel';
 import { BuildingMenu } from './BuildingMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { GachaPanel } from './GachaPanel';
+import { RaidPreview } from './RaidPreview';
 import { RallyFlag } from './RallyFlag';
 import { ResourceBar } from './ResourceBar';
 import { StaffBadges } from './StaffBadges';
@@ -36,6 +39,9 @@ export class Hud {
   private readonly bubble: BuildingBubble;
   private readonly flag: RallyFlag;
   private readonly theme: ThemePanel;
+  private readonly bars: BuildingBars;
+  private readonly raid: RaidPreview;
+  private readonly defeat: DefeatPanel;
   private readonly menu: BuildingMenu;
   private readonly badges: StaffBadges;
   private readonly toasts = new Toasts();
@@ -52,7 +58,13 @@ export class Hud {
     const world = app.world;
 
     this.resbar = new ResourceBar(world, () => this.toggleTheme());
-    this.card = new SelectionCard(world, (id) => app.demolish(id), (id) => app.runnersOf(id));
+    this.bars = new BuildingBars(world, app.combat);
+    this.raid = new RaidPreview(world, app.combat, app.seed);
+    this.defeat = new DefeatPanel(() => {
+      app.restart();
+      location.href = restartUrl(app.seed, location);
+    });
+    this.card = new SelectionCard(world, (id) => app.demolish(id), (id) => app.runnersOf(id), app.combat);
     this.dock = new ActionDock(world, {
       onPull: (count) => {
         const purchase = app.pull(count);
@@ -65,7 +77,7 @@ export class Hud {
     });
     this.panel = new GachaPanel(() => this.panel.hide());
     this.confirm = new ConfirmDialog();
-    this.bubble = new BuildingBubble(world, (id) => app.runnersOf(id));
+    this.bubble = new BuildingBubble(world, (id) => app.runnersOf(id), app.combat);
     this.flag = new RallyFlag((building) => this.app.stowFlag(building));
     this.menu = new BuildingMenu({
       onUpgrade: (b) => {
@@ -99,6 +111,9 @@ export class Hud {
       this.badges.el,
       this.menu.el,
       this.theme.el,
+      this.bars.el,
+      this.raid.el,
+      this.defeat.el,
       this.telemetry,
     );
 
@@ -117,7 +132,31 @@ export class Hud {
       this.flag.forget(b.id);
       this.badges.forget(b.id);
       this.menu.forget(b.id);
+      this.bars.forget(b.id);
       this.syncFlag();
+      this.bars.refresh();
+    });
+    // 条上的内容一变就该重画，别等 10Hz 那一拍：挨一发打、封顶、放旗子都是离散事件
+    world.bus.on('building:hit', () => this.bars.refresh());
+    world.bus.on('building:built', () => {
+      this.badges.refresh();
+      this.bars.refresh();
+    });
+    world.bus.on('building:placed', () => this.bars.refresh());
+    world.bus.on('rally:changed', () => this.bars.refresh());
+    world.bus.on('round:changed', () => {
+      this.raid.refresh();
+      this.bars.refresh();
+    });
+    world.bus.on('game:over', ({ round }) => {
+      this.defeat.show({
+        round,
+        buildings: world.buildings.size,
+        enemies: app.combat.enemiesAlive(),
+        gold: world.resources.gold,
+        crystal: world.resources.crystal,
+        bread: world.resources.bread,
+      });
     });
     // 盖楼、封顶、结算都会改缺员名单；这三处之外名单不会自己变
     world.bus.on('building:built', () => this.badges.refresh());
@@ -163,6 +202,7 @@ export class Hud {
       case 'Escape':
         // 谁在最上面就先收谁：确认框 > 材质面板 > 塔顶菜单 > 开包 > 气泡 > 旗子 > 建造模式
         if (this.confirm.open) this.confirm.hide();
+        else if (this.defeat.open) this.defeat.hide();
         else if (this.theme.open) this.theme.hide();
         else if (this.menu.targetBuilding) this.menu.show(null);
         else if (this.panel.open) this.panel.hide();
@@ -254,6 +294,8 @@ export class Hud {
       this.positionFlag();
       this.positionMenu();
       this.positionBadges();
+      this.positionBars();
+      this.positionRaid();
       this.sinceLast += now - this.previous;
       this.previous = now;
       if (this.sinceLast < REFRESH_MS) return;
@@ -269,6 +311,22 @@ export class Hud {
     const p = this.app.screenOfBuilding(target);
     // 楼被拆掉那一帧 heightOf 已经查不到了，投影会跳到原点：直接收起来
     this.bubble.place(p.x, p.y, p.inFront && this.app.world.buildings.has(target.id));
+  }
+
+  /** 头顶条钉在楼顶：一栋楼一格位置，血/生产/弹夹三条共用。 */
+  private positionBars(): void {
+    this.bars.placeAll((id) => {
+      const b = this.app.world.buildings.get(id);
+      return b ? this.app.screenOfBuilding(b) : { x: -9999, y: -9999, inFront: false };
+    });
+  }
+
+  private positionRaid(): void {
+    if (!this.raid.showing) return;
+    const cell = this.raid.cell;
+    const world = this.app.world;
+    const p = this.app.screenOfCell(cell);
+    this.raid.place(p.x, p.y, p.inFront && world.map.terrainAt(cell) !== null);
   }
 
   private positionFlag(): void {
@@ -289,6 +347,8 @@ export class Hud {
     this.dock.refresh();
     this.card.refresh();
     this.badges.refresh();
+    this.bars.refresh();
+    this.raid.refresh();
     // 气泡里没有按钮，所以可以整块重写；小人数量是 10Hz 才会变的读数
     const target = this.bubble.targetBuilding;
     if (target && this.app.world.buildings.has(target.id)) this.bubble.show(target);
