@@ -8,7 +8,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 96 条回归
+npm run check        # 类型检查 + 118 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -51,11 +51,12 @@ src/
 │  ├─ gacha/          GachaService：先掷稀有度，再在档内按权重挑卡
 │  ├─ world/          TileMap · TerrainGenerator · GroundView · PropScatter · Markers · BuildingView · GameWorld
 │  ├─ models/         kit.ts（建模套件）· buildings.ts · props.ts · registry.ts
+│  ├─ dudes/          小人：pack.ts(读素材包) anims.ts(帧表) recolor.ts(换色) style.ts(长相) atlas.ts(烘图集) DudeView.ts(3D 卡片) Miners.ts(运输队)
 │  ├─ prefs.ts        玩家偏好（"不再提示"），存储不可用时自动退回内存
 │  └─ systems/        Placement.ts（绿/琥珀/红三态幽灵 + 毁矿闸门）
 ├─ ui/                dom.ts · facts.ts + 七个部件 + Hud.ts（组装）
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
-tests/                grid · random · terrain · world · gacha · data · geometry · placement —— 共 96 条
+tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes —— 共 118 条
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**
@@ -113,11 +114,32 @@ tests/                grid · random · terrain · world · gacha · data · geo
 地形阈值用的是**高程分位数**，不是绝对高度：所以换 seed、改噪声频率都不会把地图泡成一整片海。
 （写死绝对高度那一版实测泡水 38–44%，已被 `tests/terrain.test.ts` 拦住。）
 
+### 小人是拼出来的，不是画的
+
+素材来自 Pixelart Sprite Mixer（来源与授权见 `public/assets/dudes/CREDITS.md`）。它**不是**程序化几何：
+全代码零三角函数——一个小人 = 三张贴纸各取一格叠起来，再按"魔术色"整像素换色。
+
+| 事实 | 实测 |
+| --- | --- |
+| 单帧尺寸 | 16 × 24 像素 |
+| 拼装空间 | 333 个头 × 103 张脸 × 5 组调色板各 39 色 |
+| 体型 | 本包只有 **1 行**（原版按行分 human 0-15 / animal 16-32 / monster 33-53…） |
+| 帧表 | 703 列动画；本游戏用 5 条：stand 0/1、idle 2/4、run 7/4、hurt 12/4、die 17/4 |
+| 朝向 | **正面素材**（四组动画剪影左右对称度 0.917–0.969）⇒ 卡片永远正对相机，不做左右翻面 |
+| 可复现 | 上游是 `Math.random` 不可播种 ⇒ 长相改由 `seed + 楼号` 派生，同局同楼永远同一张脸 |
+
+只搬了**算法**（`src/game/dudes/` 全部自己重写，没拷一行上游代码），素材是 4 个原样未改的数据文件。
+小人站在矿井与晶脉之间来回走，**来回秒数用的就是经济算产量的那条公式**，
+所以不会出现"人跑得飞快而产量没变"。上限 48 人，因上限没派出去的任务在左上角显成"排队未派"。
+
+授权两件事分开看：代码我们重写了（上游是 AGPL-3.0）；**素材自身条款仓库里没有**，
+对外发布前要确认 itch 页面条款。真要换包，只替换那 4 个文件即可，代码不动。
+
 ## 还没做
 
 - 人物与战斗：兵营目前是空壳。等你给的 2D 生成工具接进来。
-- **采矿小人只是数字**：距离、包工、产量都按上面的公式在算，但屏幕上还看不到小人在走。
-  等人物模型进来，走的就是这套已经定好的分配结果，不用重算规则。
+- **小人还只是在走**：走的是分配好的路线与秒数，但是直线往返（不绕岩脊和水），也还没有"到矿点弯腰采矿"的动作切换。
+- 多体型：本素材包只有 1 个体型；换成完整数据包时代码不用改——体型上限是从图片高度算出来的。
 - 寻路：`engine/math/Grid.ts` 已备好 8 向邻接与距离函数，缺 A*。
 - 存档：`GameWorld` 全是可序列化字段，等接入。
 - 小地图、战争迷雾、音效。

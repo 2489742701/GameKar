@@ -8,7 +8,15 @@
 import { RESOURCE_META, TERRAIN, type ResourceId } from '@game/config';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 
-export function buildingFacts(world: GameWorld, b: Building): string[] {
+/**
+ * 建筑的读数行。
+ * `runnersOf` 由调用方给（小人数量是视图侧的状态，世界层不该知道它）。
+ */
+export function buildingFacts(
+  world: GameWorld,
+  b: Building,
+  runnersOf?: (id: number) => number,
+): string[] {
   const out: string[] = [];
   const yields = world.yieldOf(b);
   for (const [res, rate] of Object.entries(yields)) {
@@ -21,6 +29,11 @@ export function buildingFacts(world: GameWorld, b: Building): string[] {
     out.push(`派人采 ${claims.length} 条晶脉：${claims.map((c) => `${c.tiles} 格`).join('、')}`);
   } else if (b.def.veinWork) {
     out.push(b.built ? '附近没有晶脉，没派人出去' : '建成后才会去附近找晶脉');
+  }
+
+  const runners = runnersOf?.(b.id) ?? 0;
+  if (runners > 0) {
+    out.push(`跑运输的小人 ×${runners}（来回 ${Math.max(...claims.map((c) => c.tiles), 1) * 2} 格路）`);
   }
   if (b.def.population > 0) out.push(`占人口 ${b.def.population}`);
   return out;

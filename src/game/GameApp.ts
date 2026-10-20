@@ -15,13 +15,13 @@ import type { FrameInfo } from '@engine/core/GameLoop';
 import { GameLoop } from '@engine/core/GameLoop';
 import type { GridPos } from '@engine/math/Grid';
 import { cellToWorld, footprintCenter, footprintRect, inBounds, pos, samePos, worldToCell } from '@engine/math/Grid';
-import { Random } from '@engine/math/Random';
+import { hashString, Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { PointerInput } from '@engine/input/PointerInput';
 import { Viewport, type OrientationMode } from '@engine/viewport/Viewport';
-import { CAMERA, SIM_HZ, WORLD } from '@game/config';
+import { CAMERA, DUDE, SIM_HZ, WORLD } from '@game/config';
 import { buildingName } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService, type Purchase } from '@game/gacha/GachaService';
@@ -34,13 +34,19 @@ import { MarkerLayer } from '@game/world/Markers';
 import { PropScatter } from '@game/world/PropScatter';
 import { findNearestClearSpot, generateTerrain } from '@game/world/TerrainGenerator';
 import { PlacementController } from '@game/systems/Placement';
+import { loadPack, type DudePack } from '@game/dudes/pack';
+import { randomStyle, type DudeStyle } from '@game/dudes/style';
+import { DudeGallery, DEFAULT_APPEARANCE } from '@game/dudes/DudeView';
+import { MiningCrew } from '@game/dudes/Miners';
 
 export interface GameAppOptions {
   container: HTMLElement;
   canvas: HTMLCanvasElement;
-  /** 换 seed 就换一张图；同一个 seed 永远同一张图，连抽卡序列也一样 */
+  /** 换 seed 就换一张图；同一个 seed 永远同一张图，连抽卡序列和小人长相也一样 */
   seed?: number;
   orientation?: OrientationMode;
+  /** 小人素材包位置；默认 /assets/dudes */
+  dudesUrl?: string;
 }
 
 export interface Telemetry {
@@ -50,6 +56,14 @@ export interface Telemetry {
   buildings: number;
   tiles: number;
   orientation: OrientationMode;
+  /** 在场小人数量 */
+  runners: number;
+  /** 已烘的小人风格数（一个风格一张纹理） */
+  dudeStyles: number;
+  /** 因为人数上限没派出去的任务数 */
+  capped: number;
+  /** 素材包是否加载成功；false = 小人视觉关闭，玩法照常 */
+  dudesReady: boolean;
 }
 
 const VEIN_COUNT = 9;
@@ -72,6 +86,12 @@ export class GameApp {
   private readonly buildingView: BuildingView;
   private readonly placement: PlacementController;
   private readonly seed: number;
+  /** 素材包为 null 时整套小人视觉静默关闭，玩法不受影响 */
+  private readonly pack: DudePack | null;
+  private readonly gallery: DudeGallery | null;
+  private readonly crew: MiningCrew | null;
+  /** 一栋楼一张脸，算过一次就记住：随机数只在第一次动 */
+  private readonly styles = new Map<number, DudeStyle>();
 
   private hoverCell: GridPos | null = null;
   private lastFrame: FrameInfo = { delta: 0, time: 0, fps: 60 };
@@ -80,8 +100,9 @@ export class GameApp {
 
   readonly prefs = new Prefs();
 
-  private constructor(options: GameAppOptions) {
+  private constructor(options: GameAppOptions, pack: DudePack | null) {
     this.seed = options.seed ?? WORLD.seed;
+    this.pack = pack;
     const rng = new Random(this.seed);
 
     // ---------------------------------------------------------------- 世界
@@ -113,6 +134,23 @@ export class GameApp {
 
     this.placement = new PlacementController(this.world, this.library, this.markers, this.scene);
 
+    // ---------------------------------------------------------------- 小人
+    // 素材包没加载成功时这三个就是 null，玩法与画面其余部分照常工作
+    if (pack) {
+      this.gallery = new DudeGallery(pack);
+      this.crew = new MiningCrew({
+        world: this.world,
+        gallery: this.gallery,
+        styleFor: (b) => this.styleOf(b),
+        appearance: { ...DEFAULT_APPEARANCE, height: DUDE.heightTiles },
+        maxRunners: DUDE.maxRunners,
+      });
+      this.scene.add(this.crew.group);
+    } else {
+      this.gallery = null;
+      this.crew = null;
+    }
+
     // ---------------------------------------------------------------- 抽卡
     this.gacha = new GachaService(STARTER_POOL, rng.fork('gacha'));
 
@@ -136,10 +174,37 @@ export class GameApp {
     this.bootstrap();
   }
 
-  static boot(options: GameAppOptions): GameApp {
-    const app = new GameApp(options);
+  /**
+   * 起机器：素材包要异步加载（4 张图 + 一份 json），所以这里是 async。
+   * 加载失败不拦着游戏：控制台留一行原因，小人视觉自动关闭。
+   */
+  static async boot(options: GameAppOptions): Promise<GameApp> {
+    let pack: DudePack | null = null;
+    try {
+      pack = await loadPack(options.dudesUrl ?? '/assets/dudes');
+    } catch (err) {
+      console.warn('[GameApp] 小人素材包没加载上，运输队视觉关闭：', err);
+    }
+    const app = new GameApp(options, pack);
     app.start();
     return app;
+  }
+
+  /**
+   * 一栋楼一张脸：由 (地图 seed + 楼号) 派生，所以同局同楼永远同一张脸，
+   * 而且不用存盘。楼拆了再盖会换脸——那是新的一次建造，读起来也讲得通。
+   */
+  private styleOf(building: Building): DudeStyle {
+    const cached = this.styles.get(building.id);
+    if (cached) return cached;
+    const style = randomStyle(new Random(hashString(`${this.seed}:dude:${building.id}`)), this.pack!);
+    this.styles.set(building.id, style);
+    return style;
+  }
+
+  /** 这栋楼派出去几个小人；素材没加载时是 0。 */
+  runnersOf(buildingId: number): number {
+    return this.crew?.countFor(buildingId) ?? 0;
   }
 
   // ---------------------------------------------------------------- 接线
@@ -166,6 +231,10 @@ export class GameApp {
       this.ground.recolor(cells);
       this.props.ruin(cells);
     });
+
+    // 分配一变就重排运输队。挂在这条线上而不是自己轮询：
+    // 那是分配唯一成型的地方，别的时候读到的都是旧账
+    this.bus.on('vein:replanned', () => this.crew?.sync());
 
     this.bus.on('selection:changed', () => this.syncSelection());
 
@@ -216,6 +285,8 @@ export class GameApp {
     this.ground.update(info.time);
     this.markers.update(info.time);
     this.buildingView.syncAll(this.world.buildings.values());
+    // 小人每帧按时间重算位置：用 time%trip，所以快进与回放都对得上
+    this.crew?.update(info.time, this.rig.yaw);
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -422,6 +493,21 @@ export class GameApp {
       buildings: this.world.buildings.size,
       tiles: this.world.size.cols * this.world.size.rows,
       orientation: this.viewport.orientation,
+      runners: this.crew?.count ?? 0,
+      dudeStyles: this.gallery?.styleCount ?? 0,
+      capped: this.crew?.capped ?? 0,
+      dudesReady: this.pack !== null,
+    };
+  }
+
+  /** 素材包读出来的规模，用来确认"头/脸/体型是不是我以为的那个数"。 */
+  get dudeInfo(): { headMax: number; faceMax: number; baseMax: number; frameCols: number } | null {
+    if (!this.pack) return null;
+    return {
+      headMax: this.pack.maxima.head,
+      faceMax: this.pack.maxima.face,
+      baseMax: this.pack.maxima.base,
+      frameCols: this.pack.frameCols,
     };
   }
 }

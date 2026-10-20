@@ -60,6 +60,8 @@ export interface WorldEvents {
   'building:built': Building;
   'building:removed': Building;
   'vein:destroyed': GridPos[];
+  /** 重新分配完"谁采哪条矿"之后广播：小人数量变了，视图要跟着增删 */
+  'vein:replanned': void;
   /** 玩家想盖的这一格压着晶脉，需要一次明确同意 */
   'confirm:vein': { cells: GridPos[]; buildingName: string };
   /** 长按某个建筑 = 查详情；null 表示收起 */
@@ -223,6 +225,8 @@ export class GameWorld {
     }
     this.planValid = true;
     this.plannedBuilt = this.builtCount();
+    // 分配结果一定在这里成型，所以放牧视图挂在这条线上，而不是各自去猜时机
+    this.bus.emit('vein:replanned');
   }
 
   /** 占地边缘到矿点的切比雪夫距离（斜着走也算一步，跟邻接口径一致）。 */

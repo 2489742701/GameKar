@@ -15,7 +15,10 @@ export class BuildingBubble implements HudWidget {
   private readonly lines = make('div', { class: 'bubble__lines' });
   private target: Building | null = null;
 
-  constructor(private readonly world: GameWorld) {
+  constructor(
+    private readonly world: GameWorld,
+    private readonly runnersOf?: (id: number) => number,
+  ) {
     this.el.append(this.name, this.lines);
   }
 
@@ -31,7 +34,7 @@ export class BuildingBubble implements HudWidget {
     }
     this.el.hidden = false;
     setText(this.name, building.def.name);
-    const facts = [...buildingFacts(this.world, building)];
+    const facts = [...buildingFacts(this.world, building, this.runnersOf)];
     if (!building.built) facts.push(`建造中 ${Math.round(building.progress * 100)}%`);
     this.lines.replaceChildren(
       make('div', { class: 'bubble__blurb', text: building.def.blurb }),

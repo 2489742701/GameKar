@@ -29,7 +29,8 @@ const canvas = required<HTMLCanvasElement>('stage');
 const uiHost = required<HTMLDivElement>('ui');
 const splash = document.getElementById('boot');
 
-const app = GameApp.boot({ container, canvas, seed: seedFromUrl(20261019) });
+// boot 是异步的：小人素材包要先取回来
+const app = await GameApp.boot({ container, canvas, seed: seedFromUrl(20261019) });
 const hud = new Hud(uiHost, app);
 hud.start();
 

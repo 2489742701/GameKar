@@ -40,7 +40,7 @@ export class Hud {
     const world = app.world;
 
     this.resbar = new ResourceBar(world);
-    this.card = new SelectionCard(world, (id) => app.demolish(id));
+    this.card = new SelectionCard(world, (id) => app.demolish(id), (id) => app.runnersOf(id));
     this.dock = new ActionDock(world, {
       onPull: (count) => {
         const purchase = app.pull(count);
@@ -52,7 +52,7 @@ export class Hud {
     });
     this.panel = new GachaPanel(() => this.panel.hide());
     this.confirm = new ConfirmDialog();
-    this.bubble = new BuildingBubble(world);
+    this.bubble = new BuildingBubble(world, (id) => app.runnersOf(id));
 
     this.shell.append(
       place(this.resbar.el, 'hud__top'),
@@ -152,10 +152,14 @@ export class Hud {
     this.resbar.refresh();
     this.dock.refresh();
     this.card.refresh();
+    // 气泡里没有按钮，所以可以整块重写；小人数量是 10Hz 才会变的读数
+    const target = this.bubble.targetBuilding;
+    if (target && this.app.world.buildings.has(target.id)) this.bubble.show(target);
     const t = this.app.telemetry;
     this.telemetry.textContent =
       `${t.fps} fps ｜ ${t.drawCalls} draw ｜ ${(t.triangles / 1000).toFixed(1)}k tri\n` +
-      `${t.orientation} ｜ 建筑 ${t.buildings} ｜ 地图 ${t.tiles} 格`;
+      `${t.orientation} ｜ 建筑 ${t.buildings} ｜ 小人 ${t.runners}（风格 ${t.dudeStyles}）` +
+      `${t.capped ? ` ｜ 排队未派 ${t.capped}` : ''}${t.dudesReady ? '' : ' ｜ 素材未加载'}`;
   }
 }
 

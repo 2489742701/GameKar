@@ -78,6 +78,16 @@ export const ECONOMY = {
   basePopulationCap: 6,
 };
 
+/**
+ * 小人视觉参数。素材一帧是 16x24 像素，卡片宽高比由素材决定，
+ * 这里只定"站多高"——0.82 大约是"比一格矮一点、又压得住 2x2 建筑"的读数。
+ */
+export const DUDE = {
+  heightTiles: 0.82,
+  /** 一个小人上限：矿脉多时不至于把 draw call 顶爆 */
+  maxRunners: 48,
+};
+
 export const UI = {
   /** 竖屏底部坞的高度上限，超过它会挤压战场视野 */
   dockMaxHeightPx: 96,
