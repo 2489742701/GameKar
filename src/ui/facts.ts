@@ -6,6 +6,7 @@
  */
 
 import { RESOURCE_META, TERRAIN, type ResourceId } from '@game/config';
+import { buildingName } from '@game/data/buildings';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 
 /**
@@ -35,7 +36,17 @@ export function buildingFacts(
   if (runners > 0) {
     out.push(`跑运输的小人 ×${runners}（来回 ${Math.max(...claims.map((c) => c.tiles), 1) * 2} 格路）`);
   }
-  if (b.def.population > 0) out.push(`占人口 ${b.def.population}`);
+  if (b.def.population > 0) {
+    const short = world.isUnderstaffed(b);
+    out.push(short ? `要 ${b.def.population} 人口 · 缺员，不干活` : `要 ${b.def.population} 人口 · 人手齐`);
+  }
+  if (b.def.breadPerRound) {
+    const fields = world.adjacentOf(b, 'field');
+    out.push(`每回合面包 +${b.def.breadPerRound.base + b.def.breadPerRound.perAdjacentField * fields}（贴了 ${fields} 块田）`);
+  }
+  if (b.def.requiresAdjacent) {
+    out.push(`必须贴着${buildingName(b.def.requiresAdjacent)}`);
+  }
   return out;
 }
 

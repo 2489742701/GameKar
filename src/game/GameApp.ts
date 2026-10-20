@@ -21,7 +21,7 @@ import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { PointerInput } from '@engine/input/PointerInput';
 import { Viewport, type OrientationMode } from '@engine/viewport/Viewport';
-import { CAMERA, DUDE, SIM_HZ, WORLD } from '@game/config';
+import { CAMERA, DUDE, ROUNDS, SIM_HZ, WORLD } from '@game/config';
 import { buildingName } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService, type Purchase } from '@game/gacha/GachaService';
@@ -34,10 +34,15 @@ import { MarkerLayer } from '@game/world/Markers';
 import { PropScatter } from '@game/world/PropScatter';
 import { findNearestClearSpot, generateTerrain } from '@game/world/TerrainGenerator';
 import { PlacementController } from '@game/systems/Placement';
+import { FlagPocket } from '@game/systems/FlagPocket';
+import { Combat } from '@game/systems/Combat';
+import { BattleFx } from '@game/fx/BattleFx';
 import { loadPack, type DudePack } from '@game/dudes/pack';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
 import { DudeGallery, DEFAULT_APPEARANCE } from '@game/dudes/DudeView';
 import { MiningCrew } from '@game/dudes/Miners';
+import { Roster } from '@game/dudes/roster';
+import { UnitView } from '@game/dudes/UnitView';
 
 export interface GameAppOptions {
   container: HTMLElement;
@@ -62,6 +67,16 @@ export interface Telemetry {
   dudeStyles: number;
   /** 因为人数上限没派出去的任务数 */
   capped: number;
+  /** 在场士兵 + 敌人 */
+  units: number;
+  /** 在飞的弹丸 */
+  shots: number;
+  fx: { arrows: number; cannons: number; magics: number; puffs: number; dropped: number };
+  /** 排不到人手、正在摸鱼的楼 */
+  understaffed: number;
+  round: number;
+  phase: 'prep' | 'raid';
+  phaseSecondsLeft: number;
   /** 素材包是否加载成功；false = 小人视觉关闭，玩法照常 */
   dudesReady: boolean;
 }
@@ -85,11 +100,20 @@ export class GameApp {
   private readonly markers = new MarkerLayer();
   private readonly buildingView: BuildingView;
   private readonly placement: PlacementController;
+  /** 手里握着的集合旗（一次一面） */
+  readonly flags = new FlagPocket();
   private readonly seed: number;
   /** 素材包为 null 时整套小人视觉静默关闭，玩法不受影响 */
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
   private readonly crew: MiningCrew | null;
+  private readonly roster: Roster | null;
+  private readonly unitView: UnitView | null;
+  readonly fx = new BattleFx();
+  readonly combat: Combat;
+  /** 议事厅归零之后停掉一切生产，等玩家重开 */
+  defeated = false;
+  private readonly seenShots = new Set<number>();
   /** 一栋楼一张脸，算过一次就记住：随机数只在第一次动 */
   private readonly styles = new Map<number, DudeStyle>();
 
@@ -134,6 +158,19 @@ export class GameApp {
 
     this.placement = new PlacementController(this.world, this.library, this.markers, this.scene);
 
+    // ---------------------------------------------------------------- 战斗
+    // 战斗内核不依赖素材包：没有小人贴图也照样打，只是地上看不到人
+    this.combat = new Combat({ world: this.world, maxUnits: ROUNDS.maxRaidUnits });
+    this.combat.on('impact', (e) => {
+      this.fx.impact(e.x, e.z, this.world.map.surfaceY(worldToCell(e.x, e.z)) + e.y, e.ammo, e.splash);
+    });
+    this.combat.on('defeat', () => {
+      this.defeated = true;
+      this.bus.emit('toast', { text: '议事厅被打掉了，这一局到此', tone: 'warn' });
+    });
+    // 回合的"敌人还在不在"由战斗内核回答：这就是 prep/raid 的唯一交接点
+    this.world.raidActive = () => this.combat.enemiesAlive() > 0;
+
     // ---------------------------------------------------------------- 小人
     // 素材包没加载成功时这三个就是 null，玩法与画面其余部分照常工作
     if (pack) {
@@ -145,11 +182,16 @@ export class GameApp {
         appearance: { ...DEFAULT_APPEARANCE, height: DUDE.heightTiles },
         maxRunners: DUDE.maxRunners,
       });
-      this.scene.add(this.crew.group);
+      this.roster = new Roster(pack, rng.fork('dude-style'));
+      this.unitView = new UnitView(this.combat, pack, this.gallery, this.roster, DUDE.heightTiles);
+      this.scene.add(this.crew.group, this.unitView.group, this.fx.group);
     } else {
       this.gallery = null;
       this.crew = null;
+      this.roster = null;
+      this.unitView = null;
     }
+
 
     // ---------------------------------------------------------------- 抽卡
     this.gacha = new GachaService(STARTER_POOL, rng.fork('gacha'));
@@ -157,7 +199,11 @@ export class GameApp {
     // ---------------------------------------------------------------- 循环与输入
     this.loop = new GameLoop({
       hz: SIM_HZ,
-      onSimStep: (dt) => this.world.tick(dt),
+      onSimStep: (dt) => {
+        if (this.defeated) return;
+        this.world.tick(dt);
+        this.combat.update(dt);
+      },
       onFrame: (info) => this.draw(info),
     });
 
@@ -224,6 +270,9 @@ export class GameApp {
       this.buildingView.remove(b.id);
       this.ground.markOccupied(b.origin, b.cols, b.rows, false);
       this.props.setHidden(footprintRect({ origin: b.origin, cols: b.cols, rows: b.rows }), false);
+      // 楼没了，手里那面旗不能继续指向一个空号
+      this.flags.forget(b.id);
+      this.emitFlag();
     });
 
     // 晶脉被压掉：地块重涂成裸土，矿簇永久撤走（拆楼也不会回来）
@@ -237,6 +286,11 @@ export class GameApp {
     this.bus.on('vein:replanned', () => this.crew?.sync());
 
     this.bus.on('selection:changed', () => this.syncSelection());
+
+    // 回合进入接敌 = 这一波敌人进场。准备阶段什么都不发生，正是用户要的"不涨钱"
+    this.bus.on('round:changed', ({ phase, index }) => {
+      if (phase === 'raid' && !this.defeated) this.combat.spawnWave(this.seed, index);
+    });
 
     // 放置模式的变化只有一个源头：控制器自己广播，
     // 这样"许可用完那一刻的自动取消"和"玩家按取消"走的是同一条线
@@ -287,6 +341,9 @@ export class GameApp {
     this.buildingView.syncAll(this.world.buildings.values());
     // 小人每帧按时间重算位置：用 time%trip，所以快进与回放都对得上
     this.crew?.update(info.time, this.rig.yaw);
+    this.unitView?.sync(info.time, info.delta, this.rig.yaw);
+    this.fx.sync(this.combat, info.delta);
+    this.muzzleFlashes();
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -314,6 +371,12 @@ export class GameApp {
   private handleTap(cssX: number, cssY: number): void {
     const cell = this.cellAt(cssX, cssY) ?? this.hoverCell;
     if (!cell) return;
+
+    /** 点旗子袋之后，下一次点地面是"放旗"，不是"选格子"，也不许顺手盖楼 */
+    if (this.flags.state === 'placing') {
+      this.dropFlag(cell);
+      return;
+    }
 
     if (this.placement.isActive) {
       const state = this.placement.stateOf(cell);
@@ -364,6 +427,38 @@ export class GameApp {
     this.bus.emit('inspect:target', building);
   }
 
+  /**
+   * 新开的一发弹丸 → 在塔口打一下火光。
+   * 内核没有"开火"事件（它只维护弹丸表），所以这里用"第一次见到的 shot id"当开火时刻 ——
+   * 比给内核加一条事件更省事，也不会漏。
+   */
+  private muzzleFlashes(): void {
+    for (const shot of this.combat.liveShots()) {
+      if (this.seenShots.has(shot.id)) continue;
+      this.seenShots.add(shot.id);
+      this.fx.muzzle(shot.fromX, shot.fromZ, shot.y + 1.0);
+    }
+    if (this.seenShots.size > 512) this.seenShots.clear();
+  }
+
+  /** 升级一座塔：只花钱与水晶，不碰许可。返回 false = 不是塔 / 已满级 / 钱不够。 */
+  upgrade(buildingId: number): boolean {
+    const b = this.world.buildings.get(buildingId);
+    return b ? this.combat.upgrade(b) : false;
+  }
+
+  /** 塔的射击状态（弹夹、装填、等级）—— 给头顶菜单与信息卡读。 */
+  towerState(buildingId: number) {
+    const b = this.world.buildings.get(buildingId);
+    return b?.def.tower ? this.combat.towerState(b) : null;
+  }
+
+  /** 兵营三态：在场 / 储备 / 读条。 */
+  barracksState(buildingId: number) {
+    const b = this.world.buildings.get(buildingId);
+    return b?.def.squad ? this.combat.barracksState(b) : null;
+  }
+
   private syncSelection(): void {
     const sel = this.world.selection;
     if (sel?.kind !== 'building') {
@@ -398,13 +493,60 @@ export class GameApp {
   /** 进入放置模式。返回 false 表示这张卡手上没有许可。 */
   build(buildingId: string): boolean {
     const ok = this.placement.begin(buildingId);
-    if (!ok) this.bus.emit('toast', { text: '手上没有这张建造许可', tone: 'warn' });
-    return ok;
+    if (!ok) {
+      this.bus.emit('toast', { text: '手上没有这张建造许可', tone: 'warn' });
+      return false;
+    }
+    // 拿起一张建造卡，就不该同时在等一次"放旗"的落点
+    if (this.flags.state === 'placing') this.cancelFlag();
+    return true;
   }
 
   cancelBuild(): void {
     this.awaiting = null;
     this.placement.cancel();
+  }
+
+  // ---------------------------------------------------------------- 集合旗
+
+  /** 点旗子 = 把这栋楼的集合旗收进袋。旗子本身还指着原来那一格，只是"拿在手里"。 */
+  stowFlag(building: Building): void {
+    this.flags.take(building.id);
+    this.bus.emit('toast', { text: `收了${building.def.name}的旗 —— 点下面的旗子袋，再点一处地面放下` });
+    this.emitFlag();
+  }
+
+  /** 点旗子袋 = 进入"等一次落点"。建造模式先放下：两种"等一次点地面"不并存。 */
+  armFlag(): boolean {
+    if (!this.flags.arm()) {
+      this.bus.emit('toast', { text: '袋里没有旗子，先点一下兵营上方的旗', tone: 'warn' });
+      return false;
+    }
+    this.placement.cancel();
+    this.emitFlag();
+    return true;
+  }
+
+  /** 落旗。地形不许时旗子留在手里，可以再点一次 —— 不许出现"点一下就没了一面旗"。 */
+  dropFlag(cell: GridPos): boolean {
+    const held = this.flags.held;
+    if (held === null) return false;
+    if (!this.world.setRally(held, cell)) return false;
+    this.flags.release();
+    this.emitFlag();
+    return true;
+  }
+
+  /** Esc：正在等落点就先退出等落点；只是握着，就把旗子放回原位。 */
+  cancelFlag(): void {
+    if (this.flags.state === 'placing') this.flags.disarm();
+    else if (this.flags.state === 'held') this.flags.release();
+    else return;
+    this.emitFlag();
+  }
+
+  private emitFlag(): void {
+    this.bus.emit('flag:changed', { state: this.flags.state, buildingId: this.flags.held });
   }
 
   /**
@@ -466,6 +608,13 @@ export class GameApp {
     return this.screenOfWorld(center.x, top, center.z);
   }
 
+  /** 集合旗钉在"集合点那一格"的地面上方，而不是楼顶：旗子指的是地，不是楼。 */
+  screenOfRally(building: Building): { x: number; y: number; inFront: boolean } {
+    const cell = this.world.rallyOf(building);
+    const world = cellToWorld(cell);
+    return this.screenOfWorld(world.x, this.world.map.surfaceY(cell) + 0.9, world.z);
+  }
+
   setOrientation(mode: OrientationMode): void {
     this.viewport.setOrientationMode(mode);
   }
@@ -495,8 +644,15 @@ export class GameApp {
       orientation: this.viewport.orientation,
       runners: this.crew?.count ?? 0,
       dudeStyles: this.gallery?.styleCount ?? 0,
-      capped: this.crew?.capped ?? 0,
+      capped: (this.crew?.capped ?? 0) + this.combat.capped,
       dudesReady: this.pack !== null,
+      units: this.combat.size,
+      shots: this.combat.liveShots().length,
+      fx: this.fx.readout,
+      understaffed: this.world.understaffed().size,
+      round: this.world.roundIndex,
+      phase: this.world.phase,
+      phaseSecondsLeft: this.world.phaseSecondsLeft,
     };
   }
 

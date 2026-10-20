@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { KNOWN_ANIMS, type AnimName } from './anims';
+import { BASE_ANIMS, KNOWN_ANIMS, type AnimName } from './anims';
 import { atlasLayout, buildAtlas, frameRect, type Atlas, type AtlasLayout } from './atlas';
 import type { DudePack } from './pack';
 import type { DudeStyle } from './style';
@@ -119,9 +119,12 @@ export class DudeGallery {
 
   constructor(private readonly pack: DudePack) {}
 
-  /** 内容寻址：同一份长相不管对象是谁，都落到同一条缓存。 */
-  static keyOf(style: DudeStyle): string {
-    return [style.base, style.head, style.face, ...Object.values(style.hex)].join('|');
+  /**
+   * 内容寻址：同一份长相 + 同一组动画才复用同一张纹理。
+   * 只算长相不算动画集是不够的 —— 矿工和弓手要的动作不一样，混用会画到不存在的帧上。
+   */
+  static keyOf(style: DudeStyle, anims: readonly AnimName[]): string {
+    return [style.base, style.head, style.face, ...Object.values(style.hex), '|', ...anims].join('|');
   }
 
   get styleCount(): number {
@@ -139,12 +142,12 @@ export class DudeGallery {
     return n;
   }
 
-  acquire(style: DudeStyle): { atlas: Atlas; texture: THREE.Texture } {
-    const key = DudeGallery.keyOf(style);
+  acquire(style: DudeStyle, anims: readonly AnimName[] = BASE_ANIMS): { atlas: Atlas; texture: THREE.Texture } {
+    const key = DudeGallery.keyOf(style, anims);
     const cached = this.entries.get(key);
     if (cached) return cached;
 
-    const atlas = buildAtlas(this.pack, style);
+    const atlas = buildAtlas(this.pack, style, anims);
     const texture = new THREE.CanvasTexture(atlas.canvas);
     // 像素画：近邻采样 + 不要 mipmap，否则一缩放就糊成灰
     texture.magFilter = THREE.NearestFilter;
@@ -158,8 +161,8 @@ export class DudeGallery {
     return entry;
   }
 
-  createSprite(style: DudeStyle, appearance?: DudeAppearance): DudeSprite {
-    const { atlas, texture } = this.acquire(style);
+  createSprite(style: DudeStyle, anims: readonly AnimName[] = BASE_ANIMS, appearance?: DudeAppearance): DudeSprite {
+    const { atlas, texture } = this.acquire(style, anims);
     return new DudeSprite(this.pack, atlas, texture, appearance);
   }
 

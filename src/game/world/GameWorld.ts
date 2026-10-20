@@ -7,8 +7,8 @@
 
 import { EventBus } from '@engine/core/EventBus';
 import type { FlatSize, GridPos } from '@engine/math/Grid';
-import { footprintRect, inBounds, toKey } from '@engine/math/Grid';
-import { ECONOMY, TERRAIN, VEIN_WORK, type ResourceId } from '@game/config';
+import { footprintRect, inBounds, pos, toKey } from '@engine/math/Grid';
+import { BREAD, ECONOMY, RESOURCE_META, ROUNDS, TERRAIN, VEIN_WORK, isStandable, type ResourceId } from '@game/config';
 import { buildingDef, type BuildingDef } from '@game/data/buildings';
 import { CARDS, type CardDef } from '@game/data/cards';
 import type { Purchase, PullOutcome } from '@game/gacha/GachaService';
@@ -35,20 +35,37 @@ export interface Building {
   /** 落位时的地表高度，视图层用它垫底 */
   surfaceY: number;
   placedAt: number;
+  /**
+   * 集合旗：兵出营之后往这儿走。null = 还没挪过，读的时候回落到占地中心那一格。
+   * 只有产兵的楼用得上，别的楼一直是 null。
+   */
+  rally: GridPos | null;
+  /** 当前血量，从 def.hp 起算；归零就走 demolish（议事厅归零 = 输） */
+  hp: number;
 }
 
 export type Selection = { kind: 'tile'; pos: GridPos } | { kind: 'building'; building: Building } | null;
 
-export type BuildBlock = 'out-of-bounds' | 'terrain' | 'occupied' | 'cost' | 'population' | 'unique' | 'no-permit';
+/** 回合两态：准备（什么都不涨）与接敌（照常运转，但账先攒着）。 */
+export type RoundPhase = 'prep' | 'raid';
+
+export type BuildBlock =
+  | 'out-of-bounds'
+  | 'terrain'
+  | 'occupied'
+  | 'cost'
+  | 'unique'
+  | 'no-permit'
+  | 'no-adjacent';
 
 export const BLOCK_TEXT: Record<BuildBlock, string> = {
   'out-of-bounds': '超出地图',
   terrain: '地形不允许',
   occupied: '这块地已被占用',
   cost: '资源不够',
-  population: '人口不足',
   unique: '这种建筑全场只能有一座',
   'no-permit': '没有建造许可，先去抽卡',
+  'no-adjacent': '这种楼必须贴着它要贴的那栋',
 };
 
 /**
@@ -59,6 +76,10 @@ export interface WorldEvents {
   'building:placed': Building;
   'building:built': Building;
   'building:removed': Building;
+  /** 楼挨了一下：视图的血条与"被打掉"的动画都读这两条 */
+  'building:hit': { building: Building; damage: number; hp: number };
+  /** 血量归零，正在走 demolish 之前发出来（拆楼特效要拿到那栋楼本身） */
+  'building:destroyed': Building;
   'vein:destroyed': GridPos[];
   /** 重新分配完"谁采哪条矿"之后广播：小人数量变了，视图要跟着增删 */
   'vein:replanned': void;
@@ -66,15 +87,27 @@ export interface WorldEvents {
   'confirm:vein': { cells: GridPos[]; buildingName: string };
   /** 长按某个建筑 = 查详情；null 表示收起 */
   'inspect:target': Building | null;
+  /** 集合旗挪了（或被收回默认位）：旗子视图与以后的兵都要跟着改道 */
+  'rally:changed': Building;
+  /**
+   * 旗子袋换了状态。'empty' 袋里没旗 / 'held' 握着没落地 / 'placing' 正在等一次点地面。
+   * 这是输入态不是世界账，但它和 'placing:changed' 同类，所以共用同一条总线，
+   * UI 只订阅一处。联合类型写在联合表里，省得世界层反过来 import 系统层。
+   */
+  'flag:changed': { state: 'empty' | 'held' | 'placing'; buildingId: number | null };
   'permit:changed': { buildingId: string; count: number };
   'population:changed': { cap: number; used: number };
+  /** 回合换了阶段：HUD 的倒计时与"准备中不涨钱"的提示都读这条 */
+  'round:changed': { index: number; phase: RoundPhase; secondsLeft: number };
+  /** 一次结算完成：进账明细 + 快照重算后的缺员名单 */
+  'round:settled': { index: number; gains: Partial<Record<ResourceId, number>>; understaffed: number };
   'pull:done': Purchase;
   'placing:changed': string | null;
   'selection:changed': Selection;
   toast: { text: string; tone?: 'ok' | 'warn' };
 }
 
-const zeroWallet = (): Record<ResourceId, number> => ({ gold: 0, crystal: 0 });
+const zeroWallet = (): Record<ResourceId, number> => ({ gold: 0, crystal: 0, bread: 0 });
 
 export interface WorldOptions {
   bus?: EventBus<WorldEvents>;
@@ -96,6 +129,23 @@ export class GameWorld {
   selection: Selection = null;
   time = 0;
 
+  // ---------------------------------------------------------------- 回合与快照
+  //
+  // 人口与面包是**容积**：这一回合能用多少，是回合开始时冻下来的那份快照。
+  // 所以战斗中房屋被拆光，本回合的兵营照常产兵；结算那一刻容量才掉下去，
+  // 掉下去之后排不到岗位的楼就"缺员"（塔不开火、兵营不产兵），要再抽到民居才补得回来。
+
+  roundIndex = 1;
+  phase: RoundPhase = 'prep';
+  /** 敌人还在场上时 raid 不许结束。波次系统没接之前恒为 false（raid 到最短时长就结算）。 */
+  raidActive: () => boolean = () => false;
+
+  private phaseLeft = ROUNDS.prepSeconds;
+  private raidElapsed = 0;
+  private approvedPopulation = 0;
+  /** 本回合攒下来、等结算才进钱包的账 */
+  private pending: Record<ResourceId, number> = zeroWallet();
+
   /** 采矿分配（谁在采哪条矿）。任何改变"谁在场"的动作都要把它挂脏。 */
   private readonly claims = new Map<number, VeinClaim[]>();
   private planValid = false;
@@ -111,6 +161,8 @@ export class GameWorld {
     for (const res of Object.keys(this.resources) as ResourceId[]) {
       this.resources[res] = ECONOMY.starting[res] ?? 0;
     }
+    // 开局没有"上一回合"，所以第一份快照就是当场算出来的容量
+    this.approvedPopulation = this.populationCap;
   }
 
   get size(): FlatSize {
@@ -141,7 +193,76 @@ export class GameWorld {
   }
 
   populationFree(): number {
-    return this.populationCap - this.populationUsed();
+    return this.approvedPopulation - this.populationUsed();
+  }
+
+  /** 这一回合被批准使用的人口容量（回合开始时冻下来的快照）。 */
+  get approved(): number {
+    return this.approvedPopulation;
+  }
+
+  /**
+   * 哪些楼排不到人手：按建造顺序（id 升序）依次发岗位，快照容量发完为止。
+   * 与矿脉分配同一个口径 —— 同一局同一种摆法永远得到同一份缺员名单。
+   */
+  understaffed(): Set<number> {
+    let left = this.approvedPopulation;
+    const out = new Set<number>();
+    const ordered = [...this.buildings.values()]
+      .filter((b) => b.built)
+      .sort((a, b) => a.id - b.id);
+    for (const b of ordered) {
+      const need = b.def.population;
+      if (need <= 0) continue;
+      if (need > left) out.add(b.id);
+      left = Math.max(0, left - need);
+    }
+    return out;
+  }
+
+  isUnderstaffed(b: Building): boolean {
+    return this.understaffed().has(b.id);
+  }
+
+  /** 还剩几秒进入下一阶段。 */
+  get phaseSecondsLeft(): number {
+    return this.phase === 'prep' ? Math.max(0, this.phaseLeft) : Math.max(0, ROUNDS.raidMaxSeconds - this.raidElapsed);
+  }
+
+  private startRaid(): void {
+    this.phase = 'raid';
+    this.raidElapsed = 0;
+    this.bus.emit('round:changed', { index: this.roundIndex, phase: this.phase, secondsLeft: this.phaseSecondsLeft });
+  }
+
+  /**
+   * 结算：把整回合攒下的账一次进钱包，然后重算人口快照。
+   * "人口掉下去"这件事只在这里发生 —— 所以回合中途拆掉的房屋不影响本回合生产。
+   */
+  settle(): void {
+    const gains: Partial<Record<ResourceId, number>> = {};
+    const bread = this.breadPerRound();
+    for (const res of Object.keys(this.pending) as ResourceId[]) {
+      const amount = this.pending[res] + (res === 'bread' ? bread : 0);
+      this.pending[res] = 0;
+      if (amount <= 0) continue;
+      const before = this.resources[res];
+      this.grant(res, amount);
+      gains[res] = this.resources[res] - before;
+    }
+
+    this.approvedPopulation = this.populationCap;
+    this.roundIndex += 1;
+    this.phase = 'prep';
+    this.phaseLeft = ROUNDS.prepSeconds;
+    this.raidElapsed = 0;
+    this.bus.emit('round:settled', {
+      index: this.roundIndex - 1,
+      gains,
+      understaffed: this.understaffed().size,
+    });
+    this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
+    this.bus.emit('round:changed', { index: this.roundIndex, phase: this.phase, secondsLeft: this.phaseSecondsLeft });
   }
 
   canAfford(cost: Partial<Record<ResourceId, number>>): boolean {
@@ -272,6 +393,59 @@ export class GameWorld {
     this.bus.emit('vein:destroyed', cells);
   }
 
+  /**
+   * 面包容积 = 底子 + 每座磨坊一份。磨坊同时兼任粮仓，
+   * 所以"面包涨不上去"这件事有明确的可读原因：不是卡了数值，是没仓。
+   */
+  get breadCap(): number {
+    let cap = BREAD.baseCap;
+    for (const b of this.buildings.values()) {
+      if (b.built && b.def.breadPerRound) cap += BREAD.capPerMill;
+    }
+    return cap;
+  }
+
+  /** 这栋楼四周（8 向）贴着几栋某种楼。田地给磨坊加产、以及"田地必须贴磨坊"都读这一处。 */
+  adjacentOf(b: Building, defId: string): number {
+    let n = 0;
+    for (const other of this.buildings.values()) {
+      if (other.id === b.id || !other.def.id.startsWith(defId)) continue;
+      if (this.tilesBetween(b, other) === 0) n++;
+    }
+    return n;
+  }
+
+  /** 两块占地是否相接或重叠：切比雪夫距离按"占地边缘"算，0 就是贴上了。 */
+  private tilesBetween(a: Building, b: Building): number {
+    const gapCol = Math.max(a.origin.col - (b.origin.col + b.cols - 1), b.origin.col - (a.origin.col + a.cols - 1));
+    const gapRow = Math.max(a.origin.row - (b.origin.row + b.rows - 1), b.origin.row - (a.origin.row + a.rows - 1));
+    return Math.max(0, Math.max(gapCol, gapRow) - 1);
+  }
+
+  /** 这一回合能进账几个面包（结算时才写账，见 ROUNDS）。 */
+  breadPerRound(): number {
+    let n = 0;
+    for (const b of this.buildings.values()) {
+      if (!b.built) continue;
+      const spec = b.def.breadPerRound;
+      if (spec) {
+        n += spec.base + spec.perAdjacentField * this.adjacentOf(b, 'field');
+      } else if (b.def.unique) {
+        // 主城白送面包："默认给你一些" —— 不占磨坊的仓，但照样受容积夹
+        n += BREAD.perRoundFromHall;
+      }
+    }
+    return n;
+  }
+
+  /** 缺哪些资源、各缺多少。给提示语用，让玩家知道去哪儿补。 */
+  missingCost(cost: Partial<Record<ResourceId, number>>): string {
+    const parts = (Object.keys(cost) as ResourceId[])
+      .filter((res) => this.resources[res] < (cost[res] ?? 0))
+      .map((res) => `${RESOURCE_META[res].label} ${Math.ceil((cost[res] ?? 0) - this.resources[res])}`);
+    return parts.length > 0 ? `（缺 ${parts.join('、')}）` : '';
+  }
+
   // ---------------------------------------------------------------- 落位判定
 
   /** 只做几何与规则判定，副作用为零，放置预览每帧都能安全调用。 */
@@ -286,11 +460,30 @@ export class GameWorld {
     const holder = cells.map((c) => this.map.buildingAt(c)).find((id) => id !== null);
     if (holder !== undefined) return 'occupied';
 
+    // 田地这类"必须贴着某栋楼"的：先按占地的外圈判，和 tilesBetween 同一口径
+    if (def.requiresAdjacent) {
+      const probe: Building = {
+        id: -1,
+        def,
+        origin,
+        cols: def.footprint.cols,
+        rows: def.footprint.rows,
+        progress: 1,
+        built: true,
+        surfaceY: 0,
+        placedAt: 0,
+        rally: null,
+        hp: def.hp,
+      };
+      if (this.adjacentOf(probe, def.requiresAdjacent) === 0) return 'no-adjacent';
+    }
+
     if (def.unique && [...this.buildings.values()].some((b) => b.def.id === def.id)) return 'unique';
     if (this.permitCount(def.id) <= 0) return 'no-permit';
     if (!this.canAfford(def.cost)) return 'cost';
-    if (def.population > this.populationFree()) return 'population';
 
+    // 人口**不再**是建造闸门：缺人手也要让人把塔/兵营盖下去，
+    // 代价是那栋楼缺员不干活（understaffed），而不是点不下去。
     return null;
   }
 
@@ -303,12 +496,25 @@ export class GameWorld {
   }
 
   grant(resource: ResourceId, amount: number): void {
-    this.resources[resource] = Math.max(0, this.resources[resource] + amount);
+    const next = this.resources[resource] + amount;
+    // 面包是容积：到顶就不再涨，多出来的那部分不是"消失"，是压根没进账
+    const ceiling = resource === 'bread' ? this.breadCap : Number.POSITIVE_INFINITY;
+    this.resources[resource] = Math.min(ceiling, Math.max(0, next));
   }
 
   addPopulationCap(amount: number): void {
     this.bonusPopulationCap += amount;
+    this.raiseApproved();
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
+  }
+
+  /**
+   * 快照只往上走，不往下走：抽到民居当场就多 4 个人口（不然玩家会觉得没生效），
+   * 而房屋被拆掉时容量**不许**当场掉 —— 那正是"本回合兵营照常产兵"的由来。
+   * 往下掉只发生在 settle() 里。
+   */
+  private raiseApproved(): void {
+    this.approvedPopulation = Math.max(this.approvedPopulation, this.populationCap);
   }
 
   addCardYield(resource: ResourceId, perSecond: number): void {
@@ -358,7 +564,9 @@ export class GameWorld {
     const def = buildingDef(buildingId);
     const block = this.inspectPlacement(def, origin);
     if (block) {
-      this.bus.emit('toast', { text: `盖不了：${BLOCK_TEXT[block]}`, tone: 'warn' });
+      // 资源不够时要报出**缺哪一种**：面包盖不了房子，玩家得知道去修磨坊
+      const detail = block === 'cost' ? this.missingCost(def.cost) : '';
+      this.bus.emit('toast', { text: `盖不了：${BLOCK_TEXT[block]}${detail}`, tone: 'warn' });
       return null;
     }
 
@@ -384,12 +592,15 @@ export class GameWorld {
       built: def.buildSeconds <= 0,
       surfaceY: this.map.footprintSurfaceY(origin, def.footprint.cols, def.footprint.rows),
       placedAt: this.time,
+      rally: null,
+      hp: def.hp,
     };
 
     this.map.claim(origin, building.cols, building.rows, building.id);
     this.buildings.set(building.id, building);
     if (atRisk.length > 0) this.destroyVeins(atRisk);
     this.invalidateVeinPlan();
+    this.raiseApproved();
     this.bus.emit('building:placed', building);
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
     if (building.built) this.bus.emit('building:built', building);
@@ -407,6 +618,63 @@ export class GameWorld {
     this.bus.emit('population:changed', { cap: this.populationCap, used: this.populationUsed() });
   }
 
+  /**
+   * 集合旗现在指哪一格。没挪过就回落到占地自己的一格 ——
+   * 存 null 而不是存下初始格子：将来默认算法要改，不用把在场的楼一个个刷一遍。
+   *
+   * 2x2 取的是**靠镜头那一格**（东南角那格），不是左上角：
+   * 相机 yaw 45° / pitch 50°，玩家看到的是楼的东南面，旗子钉在背面那格会"旗子楼身不同框"。
+   */
+  rallyOf(b: Building): GridPos {
+    if (b.rally) return b.rally;
+    return pos(b.origin.col + (b.cols >> 1), b.origin.row + (b.rows >> 1));
+  }
+
+  /**
+   * 放下集合旗。返回 false 时这栋楼一个字没动，也不广播事件 ——
+   * "水面上/岩脊上站不住人"和"越界"都从这里挡掉，UI 不用自己判地形。
+   */
+  setRally(buildingId: number, cell: GridPos): boolean {
+    const b = this.buildings.get(buildingId);
+    if (!b) return false;
+
+    if (!inBounds(cell, this.map.size)) {
+      this.bus.emit('toast', { text: '旗子得插在地图里', tone: 'warn' });
+      return false;
+    }
+    const terrain = this.map.terrainAt(cell) ?? 'rock';
+    if (!isStandable(terrain)) {
+      this.bus.emit('toast', { text: `${TERRAIN[terrain].label}上站不住人`, tone: 'warn' });
+      return false;
+    }
+
+    b.rally = pos(cell.col, cell.row);
+    this.bus.emit('rally:changed', b);
+    return true;
+  }
+
+  /**
+   * 挨一下。归零就走已有的 demolish 那条路 —— 归还地块、回收读数、拆掉小人都有现成的锁覆盖，
+   * 所以"被打掉"和"自己拆掉"在账上必须是同一件事，不然两套清理迟早对不上。
+   * 返回 true = 这一栋从此不存在了。
+   */
+  damage(buildingId: number, amount: number): boolean {
+    const b = this.buildings.get(buildingId);
+    if (!b || amount <= 0) return false;
+    b.hp = Math.max(0, b.hp - amount);
+    this.bus.emit('building:hit', { building: b, damage: amount, hp: b.hp });
+    if (b.hp > 0) return false;
+    this.bus.emit('building:destroyed', b);
+    this.demolish(buildingId);
+    return true;
+  }
+
+  /** 议事厅还在不在。它归零就是输。 */
+  get hallAlive(): boolean {
+    for (const b of this.buildings.values()) if (b.def.id === 'hall') return true;
+    return false;
+  }
+
   select(selection: Selection): void {
     this.selection = selection;
     this.bus.emit('selection:changed', selection);
@@ -414,7 +682,7 @@ export class GameWorld {
 
   // ---------------------------------------------------------------- 每帧
 
-  /** 固定步长调用：推进工地、结算进账。 */
+  /** 固定步长调用：推进工地、跑回合节奏、把接敌期间的产出攒到结算。 */
   tick(dt: number): void {
     this.time += dt;
 
@@ -428,10 +696,25 @@ export class GameWorld {
       }
     }
 
+    // 准备时间只有**水晶**不涨（用户原话点的是水晶）：金币照常在攒，
+    // 但都压在 pending 里等结算那一刻才进钱包 —— 不然每回合十几块金币，塔根本补不起。
+    const inRaid = this.phase === 'raid';
+    if (inRaid) this.raidElapsed += dt;
+    this.phaseLeft -= inRaid ? 0 : dt;
+
     const rates = this.incomeRates();
     for (const res of Object.keys(rates) as ResourceId[]) {
+      if (!inRaid && res === 'crystal') continue;
       const gain = (rates[res] ?? 0) * dt;
-      if (gain !== 0) this.grant(res, gain);
+      if (gain !== 0) this.pending[res] += gain;
     }
+
+    if (!inRaid) {
+      if (this.phaseLeft <= 0) this.startRaid();
+      return;
+    }
+
+    const cleared = !this.raidActive() && this.raidElapsed >= ROUNDS.raidMinSeconds;
+    if (cleared || this.raidElapsed >= ROUNDS.raidMaxSeconds) this.settle();
   }
 }

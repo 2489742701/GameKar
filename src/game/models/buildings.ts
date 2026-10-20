@@ -112,6 +112,101 @@ export const refinery: ModelSpec = [
   }),
 ];
 
+/** 弓手营：矮棚 + 箭靶 + 一捆箭。识别符是那块圆靶。 */
+export const archery: ModelSpec = [
+  plinth([S, 0.12, S], PAL.stoneDark, [0, 0, 0]),
+  box([1.1, 0.5, 1.0], PAL.wallLight, [-0.22, 0.12, 0]),
+  prism([1.26, 0.34, 1.16], PAL.roofRed, [-0.22, 0.62, 0]),
+  // 箭靶：圆盘立在一根杆上，俯视角也能认出是个靶
+  cyl([0.03, 0.035, 0.6], PAL.woodDark, [0.6, 0.42, 0.1], 5),
+  cyl([0.24, 0.24, 0.06], PAL.snow, [0.6, 0.74, 0.1], 10),
+  cyl([0.1, 0.1, 0.07], PAL.roofRed, [0.6, 0.745, 0.1], 10),
+  // 箭捆
+  cyl([0.05, 0.06, 0.34], PAL.wood, [0.24, 0.3, -0.6], 6),
+  cyl([0.05, 0.06, 0.34], PAL.wood, [0.4, 0.3, -0.58], 6),
+  cyl([0.05, 0.06, 0.34], PAL.wood, [0.32, 0.3, -0.44], 6),
+];
+
+/** 兽穴：半埋的石窝 + 图腾角。剪影故意和人的房子不一样。 */
+export const warren: ModelSpec = [
+  plinth([S * 0.9, 0.1, S * 0.9], PAL.stoneDark, [0, 0, 0]),
+  sphere(0.62, PAL.stone, [0, 0.14, 0], 1),
+  // 洞口
+  cyl([0.26, 0.26, 0.5], PAL.wallDark, [0, 0.2, 0.42], 8),
+  // 两根图腾角：兽族的读图关键
+  cone([0.14, 0.7], PAL.snow, [-0.62, 0.5, -0.5], 6),
+  cone([0.12, 0.56], PAL.snow, [-0.44, 0.42, -0.66], 6),
+  box([0.5, 0.1, 0.36], PAL.woodDark, [0.52, 0.12, -0.4]),
+];
+
+/** 神龛：白石小殿 + 一根发光顶芯，远远看就知道是奶人的地方。 */
+export const temple: ModelSpec = [
+  plinth([S * 0.9, 0.16, S * 0.9], PAL.snow, [0, 0, 0]),
+  box([1.06, 0.66, 1.06], PAL.wallLight, [0, 0.16, 0]),
+  cone([0.86, 0.62], PAL.roofGold, [0, 0.94, 0], 4),
+  cyl([0.06, 0.07, 0.8], PAL.wallMid, [-0.44, 0.5, -0.44], 6),
+  cyl([0.06, 0.07, 0.8], PAL.wallMid, [0.44, 0.5, -0.44], 6),
+  cyl([0.06, 0.07, 0.8], PAL.wallMid, [-0.44, 0.5, 0.44], 6),
+  cyl([0.06, 0.07, 0.8], PAL.wallMid, [0.44, 0.5, 0.44], 6),
+  crystal([0.13, 0.36], PAL.glow, [0, 1.6, 0], { emissive: PAL.glow, emissiveIntensity: 0.75 }),
+];
+
+/** 磨坊：石塔 + 四片帆板。剪影一眼是"磨东西的"，也是面包的仓。 */
+export const mill: ModelSpec = [
+  plinth([S, 0.14, S], PAL.stoneDark, [0, 0, 0]),
+  cyl([0.42, 0.56, 1.1], PAL.wallLight, [0, 0.14, 0], 8),
+  cone([0.56, 0.44], PAL.roofRed, [0, 1.34, 0], 8),
+  // 四片帆板：十字加中心轴
+  cyl([0.05, 0.05, 0.9], PAL.woodDark, [0, 1.62, 0], 6),
+  box([0.9, 0.1, 0.16], PAL.wood, [0, 1.62, 0]),
+  box([0.16, 0.1, 0.9], PAL.wood, [0, 1.62, 0]),
+  box([0.34, 0.2, 0.3], PAL.wallDark, [0.3, 0.24, 0.5]),
+];
+
+/** 田地：一垄一垄的矮埂 + 四角木桩。和 farm 的区别是不带房子。 */
+export const field: ModelSpec = [
+  plinth([0.96, 0.06, 0.96], PAL.woodDark, [0, 0, 0]),
+  box([0.86, 0.1, 0.14], PAL.grassTuft, [0, 0.1, 0.32]),
+  box([0.86, 0.1, 0.14], PAL.grassTuft, [0, 0.1, 0]),
+  box([0.86, 0.1, 0.14], PAL.grassTuft, [0, 0.1, -0.32]),
+  cyl([0.04, 0.05, 0.3], PAL.wood, [0.42, 0.18, 0.42], 5),
+  cyl([0.04, 0.05, 0.3], PAL.wood, [-0.42, 0.18, -0.42], 5),
+];
+
+/** 箭塔：木台 + 围堞 + 一面斜顶。1x1 占地，所以整体压得窄。 */
+export const arrowTower: ModelSpec = [
+  plinth([0.86, 0.12, 0.86], PAL.stoneDark, [0, 0, 0]),
+  cyl([0.34, 0.42, 0.9], PAL.stone, [0, 0.12, 0], 8),
+  box([0.72, 0.16, 0.72], PAL.wallMid, [0, 1.06, 0]),
+  // 四角垛口
+  box([0.14, 0.2, 0.14], PAL.wallDark, [0.28, 1.24, 0.28]),
+  box([0.14, 0.2, 0.14], PAL.wallDark, [-0.28, 1.24, 0.28]),
+  box([0.14, 0.2, 0.14], PAL.wallDark, [0.28, 1.24, -0.28]),
+  box([0.14, 0.2, 0.14], PAL.wallDark, [-0.28, 1.24, -0.28]),
+  cone([0.44, 0.4], PAL.roofRed, [0, 1.5, 0], 6),
+];
+
+/** 炮塔：矮粗石堡 + 一根朝外的铁炮管。炮管是它的识别符。 */
+export const cannonTower: ModelSpec = [
+  plinth([0.92, 0.16, 0.92], PAL.stoneDark, [0, 0, 0]),
+  box([0.7, 0.72, 0.7], PAL.stone, [0, 0.16, 0]),
+  box([0.82, 0.12, 0.82], PAL.wallDark, [0, 0.9, 0]),
+  // 炮管：横出一截，口子上一个铁环。原语不带旋转参数，这里直接写说明书
+  { part: { kind: 'cyl', rTop: 0.11, rBottom: 0.13, height: 0.66, seg: 8 }, color: PAL.metal, at: [0, 0.66, 0.5], rot: [Math.PI / 2, 0, 0] },
+  { part: { kind: 'cyl', rTop: 0.15, rBottom: 0.15, height: 0.08, seg: 8 }, color: PAL.wallDark, at: [0, 0.66, 0.82], rot: [Math.PI / 2, 0, 0] },
+  sphere(0.13, PAL.wallDark, [0.26, 1.06, -0.26], 1),
+];
+
+/** 魔法塔：细高石塔 + 顶端悬浮晶核，夜里靠它当地标。 */
+export const magicTower: ModelSpec = [
+  plinth([0.84, 0.14, 0.84], PAL.stoneDark, [0, 0, 0]),
+  cyl([0.24, 0.4, 1.24], PAL.wallLight, [0, 0.14, 0], 8),
+  cone([0.36, 0.5], PAL.roofBlue, [0, 1.46, 0], 8),
+  crystal([0.16, 0.4], PAL.glow, [0, 2.02, 0], { emissive: PAL.glow, emissiveIntensity: 0.85 }),
+  // 环着塔身的一道符带
+  cyl([0.3, 0.3, 0.06], PAL.crystal, [0, 0.92, 0], 8),
+];
+
 /** 工地骨架：建造期间盖在格子上，配合模型逐渐"长出来"读作进度。 */
 export const scaffold: ModelSpec = [
   plinth([S, 0.06, S], PAL.woodDark, [0, 0, 0]),
@@ -127,6 +222,14 @@ export const buildingModels: Record<string, ModelSpec> = {
   house,
   hall,
   barracks,
+  archery,
+  warren,
+  temple,
+  mill,
+  field,
+  arrowTower,
+  cannonTower,
+  magicTower,
   farm,
   mine,
   market,

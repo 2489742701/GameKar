@@ -79,7 +79,14 @@
   min-height: 62px;
   border: 1px solid var(--panel-line);
   border-radius: var(--radius-sm);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  /* 镀金：拉丝纹理压在金色渐变上，边框走深木色，像钉在木框上的铜片 */
+  background-color: var(--wood-4);
+  background-image:
+    var(--tex-gilt),
+    linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 54%, #7d5518 100%);
+  background-size: var(--tex-gilt-tile), cover;
+  image-rendering: pixelated;
+  box-shadow: inset 0 1px 0 rgba(255, 250, 226, 0.7), inset 0 -3px 0 rgba(0, 0, 0, 0.32), 0 3px 0 rgba(0, 0, 0, 0.45);
   color: var(--text);
   font: inherit;
   cursor: pointer;
@@ -87,12 +94,16 @@
 }
 
 .dock__slot:active {
-  transform: scale(0.96);
+  transform: translateY(2px);
 }
 
+/* 握着东西那一格（建造卡 / 旗子）从"镀金"翻成"暗木 + 金边"，一眼看出哪格在等点击 */
 .dock__slot[data-active='true'] {
+  background-image:
+    var(--tex-wood),
+    linear-gradient(180deg, var(--wood-6), var(--wood-2));
   border-color: var(--gold);
-  background: linear-gradient(180deg, rgba(217, 178, 92, 0.26), rgba(217, 178, 92, 0.06));
+  box-shadow: inset 0 0 0 1px var(--panel-edge), 0 3px 0 rgba(0, 0, 0, 0.45);
 }
 
 .dock__slot__glyph {
@@ -129,7 +140,14 @@
   padding: 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--panel-line);
-  background: rgba(255, 255, 255, 0.045);
+  /* 木牌：纹理 + 上浅下深，边上一道金发丝 */
+  background-color: var(--wood-3);
+  background-image:
+    var(--tex-wood),
+    linear-gradient(180deg, rgba(255, 236, 200, 0.08), rgba(0, 0, 0, 0.42));
+  background-size: var(--tex-wood-tile), cover;
+  image-rendering: pixelated;
+  box-shadow: inset 0 1px 0 var(--panel-edge), 0 2px 0 rgba(0, 0, 0, 0.5);
   cursor: pointer;
   text-align: left;
   color: var(--text);
@@ -140,11 +158,13 @@
   opacity: 0.45;
 }
 .tray__card[data-active='true'] {
-  border-color: var(--gold);
-  background: rgba(217, 178, 92, 0.16);
+  border-color: var(--gold-hi);
+  background-color: var(--wood-6);
+  box-shadow: inset 0 0 0 2px var(--gold), 0 2px 0 rgba(0, 0, 0, 0.5);
 }
 
 .tray__card__name {
+  font-family: var(--font-display);
   font-size: var(--fs-sm);
   margin-bottom: 2px;
   white-space: nowrap;
@@ -174,6 +194,7 @@
 }
 
 .selcard__name {
+  font-family: var(--font-display);
   font-size: var(--fs-lg);
   font-weight: 700;
 }
@@ -268,6 +289,7 @@ html[data-orientation='landscape'] .gacha__grid {
 }
 
 .card__name {
+  font-family: var(--font-display);
   font-size: var(--fs-xs);
   line-height: 1.25;
   font-weight: 700;
@@ -420,6 +442,7 @@ html[data-orientation='landscape'] .gacha__grid {
 }
 
 .bubble__name {
+  font-family: var(--font-display);
   font-size: var(--fs-md);
   font-weight: 700;
   color: var(--gold-hi);
@@ -490,4 +513,184 @@ html[data-orientation='landscape'] .gacha__grid {
 
 .confirm__actions .btn {
   min-width: 92px;
+}
+
+/* ---------- 集合旗（跟着集合点每帧投影的那颗按钮） ---------- */
+
+.flag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: var(--radius-sm);
+  background-color: var(--wood-4);
+  background-image:
+    var(--tex-gilt),
+    linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 55%, #7d5518 100%);
+  background-size: var(--tex-gilt-tile), cover;
+  image-rendering: pixelated;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  /* 它挂在 .hud 之外，所以 pointer-events 要自己写明：
+     上一轮就是靠继承吃了一次"整块透明层挡住全地图点击"的事故 */
+  pointer-events: auto;
+  z-index: 32;
+  will-change: transform;
+  transform: translate3d(-9999px, -9999px, 0);
+}
+
+.flag[hidden] {
+  display: none;
+}
+
+.flag:active {
+  /* transform 每帧由投影写入，按下去时不许改它（改了会跳回画布原点），所以只给个亮度反馈 */
+  filter: brightness(1.35);
+}
+
+.flag__glyph {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--gold-hi);
+}
+
+.flag__caption {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* 等落点：旗子原地闪，告诉玩家"下一步点地面" */
+.flag[data-armed='true'] {
+  border-color: var(--gold);
+  animation: flag-nudge 900ms ease-in-out infinite;
+}
+
+@keyframes flag-nudge {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.55);
+  }
+}
+
+/* ---------- 缺员徽章与塔顶菜单 ---------- */
+
+.badges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 31;
+}
+
+.badge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  border: 1px solid var(--wood-1);
+  border-radius: 7px;
+  background: rgba(12, 7, 4, 0.78);
+  box-shadow: inset 0 1px 0 rgba(246, 220, 156, 0.22), 0 2px 0 rgba(0, 0, 0, 0.5);
+  image-rendering: pixelated;
+  will-change: transform;
+  transform: translate3d(-9999px, -9999px, 0);
+}
+
+.badge[hidden] {
+  display: none;
+}
+
+.badge__face {
+  width: 16px;
+  height: 16px;
+  background: var(--tex-face, transparent) center / 16px 16px no-repeat;
+}
+
+.badge__x {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--danger);
+}
+
+.bmenu {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  pointer-events: auto;
+  z-index: 34;
+  will-change: transform;
+  transform: translate3d(-9999px, -9999px, 0);
+}
+
+.bmenu[hidden] {
+  display: none;
+}
+
+.bmenu__btn {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--wood-1);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  color: var(--text);
+  background-color: var(--wood-4);
+  background-image: var(--tex-wood), linear-gradient(180deg, var(--wood-6), var(--wood-2));
+  background-size: var(--tex-wood-tile), cover;
+  image-rendering: pixelated;
+  box-shadow: inset 0 1px 0 var(--panel-edge), 0 2px 0 rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.bmenu__btn:active {
+  transform: translateY(1px);
+}
+
+.bmenu__btn--up {
+  color: #23180a;
+  font-weight: 700;
+  background-color: var(--gold);
+  background-image: var(--tex-gilt), linear-gradient(180deg, var(--gold-hi), var(--gold) 55%, #7d5518);
+}
+
+.bmenu__btn--up[data-maxed='true'] {
+  opacity: 0.5;
+}
+
+.bmenu__btn--danger {
+  color: #ffd9d9;
+  background-image: var(--tex-wood), linear-gradient(180deg, #6b2a22, #2a0d0a);
+}
+
+.bmenu__confirm[hidden] {
+  display: none;
+}
+
+.resbar__round {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--wood-1);
+  background: rgba(0, 0, 0, 0.34);
+  color: var(--gold-hi);
+  font-size: var(--fs-xs);
 }

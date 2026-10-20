@@ -6,11 +6,16 @@
  */
 
 import type { GameApp } from '@game/GameApp';
+import { hasRally } from '@game/data/buildings';
+import type { Building } from '@game/world/GameWorld';
 import { ActionDock } from './ActionDock';
 import { BuildingBubble } from './BuildingBubble';
+import { BuildingMenu } from './BuildingMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { GachaPanel } from './GachaPanel';
+import { RallyFlag } from './RallyFlag';
 import { ResourceBar } from './ResourceBar';
+import { StaffBadges } from './StaffBadges';
 import { SelectionCard } from './SelectionCard';
 import { Toasts } from './Toasts';
 import { make } from './dom';
@@ -26,6 +31,9 @@ export class Hud {
   private readonly panel: GachaPanel;
   private readonly confirm: ConfirmDialog;
   private readonly bubble: BuildingBubble;
+  private readonly flag: RallyFlag;
+  private readonly menu: BuildingMenu;
+  private readonly badges: StaffBadges;
   private readonly toasts = new Toasts();
   private readonly telemetry = make('div', { class: 'telemetry' });
 
@@ -49,10 +57,20 @@ export class Hud {
       onBuild: (id) => app.build(id),
       onCancelBuild: () => app.cancelBuild(),
       onFocusHome: () => app.focusHome(),
+      onFlagPocket: () => this.armFlag(),
     });
     this.panel = new GachaPanel(() => this.panel.hide());
     this.confirm = new ConfirmDialog();
     this.bubble = new BuildingBubble(world, (id) => app.runnersOf(id));
+    this.flag = new RallyFlag((building) => this.app.stowFlag(building));
+    this.menu = new BuildingMenu({
+      onUpgrade: (b) => {
+        this.app.upgrade(b.id);
+        this.syncMenu();
+      },
+      onDemolish: (b) => this.app.demolish(b.id),
+    });
+    this.badges = new StaffBadges(world);
 
     this.shell.append(
       place(this.resbar.el, 'hud__top'),
@@ -60,13 +78,41 @@ export class Hud {
       place(this.dock.el, 'hud__dock'),
     );
 
-    host.append(this.shell, this.toasts.el, this.panel.el, this.confirm.el, this.bubble.el, this.telemetry);
+    host.append(
+      this.shell,
+      this.toasts.el,
+      this.panel.el,
+      this.confirm.el,
+      this.bubble.el,
+      this.flag.el,
+      this.badges.el,
+      this.menu.el,
+      this.telemetry,
+    );
 
-    world.bus.on('selection:changed', (sel) => this.card.render(sel));
+    world.bus.on('selection:changed', (sel) => {
+      this.card.render(sel);
+      this.syncFlag();
+      this.syncMenu();
+    });
     world.bus.on('placing:changed', (id) => this.dock.setPlacing(id));
+    world.bus.on('flag:changed', () => this.syncFlag());
+    world.bus.on('rally:changed', () => this.syncFlag());
     world.bus.on('toast', ({ text, tone }) => this.toasts.push(text, tone ?? 'ok'));
     world.bus.on('inspect:target', (building) => this.bubble.show(building));
-    world.bus.on('building:removed', (b) => this.bubble.forget(b.id));
+    world.bus.on('building:removed', (b) => {
+      this.bubble.forget(b.id);
+      this.flag.forget(b.id);
+      this.badges.forget(b.id);
+      this.menu.forget(b.id);
+      this.syncFlag();
+    });
+    // 盖楼、封顶、结算都会改缺员名单；这三处之外名单不会自己变
+    world.bus.on('building:built', () => this.badges.refresh());
+    world.bus.on('round:settled', () => {
+      this.badges.refresh();
+      this.syncMenu();
+    });
     world.bus.on('confirm:vein', ({ cells, buildingName }) => {
       this.confirm.show(
         {
@@ -80,6 +126,9 @@ export class Hud {
     });
 
     this.card.render(world.selection);
+    this.syncFlag();
+    this.syncMenu();
+    this.badges.refresh();
     // 先落一次读数：刷新循环靠 rAF，页面在后台时 rAF 根本不触发，
     // 不补这一刀的话资源栏会一直空着（实测过：innerText 只剩"GAMEKAR"）
     this.refresh();
@@ -100,10 +149,12 @@ export class Hud {
         break;
       }
       case 'Escape':
-        // 谁在最上面就先收谁：确认框 > 开包 > 气泡 > 建造模式
+        // 谁在最上面就先收谁：确认框 > 塔顶菜单 > 开包 > 气泡 > 旗子 > 建造模式
         if (this.confirm.open) this.confirm.hide();
+        else if (this.menu.targetBuilding) this.menu.show(null);
         else if (this.panel.open) this.panel.hide();
         else if (this.bubble.targetBuilding) this.bubble.show(null);
+        else if (this.app.flags.state !== 'empty') this.app.cancelFlag();
         else this.app.cancelBuild();
         break;
       case 'h':
@@ -112,6 +163,60 @@ export class Hud {
         break;
     }
   };
+
+  /**
+   * 旗子该挂着哪一栋、袋里那格写什么字，全在这一处算完。
+   * 三个动作（收旗 / 点袋 / 落旗）都只改世界或袋子的状态，然后广播一下，由这里重读 ——
+   * 这样"点了没反应"只可能是这一处判错，不会散成三个地方各判各的。
+   */
+  /** 菜单只跟着"选中的是不是一座塔"走，等级从战斗内核现读，不留第二份账。 */
+  private syncMenu(): void {
+    const sel = this.app.world.selection;
+    const building = sel?.kind === 'building' ? sel.building : null;
+    this.menu.show(building);
+    if (building?.def.tower) {
+      const st = this.app.towerState(building.id);
+      if (st) this.menu.levels.set(building.id, st.level);
+    }
+  }
+
+  private positionMenu(): void {
+    const target = this.menu.targetBuilding;
+    if (!target) return;
+    const p = this.app.screenOfBuilding(target);
+    this.menu.place(p.x, p.y, p.inFront && this.app.world.buildings.has(target.id));
+  }
+
+  private positionBadges(): void {
+    this.badges.placeAll((id) => {
+      const b = this.app.world.buildings.get(id);
+      return b ? this.app.screenOfBuilding(b) : { x: -9999, y: -9999, inFront: false };
+    });
+  }
+
+  private syncFlag(): void {
+    const world = this.app.world;
+    const state = this.app.flags.state;
+    const held = this.app.flags.held;
+
+    let target: Building | null = null;
+    if (state === 'placing' && held !== null) {
+      // 等落点时跟着手里那面旗走，而不是跟着选中走：中途点了别处也不该换一面
+      target = world.buildings.get(held) ?? null;
+    } else if (state === 'empty') {
+      const sel = world.selection;
+      if (sel?.kind === 'building' && hasRally(sel.building.def)) target = sel.building;
+    }
+
+    this.flag.show(target);
+    this.flag.setArmed(state === 'placing');
+    this.dock.setFlagState(state);
+  }
+
+  /** 点旗子袋：袋空着也给一句话，别让玩家按了个没反应还不吭声。 */
+  private armFlag(): void {
+    this.app.armFlag();
+  }
 
   private bindKeys(): void {
     window.addEventListener('keydown', this.onKey);
@@ -125,6 +230,9 @@ export class Hud {
       this.handle = requestAnimationFrame(step);
       // 气泡要贴着建筑，一帧都不能落后，所以它每帧跟；其余读数 10Hz 刷
       this.positionBubble();
+      this.positionFlag();
+      this.positionMenu();
+      this.positionBadges();
       this.sinceLast += now - this.previous;
       this.previous = now;
       if (this.sinceLast < REFRESH_MS) return;
@@ -142,6 +250,13 @@ export class Hud {
     this.bubble.place(p.x, p.y, p.inFront && this.app.world.buildings.has(target.id));
   }
 
+  private positionFlag(): void {
+    const target = this.flag.targetBuilding;
+    if (!target) return;
+    const p = this.app.screenOfRally(target);
+    this.flag.place(p.x, p.y, p.inFront && this.app.world.buildings.has(target.id));
+  }
+
   stop(): void {
     if (this.handle !== null) cancelAnimationFrame(this.handle);
     this.handle = null;
@@ -152,6 +267,7 @@ export class Hud {
     this.resbar.refresh();
     this.dock.refresh();
     this.card.refresh();
+    this.badges.refresh();
     // 气泡里没有按钮，所以可以整块重写；小人数量是 10Hz 才会变的读数
     const target = this.bubble.targetBuilding;
     if (target && this.app.world.buildings.has(target.id)) this.bubble.show(target);

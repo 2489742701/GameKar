@@ -199,10 +199,24 @@ describe('风格由种子决定', () => {
 });
 
 describe('帧表与图集布局', () => {
-  it('5 个动画的列号与帧数等于实测：0/1、2/4、7/4、12/4、17/4', () => {
-    expect(Object.values(KNOWN_ANIMS).map((a) => `${a.col}/${a.frames}`)).toEqual([
-      '0/1', '2/4', '7/4', '12/4', '17/4',
-    ]);
+  it('21 条动画的列号与帧数逐条等于实测值（扩表也不能漂）', () => {
+    // 每个 "列/帧" 都是在跑起来的原版里量的：列号来自 getAnimX0，帧数来自 modF 的循环周期。
+    // 按名字逐条比，不依赖 key 的书写顺序。
+    const measured: Record<string, string> = {
+      stand: '0/1', idle: '2/4', run: '7/4', hurt: '12/4', die: '17/4',
+      sword: '662/6', shield: '683/8', staff: '669/6', wand: '676/6',
+      bowTall: '590/5', bowShort: '616/5',
+      idleSword: '530/4', idleShield: '535/4', idleStaff: '540/4', idleWand: '545/4', idleBow: '550/4',
+      cast: '291/8', heal: '193/6',
+      dash: '239/4', knocked: '164/4', respawn: '91/6',
+    };
+    const actual = Object.fromEntries(
+      Object.entries(KNOWN_ANIMS).map(([name, a]) => [name, `${a.col}/${a.frames}`]),
+    );
+    expect(actual).toEqual(measured);
+    // 最远用到 691 列，本包 703 列：越界会在 parsePack 就炸，这里再钉一次余量
+    const far = Math.max(...Object.values(KNOWN_ANIMS).map((a) => a.col + a.frames));
+    expect(far).toBeLessThanOrEqual(PACK.frameCols);
   });
 
   it('17 帧横排 = 272×24；最后一帧不越图集', () => {
@@ -212,8 +226,8 @@ describe('帧表与图集布局', () => {
     expect(layout.width).toBe(17 * PACK.w);
     expect(layout.height).toBe(24);
     for (const anim of Object.keys(layout.byAnim) as (keyof typeof layout.byAnim)[]) {
-      const last = layout.byAnim[anim].frames - 1;
-      const rect = frameRect(layout, PACK, anim, last);
+      const slot = layout.byAnim[anim]!;
+      const rect = frameRect(layout, PACK, anim, slot.frames - 1);
       expect(rect.x + rect.w).toBeLessThanOrEqual(layout.width);
     }
   });

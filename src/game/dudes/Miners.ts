@@ -11,8 +11,12 @@ import type { GridPos } from '@engine/math/Grid';
 import { cellToWorld, footprintCenter } from '@engine/math/Grid';
 import { VEIN_WORK } from '@game/config';
 import type { Building, GameWorld } from '@game/world/GameWorld';
+import type { AnimName } from '@game/dudes/anims';
 import type { DudeAppearance, DudeGallery, DudeSprite } from './DudeView';
 import type { DudeStyle } from './style';
+
+/** 矿工只要这四条：站着没必要，跑/待命/挨打/倒下才有意义。 */
+export const MINER_ANIMS: AnimName[] = ['idle', 'run', 'hurt', 'die'];
 
 /** 一次来回几秒。tiles = 占地边缘到矿点的格数。 */
 export function tripSeconds(tiles: number, speed: number): number {
@@ -107,7 +111,7 @@ export class MiningCrew {
   private spawn(key: string, building: Building, vein: GridPos, trip: number): Runner {
     const mineCenter = footprintCenter({ origin: building.origin, cols: building.cols, rows: building.rows });
     const veinCenter = cellToWorld(vein);
-    const sprite = this.deps.gallery.createSprite(this.deps.styleFor(building), this.deps.appearance);
+    const sprite = this.deps.gallery.createSprite(this.deps.styleFor(building), MINER_ANIMS, this.deps.appearance);
 
     const anchor = new THREE.Group();
     anchor.add(sprite.mesh);

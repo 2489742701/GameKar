@@ -19,6 +19,34 @@ export interface VeinWorkSpec {
   capacity: number;
 }
 
+/** 兵营的一队编制：固定这几种兵、各这么几个。 */
+export interface SquadMember {
+  unitId: string;
+  /** 同时在场几个 */
+  size: number;
+}
+
+/** 一种弹丸对应一种视图：箭是 2D 精灵，炮弹是 3D 黑方块，魔弹是光点。 */
+export type AmmoKind = 'arrow' | 'cannon' | 'magic';
+
+/** 防御塔的射击规格。缺省 = 这栋楼不会打。 */
+export interface TowerSpec {
+  damage: number;
+  /** 射程（格） */
+  rangeTiles: number;
+  /** 两发之间的间隔（秒） */
+  shotSeconds: number;
+  /** 弹夹：打空了要装填 */
+  magazine: number;
+  /** 空仓装填（秒） */
+  reloadSeconds: number;
+  ammo: AmmoKind;
+  /** 溅射半径（格），只有炮塔用 */
+  splashTiles?: number;
+  /** 升级价目：下标 0 = 升到 Lv2。魔法塔每一级都贵过另两塔同级 */
+  upgrades: { gold: number; crystal: number }[];
+}
+
 export interface BuildingDef {
   id: string;
   name: string;
@@ -37,6 +65,19 @@ export interface BuildingDef {
   yields?: Partial<Record<ResourceId, number>>;
   /** 采矿：产量由"附近有没有晶脉、多远"决定 */
   veinWork?: VeinWorkSpec;
+  /** 产兵：一栋营只产一支固定小队（数值本体在 data/units.ts） */
+  squad?: SquadMember[];
+  /**
+   * 每回合给面包。面包是容积不是流水：只在回合结算那一刻入账，
+   * 所以这里给的是"一回合几个"，不是"每秒几个"。
+   */
+  breadPerRound?: { base: number; perAdjacentField: number };
+  /** 必须贴着这种楼才让盖（田地的"只能放在磨坊旁边"就走这一条） */
+  requiresAdjacent?: string;
+  /** 防御塔：会自己找敌人开火，缺人手就不开火 */
+  tower?: TowerSpec;
+  /** 能被敌人拆到几点血；议事厅归零判负 */
+  hp: number;
   /** 全场唯一（议事厅） */
   unique?: boolean;
 }
@@ -54,18 +95,46 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     populationCap: 4,
     yields: { crystal: 0.6, gold: 0.5 },
     unique: true,
+    hp: 600,
   },
 
   house: {
     id: 'house',
     name: '民居',
-    blurb: '最便宜的人口上限。人口不够，什么都盖不了。',
+    blurb: '一栋住 4 个人口，但要吃掉 1 个面包。没面包就盖不起来 —— 去磨坊那边想办法。',
     model: 'house',
     footprint: { cols: 1, rows: 1 },
-    cost: { gold: 45 },
+    cost: { gold: 45, bread: 1 },
     buildSeconds: 4,
     population: 0,
-    populationCap: 3,
+    populationCap: 4,
+    hp: 200,
+  },
+
+  mill: {
+    id: 'mill',
+    name: '磨坊',
+    blurb: '每回合给面包，四周每贴一块田地再多给 1 个。它同时也是面包的仓。',
+    model: 'mill',
+    footprint: { cols: 2, rows: 2 },
+    cost: { gold: 130 },
+    buildSeconds: 8,
+    population: 2,
+    breadPerRound: { base: 1, perAdjacentField: 1 },
+    hp: 200,
+  },
+
+  field: {
+    id: 'field',
+    name: '田地',
+    blurb: '自己不产面包，专门贴在磨坊旁边给那座磨坊加产。离开磨坊就没法开工。',
+    model: 'field',
+    footprint: { cols: 1, rows: 1 },
+    cost: { gold: 40 },
+    buildSeconds: 5,
+    population: 1,
+    requiresAdjacent: 'mill',
+    hp: 200,
   },
 
   farm: {
@@ -78,6 +147,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     buildSeconds: 6,
     population: 1,
     yields: { gold: 1.3 },
+    hp: 200,
   },
 
   tower: {
@@ -88,7 +158,72 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 90 },
     buildSeconds: 5,
-    population: 0,
+    population: 1,
+    hp: 200,
+  },
+
+  arrowTower: {
+    id: 'arrowTower',
+    name: '箭塔',
+    blurb: '一弹夹 4 支箭，打完要装 2.5 秒。射程最远的一档，单发不重。',
+    model: 'arrowTower',
+    footprint: { cols: 1, rows: 1 },
+    cost: { gold: 120 },
+    buildSeconds: 8,
+    population: 1,
+    tower: {
+      damage: 8,
+      rangeTiles: 5.5,
+      shotSeconds: 0.7,
+      magazine: 6,
+      reloadSeconds: 2.2,
+      ammo: 'arrow',
+      upgrades: [{ gold: 120, crystal: 0 }, { gold: 260, crystal: 20 }],
+    },
+    hp: 320,
+  },
+
+  cannonTower: {
+    id: 'cannonTower',
+    name: '炮塔',
+    blurb: '黑色铁弹砸下去炸开一片，1.4 格内都挨。弹夹只有 2 发，装填 5 秒，别指望它连射。',
+    model: 'cannonTower',
+    footprint: { cols: 1, rows: 1 },
+    cost: { gold: 200 },
+    buildSeconds: 11,
+    population: 2,
+    tower: {
+      damage: 22,
+      rangeTiles: 4.5,
+      shotSeconds: 1.6,
+      magazine: 2,
+      reloadSeconds: 5,
+      ammo: 'cannon',
+      splashTiles: 1.4,
+      upgrades: [{ gold: 200, crystal: 20 }, { gold: 420, crystal: 60 }],
+    },
+    hp: 360,
+  },
+
+  magicTower: {
+    id: 'magicTower',
+    name: '魔法塔',
+    blurb: '快得看不清的一串光弹，单发很轻，胜在不停手。升级最贵的一座。',
+    model: 'magicTower',
+    footprint: { cols: 1, rows: 1 },
+    cost: { gold: 180, crystal: 40 },
+    buildSeconds: 12,
+    population: 2,
+    tower: {
+      damage: 3,
+      rangeTiles: 6,
+      shotSeconds: 0.22,
+      magazine: 10,
+      reloadSeconds: 3,
+      ammo: 'magic',
+      upgrades: [{ gold: 300, crystal: 60 }, { gold: 560, crystal: 140 }],
+    },
+    hp: 320,
   },
 
   mine: {
@@ -101,6 +236,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     buildSeconds: 9,
     population: 2,
     veinWork: { resource: 'crystal', perTrip: 2, speed: 1.2, capacity: 2 },
+    hp: 200,
   },
 
   market: {
@@ -113,17 +249,59 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     buildSeconds: 10,
     population: 2,
     yields: { gold: 2.4 },
+    hp: 200,
   },
 
   barracks: {
     id: 'barracks',
     name: '兵营',
-    blurb: '现在还不生产兵。先把位置占住，等人物模型和战斗上线。',
+    blurb: '驻一支骑士小队。兵出营后在营外一圈自动布防，敌人进圈就打。',
     model: 'barracks',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 200 },
     buildSeconds: 14,
-    population: 3,
+    population: 4,
+    squad: [{ unitId: 'knight', size: 3 }],
+    hp: 260,
+  },
+
+  archery: {
+    id: 'archery',
+    name: '弓手营',
+    blurb: '四个弓箭手。射程 3.6 格，血薄，别让他们站在兽人前面。',
+    model: 'archery',
+    footprint: { cols: 2, rows: 2 },
+    cost: { gold: 160 },
+    buildSeconds: 10,
+    population: 4,
+    squad: [{ unitId: 'archer', size: 4 }],
+    hp: 260,
+  },
+
+  warren: {
+    id: 'warren',
+    name: '兽穴',
+    blurb: '三个兽人，每 6 秒冲撞一次，把撞到的敌人顶开并定身。用来撕开敌群。',
+    model: 'warren',
+    footprint: { cols: 2, rows: 2 },
+    cost: { gold: 240 },
+    buildSeconds: 15,
+    population: 4,
+    squad: [{ unitId: 'orc', size: 3 }],
+    hp: 260,
+  },
+
+  temple: {
+    id: 'temple',
+    name: '神龛',
+    blurb: '两个牧师，不打人，只奶附近血最少的那个。死了这条线就断了。',
+    model: 'temple',
+    footprint: { cols: 2, rows: 2 },
+    cost: { gold: 260 },
+    buildSeconds: 16,
+    population: 4,
+    squad: [{ unitId: 'priest', size: 2 }],
+    hp: 260,
   },
 
   refinery: {
@@ -136,6 +314,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     buildSeconds: 12,
     population: 3,
     veinWork: { resource: 'crystal', perTrip: 2.2, speed: 3.2, capacity: 3 },
+    hp: 200,
   },
 };
 
@@ -151,3 +330,9 @@ export function buildingDef(id: string): BuildingDef {
 export function buildingName(id: string): string {
   return BUILDINGS[id]?.name ?? id;
 }
+
+/**
+ * 这栋楼配不配有一面集合旗 —— 判据只写在这一处：
+ * UI 决定画不画旗、以后的兵营系统决定听不听这个格子，两边都读它，不会各判各的。
+ */
+export const hasRally = (def: BuildingDef): boolean => (def.squad?.length ?? 0) > 0;

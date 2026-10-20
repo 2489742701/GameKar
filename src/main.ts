@@ -10,6 +10,7 @@ import './styles/components.css';
 
 import { GameApp } from '@game/GameApp';
 import { Hud } from '@ui/Hud';
+import { installTheme } from '@ui/theme';
 
 function required<T extends Element>(id: string): T {
   const node = document.getElementById(id);
@@ -29,6 +30,9 @@ const canvas = required<HTMLCanvasElement>('stage');
 const uiHost = required<HTMLDivElement>('ui');
 const splash = document.getElementById('boot');
 
+// 木纹与镀金是启动时现算的两张小图，必须赶在 HUD 建起来之前挂上 CSS 变量
+window.theme = installTheme();
+
 // boot 是异步的：小人素材包要先取回来
 const app = await GameApp.boot({ container, canvas, seed: seedFromUrl(20261019) });
 const hud = new Hud(uiHost, app);
@@ -41,6 +45,8 @@ declare global {
   interface Window {
     game: GameApp;
     hud: Hud;
+    /** 纹理生成读数（字节数与耗时），开发期直接敲 window.theme 看 */
+    theme: ReturnType<typeof installTheme>;
   }
 }
 

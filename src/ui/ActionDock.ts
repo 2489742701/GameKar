@@ -8,6 +8,7 @@
 import { buildingDef, buildingList } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { RESOURCE_META, type ResourceId } from '@game/config';
+import type { PocketState } from '@game/systems/FlagPocket';
 import type { GameWorld } from '@game/world/GameWorld';
 import { make, setFlag, setText, type HudWidget } from './dom';
 
@@ -16,6 +17,8 @@ export interface DockActions {
   onBuild(buildingId: string): void;
   onCancelBuild(): void;
   onFocusHome(): void;
+  /** 点旗子袋那一格 */
+  onFlagPocket(): void;
 }
 
 const GLYPH = {
@@ -24,6 +27,7 @@ const GLYPH = {
   build: '⌂',
   home: '◎',
   cancel: '×',
+  flag: '⚑',
 } as const;
 
 export class ActionDock implements HudWidget {
@@ -61,7 +65,24 @@ export class ActionDock implements HudWidget {
     this.slot('gacha', GLYPH.pull1, `单抽 · ${crystalOf(1)} 晶钻`, () => this.actions.onPull(1));
     this.slot('gacha10', GLYPH.pull10, `十连 · ${crystalOf(10)} 晶钻`, () => this.actions.onPull(10));
     this.slot('build', GLYPH.build, '建造', () => this.toggleTray());
+    this.slot('flag', GLYPH.flag, '旗子袋', () => this.actions.onFlagPocket());
     this.slot('home', GLYPH.home, '回城', () => this.actions.onFocusHome());
+  }
+
+  /**
+   * 旗子袋三态各写一个字：空 / 握着 / 正在等一次落点。
+   * 用户那一串点按里最容易迷路的正是第二、三步，所以文案直接写"下一步点什么"。
+   */
+  setFlagState(state: PocketState): void {
+    const node = this.slots.get('flag');
+    const caption = node?.querySelector<HTMLElement>('.dock__slot__text');
+    if (!node || !caption) return;
+    setText(
+      caption,
+      state === 'placing' ? '点地面放旗' : state === 'held' ? '旗子在手上' : '旗子袋',
+    );
+    setFlag(node, 'active', state !== 'empty');
+    setFlag(node, 'armed', state === 'placing');
   }
 
   private toggleTray(): void {
@@ -149,9 +170,9 @@ export class ActionDock implements HudWidget {
       const id = card.dataset['building'];
       if (!id) continue;
       const def = buildingDef(id);
-      // 托盘只判"资源与人口够不够"；地块合不合法要等指针落到具体格子
-      const affordable =
-        this.world.canAfford(def.cost) && def.population <= this.world.populationFree();
+      // 托盘只判"资源够不够"：人口不再是闸门（缺员照样能盖，只是不干活），
+      // 地块合不合法要等指针落到具体格子
+      const affordable = this.world.canAfford(def.cost);
       setFlag(card, 'ok', affordable);
       setFlag(card, 'active', id === this.placing);
     }

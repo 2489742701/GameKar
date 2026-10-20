@@ -66,6 +66,13 @@ export interface DudePack {
   readonly anims: readonly string[];
   /** 头/脸逐帧的上下偏移，素材自己带的"浮动" */
   offsetY(part: 'head' | 'face', anim: string, frame: number): number;
+  /**
+   * 哪些头/脸格子真的有画。
+   * 实测：头表与脸表的第 0 列都是**全空**（0 个不透明像素），而且 14 个分类区间的起始列
+   * （63/127/150/210/240/274/306/318）也全是空格子 —— 分区是"从空白分隔列之后才开始有内容"。
+   * 所以兵种取头一律"区间 ∩ 非空列"，不写死列号：换数据包也不会指到空列上画出一个透明人。
+   */
+  filled: { heads: ReadonlySet<number>; faces: ReadonlySet<number> };
   images: PackImages | null;
 }
 
@@ -172,8 +179,37 @@ export function parsePack(raw: unknown, grid: PackGrid): DudePack {
     offsetY(part, anim, frame) {
       return parts?.[part]?.[anim]?.[frame] ?? 0;
     },
+    // 纯函数入口拿不到像素，先给空集；loadPack() 会用真图扫出来覆盖
+    filled: { heads: EMPTY, faces: EMPTY },
     images: null,
   };
+}
+
+const EMPTY: ReadonlySet<number> = new Set<number>();
+
+/** 数一遍每列有多少不透明像素，留下"真的有画"的列号。 */
+export function scanFilledColumns(img: HTMLImageElement, cell: { w: number; h: number }): Set<number> {
+  const cols = Math.floor(img.width / cell.w);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = cell.h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return new Set();
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(0, 0, img.width, cell.h).data;
+
+  const filled = new Set<number>();
+  for (let k = 0; k < cols; k++) {
+    outer: for (let x = k * cell.w; x < (k + 1) * cell.w; x++) {
+      for (let y = 0; y < cell.h; y++) {
+        if (d[(y * img.width + x) * 4 + 3]! > 8) {
+          filled.add(k);
+          break outer;
+        }
+      }
+    }
+  }
+  return filled;
 }
 
 const loadImage = (url: string): Promise<HTMLImageElement> =>
@@ -201,6 +237,8 @@ export async function loadPack(baseUrl = '/assets/dudes'): Promise<DudePack> {
     heads: { width: heads.naturalWidth, height: heads.naturalHeight },
     faces: { width: faces.naturalWidth, height: faces.naturalHeight },
   });
+  const cell = { w: pack.w, h: pack.h };
+  pack.filled = { heads: scanFilledColumns(heads, cell), faces: scanFilledColumns(faces, cell) };
   pack.images = { base, heads, faces };
   return pack;
 }

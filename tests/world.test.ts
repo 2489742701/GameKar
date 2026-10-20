@@ -8,13 +8,22 @@
 import { describe, expect, it } from 'vitest';
 import { pos } from '@engine/math/Grid';
 import { Random } from '@engine/math/Random';
-import { ECONOMY, VEIN_WORK } from '@game/config';
+import { ROUNDS, VEIN_WORK } from '@game/config';
 import { buildingDef } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService } from '@game/gacha/GachaService';
-import { GameWorld } from '@game/world/GameWorld';
+import { GameWorld, type Building } from '@game/world/GameWorld';
 import { TileMap } from '@game/world/TileMap';
 import { findNearestClearSpot, generateTerrain } from '@game/world/TerrainGenerator';
+
+/** 纯草地 + 有钱，但不加人口：岗位/缺员这类判据要一块没有地形干扰的平地。 */
+function grassWorld(): { world: GameWorld; at: (i: number) => ReturnType<typeof pos> } {
+  const world = new GameWorld(new TileMap({ cols: 40, rows: 40 }));
+  world.grant('gold', 100_000);
+  for (const id of ['farm', 'market', 'house', 'barracks']) world.addPermits(id, 30);
+  return { world, at: (i) => pos(4 + i * 3, 6) };
+}
+
 
 function freshWorld(seed = 20261019) {
   const map = generateTerrain({
@@ -78,13 +87,24 @@ describe('建造许可与落位判定', () => {
     expect(world.inspectPlacement(buildingDef('hall'), pos(spot.col + 6, spot.row))).toBe('unique');
   });
 
-  it('人口不足时给出 population，而不是含糊失败', () => {
-    const { world, spot } = freshWorld();
-    world.addPermits('barracks', 1);
-    world.addPermits('farm', 2);
-    world.addPopulationCap(-ECONOMY.basePopulationCap + 3);
-    expect(world.build('barracks', spot)).not.toBeNull();
-    expect(world.inspectPlacement(buildingDef('farm'), pos(spot.col + 8, spot.row))).toBe('population');
+  // 这条原来断的是"人口不足 → inspectPlacement 返回 'population'"。
+  // 用户 2026-10-20 改了规则：缺人手也要让人把塔/兵营盖下去，代价是那栋楼缺员不干活。
+  // 所以闸门整个拿掉，改断"盖得下去 + 排不到的那几栋当场缺员"。
+  it('人口不足不再挡建造，只让排不到人的那栋缺员', () => {
+    const { world, at } = grassWorld();
+    const cost = buildingDef('farm').population;
+    const need = Math.floor(world.approved / cost) + 1; // 比快照能养的多多盖一座
+    world.addPermits('farm', need);
+
+    const built: Building[] = [];
+    for (let i = 0; built.length < need; i++) built.push(world.build('farm', at(i))!);
+    for (const b of built) b.built = true;
+
+    expect(built).toHaveLength(need);
+    const idle = built.filter((b) => world.isUnderstaffed(b));
+    expect(idle).toHaveLength(1);
+    // 缺的是最后盖下去那座（按建造顺序发岗位），不是随机的哪一座
+    expect(idle[0]!.id).toBe(Math.max(...built.map((b) => b.id)));
   });
 
   it('金币不够时给出 cost', () => {
@@ -265,23 +285,57 @@ describe('压在晶脉上要先确认', () => {
 });
 
 describe('经济结算', () => {
-  it('建成之前不产出，封顶之后按秒进账', () => {
+  // 这条改过两次，都记在这里：
+  //  ① 原来断"封顶之后每帧直接进钱包"；回合制上线后改成"结算时才进"。
+  //  ② 我一度把"准备时间不涨"理解成什么都不涨，实测每回合只有十几块金币、第三回合必输。
+  //     用户原话点的是**水晶**，所以现在：金币整回合都在攒、水晶只在接敌期间攒，
+  //     两样都要等结算才进钱包。
+  it('建成之前不产出；金币整回合都攒、水晶只在接敌期间攒，两者都等结算进账', () => {
     const { world, spot } = freshWorld();
     world.addPermits('farm', 1);
     const farm = world.build('farm', spot)!;
-    const rate = buildingDef('farm').yields!.gold!;
-
+    const goldRate = buildingDef('farm').yields!.gold!;
     expect(farm.built).toBe(false);
+
+    // 封顶之前跑一段：钱包与 pending 都不该动
     const idle = world.resources.gold;
     world.tick(buildingDef('farm').buildSeconds - 0.5);
     expect(world.resources.gold).toBeCloseTo(idle, 5);
 
-    world.tick(1);
-    expect(farm.built).toBe(true);
+    // 直接封顶，免得"完成建造那一步本身也在攒钱"混进下面的算术
+    farm.built = true;
+    farm.progress = 1;
+    world.tick(0);
 
-    const before = world.resources.gold;
+    const atRaidStart = world.resources.gold;
+    world.tick(ROUNDS.prepSeconds);
+    expect(world.phase).toBe('raid');
+    expect(world.resources.gold).toBe(atRaidStart); // 攒着，还没进账
+
+    const raidSeconds = 2 + ROUNDS.raidMinSeconds;
     world.tick(2);
-    expect(world.resources.gold - before).toBeCloseTo(rate * 2, 4);
+    world.tick(ROUNDS.raidMinSeconds);
+    expect(world.phase).toBe('prep');
+    // 金币按整回合（准备 + 接敌）算，不是只按接敌那几秒
+    expect(world.resources.gold - atRaidStart).toBeCloseTo(goldRate * (ROUNDS.prepSeconds + raidSeconds), 2);
+  });
+
+  it('准备期间水晶一格不涨：议事厅的晶钻只在接敌那段时间里进账', () => {
+    const { world, spot } = freshWorld();
+    world.addPermits('hall', 1);
+    const hall = world.build('hall', spot)!;
+    hall.built = true;
+    const rate = hall.def.yields!.crystal!;
+    expect(rate).toBeGreaterThan(0);
+
+    const before = world.resources.crystal;
+    world.tick(ROUNDS.prepSeconds);
+    expect(world.phase).toBe('raid');
+    expect(world.resources.crystal).toBe(before); // 准备期不涨，也没攒进账
+
+    world.tick(ROUNDS.raidMinSeconds);
+    expect(world.phase).toBe('prep');
+    expect(world.resources.crystal - before).toBeCloseTo(rate * ROUNDS.raidMinSeconds, 3);
   });
 
   it('封顶那一刻才派人；绕过 tick 直接改 built 也不能读到旧分配', () => {
@@ -321,17 +375,42 @@ describe('经济结算', () => {
     expect(world.buildings.size).toBe(0);
   });
 
-  it('人口上限决定能同时养几栋占人的楼', () => {
-    const { world, spot } = freshWorld();
-    world.addPermits('market', 5);
-    world.grant('gold', 100_000);
+  // 原来这条断的是"人口上限决定能盖几栋"（placed == floor(cap / cost)）。
+  // 新规则里上限只管"几栋干得动活"，盖多少由资源与许可决定 —— 所以改成：
+  // 七座市场全盖得下去，超出快照的那些当场缺员，数量对得上。
+  it('人口上限不再限制能盖几栋，只决定几栋干得动活', () => {
+    const { world, at } = grassWorld();
     const cost = buildingDef('market').population;
-    let placed = 0;
+    const built: Building[] = [];
+    for (let i = 0; built.length < 4; i++) built.push(world.build('market', at(i))!);
+    for (const b of built) b.built = true;
 
-    for (let i = 0; i < 5; i++) {
-      if (world.build('market', pos(spot.col + i * 2 + 4, spot.row))) placed++;
-    }
-    expect(placed).toBe(Math.floor(world.populationCap / cost));
-    expect(world.populationUsed()).toBe(placed * cost);
+    expect(built).toHaveLength(4);
+    expect(world.populationUsed()).toBe(4 * cost);
+    expect(world.buildings.size).toBeGreaterThan(world.approved / cost); // 需求已超过容量
+    expect(built.filter((b) => !world.isUnderstaffed(b))).toHaveLength(Math.floor(world.approved / cost));
+  });
+
+  it('回合中途拆掉民居：本回合人手照旧，结算之后才掉容量', () => {
+    const { world, at } = grassWorld();
+    // 四座市场要 8 个人口，底子只有 6 —— 得靠一栋民居把容量抬上去
+    const markets: Building[] = [];
+    for (let i = 0; i < 4; i++) markets.push(world.build('market', at(i))!);
+    for (const m of markets) m.built = true;
+    expect(world.understaffed().size).toBe(1);
+
+    const house = world.build('house', at(9))!;
+    house.built = true;
+    expect(world.understaffed().size).toBe(0); // 容量 10 ≥ 需求 8
+
+    world.demolish(house.id);
+    expect(world.populationCap).toBe(6);
+    expect(world.approved).toBe(10);
+    expect(world.understaffed().size).toBe(0); // 回合没结束，缺员不该现在发生
+
+    world.tick(ROUNDS.prepSeconds);
+    world.tick(ROUNDS.raidMinSeconds);
+    expect(world.approved).toBe(6);
+    expect(world.understaffed().size).toBe(1); // 结算之后才掉下去，正是用户举的那个例子
   });
 });
