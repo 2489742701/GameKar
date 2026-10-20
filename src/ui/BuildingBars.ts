@@ -17,6 +17,17 @@ import { barWorthies, readoutOf, type BuildingReadout } from '@game/systems/Read
 import type { Building, GameWorld } from '@game/world/GameWorld';
 import { make, setText, type HudWidget } from './dom';
 
+/**
+ * 三层标记钉在同一栋楼头顶，不各自让开就会叠成一坨：
+ * 血条贴楼顶（抬 0），缺员徽章抬 26，塔顶菜单抬 52。
+ * 抬升量写在各层自己手里，改一层不会把另一层带跑。
+ */
+export const BARS_LIFT = 0;
+
+export function lift(x: number, y: number, extra = BARS_LIFT): string {
+  return `translate3d(${Math.round(x)}px, ${Math.round(y - extra)}px, 0) translate(-50%, -100%)`;
+}
+
 interface BarNode {
   el: HTMLElement;
   cells: HTMLElement[];
@@ -56,7 +67,7 @@ export class BuildingBars implements HudWidget {
     for (const [id, node] of this.nodes) {
       const p = locate(id);
       node.el.hidden = !p.inFront;
-      node.el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0) translate(-50%, -100%)`;
+      node.el.style.transform = lift(p.x, p.y);
     }
   }
 

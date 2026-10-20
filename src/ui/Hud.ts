@@ -142,7 +142,11 @@ export class Hud {
       this.badges.refresh();
       this.bars.refresh();
     });
-    world.bus.on('building:placed', () => this.bars.refresh());
+    // 新楼当场就要抢岗位池（understaffed 只数已封顶的，所以封顶那条也挂着）
+    world.bus.on('building:placed', () => {
+      this.bars.refresh();
+      this.badges.refresh();
+    });
     world.bus.on('rally:changed', () => this.bars.refresh());
     world.bus.on('round:changed', () => {
       this.raid.refresh();

@@ -9,7 +9,11 @@
  */
 
 import type { GameWorld } from '@game/world/GameWorld';
+import { lift } from './BuildingBars';
 import { make, type HudWidget } from './dom';
+
+/** 徽章让开血条一档。 */
+const BADGE_LIFT = 26;
 
 export class StaffBadges implements HudWidget {
   readonly el = make('div', { class: 'badges' });
@@ -43,7 +47,7 @@ export class StaffBadges implements HudWidget {
   placeAll(locate: (id: number) => { x: number; y: number; inFront: boolean }): void {
     for (const [id, node] of this.nodes) {
       const p = locate(id);
-      node.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0) translate(-50%, -100%)`;
+      node.style.transform = lift(p.x, p.y, BADGE_LIFT);
       node.hidden = !p.inFront || !this.world.buildings.has(id);
     }
   }

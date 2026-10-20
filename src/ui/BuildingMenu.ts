@@ -8,7 +8,11 @@
 
 import { buildingName } from '@game/data/buildings';
 import type { Building } from '@game/world/GameWorld';
+import { lift } from './BuildingBars';
 import { make, setFlag, setText, type HudWidget } from './dom';
+
+/** 菜单让开血条与徽章两档，正好压在它们上面。 */
+const MENU_LIFT = 52;
 
 export interface MenuActions {
   onUpgrade(building: Building): void;
@@ -102,7 +106,7 @@ export class BuildingMenu implements HudWidget {
     }
     if (!this.target) return;
     this.el.hidden = false;
-    this.el.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) translate(-50%, -100%)`;
+    this.el.style.transform = lift(x, y, MENU_LIFT);
   }
 
   forget(id: number): void {
