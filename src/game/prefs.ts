@@ -47,6 +47,7 @@ function browserStore(): KeyValueStore {
 
 const KEY = {
   neverAskDestroyVein: 'gamekar.pref.neverAskDestroyVein',
+  theme: 'gamekar.pref.theme',
 } as const;
 
 export class Prefs {
@@ -63,5 +64,18 @@ export class Prefs {
 
   setNeverAskDestroyVein(value: boolean): void {
     this.store.set(KEY.neverAskDestroyVein, value ? '1' : '0');
+  }
+
+  /**
+   * 界面材质。存的**就是那个可分享的 ID**（`mk-…`），不另存一份参数 JSON：
+   * 一份真相，不会出现"参数与码对不上"。读回来的解码合法性由 ui/themePrefs 判，
+   * 这里只管进出字符串。
+   */
+  get themeId(): string | null {
+    return this.store.get(KEY.theme);
+  }
+
+  setThemeId(id: string): void {
+    this.store.set(KEY.theme, id);
   }
 }

@@ -8,7 +8,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 199 条回归
+npm run check        # 类型检查 + 207 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -21,6 +21,7 @@ game.place('mine', {col:20,row:18})   // 跳过交互直接落位
 game.world.resources          // 金币 / 晶钻 / 面包
 game.upgrade(towerId)         // 升级一座塔（不扣许可）
 game.stowFlag(barracks)       // 收集合旗 → game.armFlag() → game.dropFlag(cell)
+game.prefs.themeId                    // 玩家自己调的界面材质（可分享的码）
 game.setOrientation('portrait')       // 在桌面窗口里锁定竖屏档位
 ```
 
@@ -35,7 +36,8 @@ game.setOrientation('portrait')       // 在桌面窗口里锁定竖屏档位
   水面和发光晶簇不合批 —— 顶点色走不了 emissive，而晶脉"亮着"本身就是玩法信号。
 - 建筑是**程序化建模**：一份"说明书"（`box/prism/plinth/cyl/cone/crystal`）拼出低多边形模型。
   将来换真实 glTF，只动 `src/game/models/`，玩法和 UI 一行不改。
-- 界面材质也是**现算的**：木纹与镀金是启动时用周期噪声生成的小图（见下方"界面是块木头"）。
+- 界面材质也是**现算的**：木纹与镀金是启动时用周期噪声生成的小图（见下方"界面是块木头"），
+  玩家还能自己调，并给一个可分享的 ID。
 
 ## 目录
 
@@ -59,10 +61,10 @@ src/
 │  ├─ fx/             BattleFx.ts（2D 箭 / 3D 铁弹 / 爆炸与像素烟雾 / 炮口火光）
 │  ├─ prefs.ts        玩家偏好（"不再提示"），存储不可用时自动退回内存
 │  └─ systems/        Placement.ts（三态幽灵 + 毁矿闸门）· FlagPocket.ts（旗子袋状态机）· Combat.ts（兵/塔/弹/波次 + 流场）
-├─ ui/                dom.ts · facts.ts · theme.ts(噪声材质) + 十个部件 + Hud.ts（组装）
+├─ ui/                dom.ts · facts.ts · theme.ts(噪声材质) · themePrefs.ts(参数↔ID) + 十二个部件 + Hud.ts（组装）
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
-                      roster · rally · combat · rounds · theme —— 共 199 条
+                      roster · rally · combat · rounds · theme —— 共 207 条
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**
@@ -148,7 +150,7 @@ tests/                grid · random · terrain · world · gacha · data · geo
 
 拖 = 平移 ｜ 双指捏合 = 缩放 ｜ 双指转 = 转视角 ｜ 滚轮 = 缩放 ｜
 点空地 = 选中那格 ｜ 点楼 = 选中那栋 ｜ **再点同一个目标 = 取消选中** ｜ **长按楼 = 头顶弹气泡说明** ｜
-点塔 = 头顶弹升级/拆除 ｜ 点旗子 = 收进袋 ｜ Esc = 谁在最上面先收谁。
+点塔 = 头顶弹升级/拆除 ｜ 点旗子 = 收进袋 ｜ **点顶栏「材质」或按 T = 开调参面板** ｜ Esc = 谁在最上面先收谁。
 
 ## 数值现状（实测，不是目标）
 
@@ -178,6 +180,26 @@ tests/                grid · random · terrain · world · gacha · data · geo
 - 按键走镀金：金色渐变上压一层现算的拉丝纹理，顶边一道镜面高光；面板边框是"外深内浅 + 一条金发丝"的雕刻框。
 - 噪声的格点序号**取模**，所以平铺看不见接缝 —— 这条有锁（`tests/theme.test.ts`），
   而且写锁的过程里揪出了实现本身的一个错（y 行混合把 `tx` 写成了 `ty`）。
+
+### 木头可以自己调，还带一个分享码
+
+点顶栏「材质」（或按 `T`）开面板：八条滑杆调**明度 / 色阶档数 / 纹路密度 / 板宽 / 板缝深浅 /
+像素块放大 / 木纹变体 / 镀金强度**，另有淡·中·重三档预设与"恢复默认"。
+
+- **改动自动保存**，没有保存按钮；存进本地偏好的**就是那个 ID**，所以不会出现"参数与码对不上"。
+- 每次改动同时输出**独有 ID**（如 `mk-11q37sz`）：同一套参数永远同一个码，别人贴回输入框就是同一块木头。
+  八个字段量化后 28 bit，base36 六位装得下；前缀里那一位是版本号，**以后加字段必须升版本**。
+- 贴回来的码读不出来就**什么都不改**，只提示一句 —— 不让一个错字偷偷换掉玩家的界面。
+- 拖动过程中不重算纹理（实测热态重算 4–7ms，冷启动那一次 161ms 含 PNG 编码 warm-up），
+  最后一次改动后防抖 220ms 再算，面板底部把耗时显示出来。
+  这里故意不做"CSS 滤镜先凑一下"的预览：滤镜下的旧纹理和真纹理不是一套，松手会跳，玩家以为坏了。
+
+| 读数 | 实测 |
+| --- | --- |
+| 默认长相的码 | `mk-11q37sz`（钉在锁里，偷偷改默认值会红） |
+| 热态重算两张纹理 | 4–7ms（木 2 + 金 2） |
+| 冷启动第一次生成 | 木 161ms + 金 68ms |
+| 500 组随机参数往返 / 2000 组撞号检查 | 全等 / 2000 个互不相同 |
 
 ### 小人是拼出来的，不是画的
 

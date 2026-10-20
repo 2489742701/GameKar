@@ -17,8 +17,11 @@ import { RallyFlag } from './RallyFlag';
 import { ResourceBar } from './ResourceBar';
 import { StaffBadges } from './StaffBadges';
 import { SelectionCard } from './SelectionCard';
+import { ThemePanel } from './ThemePanel';
 import { Toasts } from './Toasts';
 import { make } from './dom';
+import { installTheme } from './theme';
+import { giltOf, woodOf } from './themePrefs';
 
 /** DOM 写入没必要跟着 60fps 跑，10Hz 足够跟手又不抢主线程。 */
 const REFRESH_MS = 100;
@@ -32,6 +35,7 @@ export class Hud {
   private readonly confirm: ConfirmDialog;
   private readonly bubble: BuildingBubble;
   private readonly flag: RallyFlag;
+  private readonly theme: ThemePanel;
   private readonly menu: BuildingMenu;
   private readonly badges: StaffBadges;
   private readonly toasts = new Toasts();
@@ -47,7 +51,7 @@ export class Hud {
   ) {
     const world = app.world;
 
-    this.resbar = new ResourceBar(world);
+    this.resbar = new ResourceBar(world, () => this.toggleTheme());
     this.card = new SelectionCard(world, (id) => app.demolish(id), (id) => app.runnersOf(id));
     this.dock = new ActionDock(world, {
       onPull: (count) => {
@@ -71,6 +75,13 @@ export class Hud {
       onDemolish: (b) => this.app.demolish(b.id),
     });
     this.badges = new StaffBadges(world);
+    // 面板自己不算纹理也不存盘：apply 交回 installTheme，落盘交给 Prefs，
+    // 这样"改了没生效"只可能出在一处
+    this.theme = new ThemePanel({
+      prefs: app.prefs,
+      apply: (t) => installTheme(undefined, woodOf(t), giltOf(t), t.scale),
+      say: (text, tone) => this.toasts.push(text, tone ?? 'ok'),
+    });
 
     this.shell.append(
       place(this.resbar.el, 'hud__top'),
@@ -87,6 +98,7 @@ export class Hud {
       this.flag.el,
       this.badges.el,
       this.menu.el,
+      this.theme.el,
       this.telemetry,
     );
 
@@ -149,8 +161,9 @@ export class Hud {
         break;
       }
       case 'Escape':
-        // 谁在最上面就先收谁：确认框 > 塔顶菜单 > 开包 > 气泡 > 旗子 > 建造模式
+        // 谁在最上面就先收谁：确认框 > 材质面板 > 塔顶菜单 > 开包 > 气泡 > 旗子 > 建造模式
         if (this.confirm.open) this.confirm.hide();
+        else if (this.theme.open) this.theme.hide();
         else if (this.menu.targetBuilding) this.menu.show(null);
         else if (this.panel.open) this.panel.hide();
         else if (this.bubble.targetBuilding) this.bubble.show(null);
@@ -160,6 +173,10 @@ export class Hud {
       case 'h':
       case 'H':
         this.app.focusHome();
+        break;
+      case 't':
+      case 'T':
+        this.toggleTheme();
         break;
     }
   };
@@ -211,6 +228,10 @@ export class Hud {
     this.flag.show(target);
     this.flag.setArmed(state === 'placing');
     this.dock.setFlagState(state);
+  }
+
+  private toggleTheme(): void {
+    this.theme.toggle();
   }
 
   /** 点旗子袋：袋空着也给一句话，别让玩家按了个没反应还不吭声。 */

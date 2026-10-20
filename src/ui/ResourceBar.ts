@@ -21,7 +21,10 @@ export class ResourceBar implements HudWidget {
   private popRate!: HTMLElement;
   private round!: HTMLElement;
 
-  constructor(private readonly world: GameWorld) {
+  constructor(
+    private readonly world: GameWorld,
+    onTheme?: () => void,
+  ) {
     for (const id of ORDER) {
       const meta = RESOURCE_META[id];
       const v = make('span', { class: 'resbar__val' });
@@ -63,7 +66,8 @@ export class ResourceBar implements HudWidget {
     );
 
     this.round = make('span', { class: 'resbar__round num' });
-    this.el.append(this.round, make('span', { class: 'resbar__title', text: 'GAMEKAR' }));
+    const themeBtn = make('button', { class: 'resbar__theme', text: '材质', onClick: () => onTheme?.() });
+    this.el.append(this.round, themeBtn, make('span', { class: 'resbar__title', text: 'GAMEKAR' }));
   }
 
   refresh(): void {

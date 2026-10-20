@@ -7,6 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { Random } from '@engine/math/Random';
+import { Prefs } from '@game/prefs';
 import {
   DEFAULT_GILT,
   DEFAULT_WOOD,
@@ -18,6 +20,16 @@ import {
   tileNoise,
   woodPixels,
 } from '@ui/theme';
+import {
+  DEFAULT_TUNING,
+  decodeTuning,
+  encodeTuning,
+  loadTuning,
+  saveTuning,
+  snapTuning,
+  woodOf,
+  type Tuning,
+} from '@ui/themePrefs';
 
 /** 亮度用 Rec.709 的权重折成一个数，够比较深浅了 */
 const luma = (hex: string): number => {
@@ -166,5 +178,104 @@ describe('镀金像素', () => {
     for (let i = 0; i < px.length; i += 4) {
       expect(allowed.has(`${px[i]},${px[i + 1]},${px[i + 2]}`)).toBe(true);
     }
+  });
+});
+
+describe('材质 ID（可分享的调参码）', () => {
+  /** 自己写一份打包器当尺子：位序与位宽照抄注释里那张表，故意不从被测件派生。 */
+  const WIDTHS = [5, 3, 4, 4, 3, 3, 3, 3];
+  const pack = (indices: number[]) => {
+    let bits = 0;
+    for (let i = 0; i < WIDTHS.length; i++) bits = bits * 2 ** WIDTHS[i]! + indices[i]!;
+    let out = '';
+    let n = bits;
+    for (let i = 0; i < 6; i++) {
+      out = '0123456789abcdefghijklmnopqrstuvwxyz'[n % 36] + out;
+      n = Math.floor(n / 36);
+    }
+    return `mk-1${out}`;
+  };
+
+  const rng = new Random('tuning-fuzz');
+  const randTuning = (): Tuning => ({
+    brightness: Math.round((0.2 + 0.02 * rng.int(0, 26)) * 100) / 100,
+    steps: 3 + rng.int(0, 6),
+    grainY: 6 + rng.int(0, 15),
+    plankRows: 4 + 2 * rng.int(0, 11),
+    seam: Math.round(0.05 * rng.int(0, 7) * 100) / 100,
+    scale: 1 + rng.int(0, 5),
+    seedVariant: rng.int(0, 8),
+    gilt: 40 * rng.int(0, 6),
+  });
+
+  it('往返不变：500 组随机参数，编码再解码一个数都不差', () => {
+    for (let i = 0; i < 500; i++) {
+      const t = randTuning();
+      expect(decodeTuning(encodeTuning(t))).toEqual(t);
+    }
+  });
+
+  it('同一套参数永远同一个码（这是分享码的地基）', () => {
+    const t = randTuning();
+    expect(encodeTuning(t)).toBe(encodeTuning(t));
+    expect(encodeTuning(t)).toMatch(/^mk-1[0-9a-z]{6}$/);
+  });
+
+  it('2000 组随机参数不撞号', () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 2000; i++) ids.add(encodeTuning(randTuning()));
+    expect(ids.size).toBe(2000);
+  });
+
+  it('默认参数的码钉死在这里：偷偷改默认值会红，这是故意的', () => {
+    expect(encodeTuning(DEFAULT_TUNING)).toBe('mk-11q37sz');
+  });
+
+  it('非法码一律拒绝：前缀、长度、版本、表外字符、越界档位', () => {
+    const good = encodeTuning(DEFAULT_TUNING);
+    expect(decodeTuning('')).toBeNull();
+    expect(decodeTuning('xx-1abcdefg')).toBeNull();
+    expect(decodeTuning(good.slice(0, -1))).toBeNull();
+    expect(decodeTuning(good.replace('mk-1', 'mk-2'))).toBeNull();
+    expect(decodeTuning('mk-1!!!!!!')).toBeNull();
+    // 第 2 个字段（色阶档数）只有 6 档合法，指到第 7 档的码必须被拒
+    expect(decodeTuning(pack([0, 7, 0, 0, 0, 0, 0, 0]))).toBeNull();
+    expect(decodeTuning(pack([0, 5, 0, 0, 0, 0, 0, 0]))).not.toBeNull();
+  });
+
+  it('snap 幂等：贴回档位之后再贴不会漂', () => {
+    const t = { ...DEFAULT_TUNING, brightness: 0.351, seam: 0.12, steps: 6.4 };
+    const once = snapTuning(t);
+    expect(snapTuning(once)).toEqual(once);
+    expect(encodeTuning(once)).toBe(encodeTuning(t));
+  });
+
+  it('参数换成规格：档数/密度/板宽/板缝都真的落到纹理上', () => {
+    const t = { ...DEFAULT_TUNING, steps: 3, grainY: 6, plankRows: 4, seam: 0.3 };
+    const spec = woodOf(t);
+    expect(spec.steps).toBe(3);
+    expect(spec.grainY).toBe(6);
+    expect(spec.plankRows).toBe(4);
+    expect(spec.seam).toBe(0.3);
+    // 种子变体 0 必须还是默认那颗种子，否则老码解出来的长相会变
+    expect(woodOf(DEFAULT_TUNING).seed).toBe(DEFAULT_WOOD.seed);
+    expect(woodOf({ ...DEFAULT_TUNING, seedVariant: 3 }).seed).not.toBe(DEFAULT_WOOD.seed);
+  });
+
+  it('存盘读回：写进去的是码，新实例读回来还是同一套参数', () => {
+    const store = new Map<string, string>();
+    const fake = {
+      get: (k: string) => store.get(k) ?? null,
+      set: (k: string, v: string) => void store.set(k, v),
+    };
+    const prefs = new Prefs(fake);
+    const t = { ...DEFAULT_TUNING, steps: 7, scale: 4 };
+    const id = saveTuning(prefs, t);
+    expect(prefs.themeId).toBe(id);
+    expect(loadTuning(new Prefs(fake))).toEqual(snapTuning(t));
+
+    // 存了个坏码：读回默认，而不是崩、也不是把坏值原样吐出去
+    prefs.setThemeId('mk-9zzzzzz');
+    expect(loadTuning(new Prefs(fake))).toEqual(DEFAULT_TUNING);
   });
 });

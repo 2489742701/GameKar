@@ -11,6 +11,7 @@ import './styles/components.css';
 import { GameApp } from '@game/GameApp';
 import { Hud } from '@ui/Hud';
 import { installTheme } from '@ui/theme';
+import { giltOf, loadTuning, woodOf } from '@ui/themePrefs';
 
 function required<T extends Element>(id: string): T {
   const node = document.getElementById(id);
@@ -30,11 +31,14 @@ const canvas = required<HTMLCanvasElement>('stage');
 const uiHost = required<HTMLDivElement>('ui');
 const splash = document.getElementById('boot');
 
-// 木纹与镀金是启动时现算的两张小图，必须赶在 HUD 建起来之前挂上 CSS 变量
-window.theme = installTheme();
-
 // boot 是异步的：小人素材包要先取回来
 const app = await GameApp.boot({ container, canvas, seed: seedFromUrl(20261019) });
+
+// 木纹与镀金是启动时现算的两张小图，必须赶在 HUD 建起来之前挂上 CSS 变量。
+// 参数从玩家偏好里读：他在这台机器上调过什么，开局就是什么长相（没调过 = 默认那套）。
+const tuning = loadTuning(app.prefs);
+window.theme = installTheme(undefined, woodOf(tuning), giltOf(tuning), tuning.scale);
+
 const hud = new Hud(uiHost, app);
 hud.start();
 
