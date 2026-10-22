@@ -4,6 +4,11 @@
  * 每个模型就是一串 Node：`[box([2,1,2], STONE, [0,.5,0]), prism(...)]`。
  * 几何体按形状缓存、材质按颜色缓存，所以 200 栋房子也只占几份显存。
  * 将来换成真实 glTF，只需要把 ModelSpec 换成 loader，其余代码不动。
+ *
+ * `at` 的锚点约定（现量，不是约定俗成；写错就会出现"件与件之间看得见缝"）：
+ * - box / cyl / cone / sphere / crystal：at 是**中心** —— 想让底面贴地，`at.y = 高 / 2`
+ * - plinth / prism：at 是**底面** —— 直接写它要坐落的那个高度
+ * 两类混用时，`tests/geometry.test.ts` 的"没有悬空的件"那条会拦下来（每件必须贴地或压到别的件上）。
  */
 
 import * as THREE from 'three';
@@ -291,6 +296,15 @@ export function buildModel(spec: ModelSpec): THREE.Group {
   for (const node of spec) group.add(meshFor(node));
   return group;
 }
+
+/**
+ * 沿 Y 缩放一栋楼时，要把底面顶回原位所需的下移量。
+ *
+ * 各楼最低点实测从 -0.54 到 0 不等（有裙、有斜撑、有埋进土的柱脚），
+ * 所以"底面在 y=0，缩放原点天然就是地基"这个假设是假的：
+ * 不补这一笔，进度 15% 的塔会比盖好的塔抬离地面 0.41，看着就是凭空悬着。
+ */
+export const keepBaseOffset = (minY: number, scaleY: number): number => minY * (1 - scaleY);
 
 // ---------------------------------------------------------------- 合并
 

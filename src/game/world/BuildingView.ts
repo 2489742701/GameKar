@@ -3,11 +3,13 @@
  *
  * 工地骨架和实体模型同时挂在同一个根节点上：
  * 实体按建造进度沿 Y 从 0.15 长到 1.0，骨架在封顶那一刻撤走。
- * 因为所有模型的底面都在 y=0，缩放原点天然就是地基，不需要额外补偿。
+ * 缩放会把模型最低点一起抬起来（各楼的底面实测在 -0.54..0 之间，不是"都在 0"），
+ * 所以每一档进度都要按 `keepBaseOffset` 补一笔下移，底面才钉在同一处地面上。
  */
 
 import * as THREE from 'three';
 import { footprintCenter } from '@engine/math/Grid';
+import { keepBaseOffset } from '@game/models/kit';
 import type { ModelLibrary } from '@game/models/registry';
 import type { Building } from './GameWorld';
 
@@ -20,6 +22,8 @@ interface Entry {
   site: THREE.Group;
   /** 选中框要用的实际高度（含屋顶） */
   height: number;
+  /** 未缩放时的最低点，缩放补偿按它算 */
+  baseY: number;
 }
 
 export class BuildingView {
@@ -49,8 +53,9 @@ export class BuildingView {
 
     this.box.setFromObject(body);
     const height = Math.max(0.4, this.box.max.y - this.box.min.y);
+    const baseY = this.box.min.y;
 
-    this.entries.set(building.id, { root, body, site, height });
+    this.entries.set(building.id, { root, body, site, height, baseY });
     this.applyProgress(building);
   }
 
@@ -70,12 +75,15 @@ export class BuildingView {
     return this.entries.size;
   }
 
-  /** 逐帧同步进度；只写缩放，不做几何重建。 */
+  /** 逐帧同步进度；只写缩放与一处下移，不做几何重建。 */
   applyProgress(building: Building): void {
     const entry = this.entries.get(building.id);
     if (!entry) return;
     const p = building.progress;
-    entry.body.scale.y = GROUNDED + (GROWN - GROUNDED) * p;
+    const s = GROUNDED + (GROWN - GROUNDED) * p;
+    entry.body.scale.y = s;
+    // 补回被缩放抬起来的那一段，底面才一直钉在地面上
+    entry.body.position.y = keepBaseOffset(entry.baseY, s);
     entry.site.visible = !building.built;
   }
 
