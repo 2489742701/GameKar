@@ -117,10 +117,105 @@ export const ROUNDS = {
   raidMinSeconds: 6,
   /** raid 拖过这么久就强制结算，免得一只敌人卡住整回合不入账 */
   raidMaxSeconds: 90,
-  /** 每回合的敌人波数 */
-  wavesPerRound: 1,
+  /** 引擎级硬上限：场上同时多少人，任何一档都不许超过它 */
   maxRaidUnits: 40,
 };
+
+/**
+ * 三档难度 —— 只动**出兵量**与**怪物 AI**这两类东西。
+ *
+ * 攻防血造价一律不碰：实测过单发改数值只买到 0~1 回合，而"这波从几处来、
+ * 分几涌来、扑哪栋楼、打不打你的兵"这些才是真把手（上一格的对照台量出来的）。
+ */
+export type Difficulty = 'easy' | 'normal' | 'hard';
+
+export interface RaidProfile {
+  label: string;
+  /** 第 N 波来几只 = waveBase + waveGrowth × (N-1)，再夹到 capOnField */
+  waveBase: number;
+  waveGrowth: number;
+  /** 场上同时人数上限（不得超过 ROUNDS.maxRaidUnits） */
+  capOnField: number;
+  /** 一波拆成几组：一组几只、组与组隔几秒进（"慢慢出"就是这一条） */
+  burstSize: number;
+  burstGapSeconds: number;
+  /** 一波从地图几处边缘同时来（简单档的"随机乱出兵"） */
+  spawnPoints: number;
+  /** 混兵：从第几波起，每 everyN 只塞一只这种兵 */
+  mix: { unitId: string; fromRound: number; everyN: number }[];
+  /** 选目标时给议事厅减几格距离：0 = 谁近拆谁，越大越直奔心脏 */
+  hallBias: number;
+  /** 打不打你的兵：远程敌人会不会转头（false = 眼里只有楼） */
+  engageTroops: boolean;
+  /** 进场时在几格内打散：越大越不容易被一发炮弹一片，也越不像一支军队 */
+  scatterTiles: number;
+  /**
+   * 简单档的"不急"：敌人每打一下之后多站几秒才来第二下。
+   * 这是来敌节奏（AI 急不急），不是兵种自己的攻击间隔 —— units 表里那几个 cooldown 一律没动。
+   */
+  strikePauseSeconds: number;
+}
+
+export const DIFFICULTY: Record<Difficulty, RaidProfile> = {
+  easy: {
+    label: '简单',
+    waveBase: 2,
+    waveGrowth: 0.5,
+    capOnField: 20,
+    burstSize: 2,
+    burstGapSeconds: 5,
+    spawnPoints: 3,
+    mix: [
+      { unitId: 'shade', fromRound: 8, everyN: 6 },
+      { unitId: 'golem', fromRound: 10, everyN: 8 },
+    ],
+    hallBias: 0,
+    engageTroops: false,
+    scatterTiles: 2.4,
+    strikePauseSeconds: 1.2,
+  },
+  normal: {
+    label: '正常',
+    // 第 1 波 4 只（改动前写死的是 5 只）；成长放缓，"一直撑下去"才可能成立
+    waveBase: 4,
+    waveGrowth: 1.2,
+    capOnField: 32,
+    burstSize: 4,
+    burstGapSeconds: 4,
+    spawnPoints: 1,
+    mix: [
+      { unitId: 'shade', fromRound: 3, everyN: 4 },
+      { unitId: 'golem', fromRound: 5, everyN: 6 },
+    ],
+    hallBias: 2,
+    engageTroops: false,
+    scatterTiles: 1.2,
+    strikePauseSeconds: 0,
+  },
+  hard: {
+    label: '困难',
+    waveBase: 6,
+    waveGrowth: 2,
+    capOnField: 40,
+    burstSize: 6,
+    burstGapSeconds: 2,
+    spawnPoints: 2,
+    mix: [
+      { unitId: 'shade', fromRound: 2, everyN: 3 },
+      { unitId: 'golem', fromRound: 3, everyN: 5 },
+    ],
+    hallBias: 4,
+    engageTroops: true,
+    scatterTiles: 0.6,
+    strikePauseSeconds: 0,
+  },
+};
+
+export const DEFAULT_DIFFICULTY: Difficulty = 'normal';
+
+/** 档位的读法只这一处：没给、给错、旧档里没这个字段，一律回到正常。 */
+export const difficultyOf = (raw: unknown): Difficulty =>
+  raw === 'easy' || raw === 'normal' || raw === 'hard' ? raw : DEFAULT_DIFFICULTY;
 
 /**
  * 小人视觉参数。素材一帧是 16x24 像素，卡片宽高比由素材决定，

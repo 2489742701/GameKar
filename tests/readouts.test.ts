@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { pos } from '@engine/math/Grid';
-import { ROUNDS } from '@game/config';
+import { ROUNDS, type Difficulty } from '@game/config';
 import { buildingDef } from '@game/data/buildings';
 import { Combat } from '@game/systems/Combat';
 import { barWorthies, hpOf, ammoOf, squadOf } from '@game/systems/Readouts';
@@ -17,15 +17,17 @@ import { GameWorld, type Building } from '@game/world/GameWorld';
 import { TileMap } from '@game/world/TileMap';
 import { buildingFacts } from '@ui/facts';
 
-function arena(): { world: GameWorld; combat: Combat; at: (i: number) => ReturnType<typeof pos> } {
+function arena(
+  difficulty: Difficulty = 'normal',
+): { world: GameWorld; combat: Combat; at: (i: number) => ReturnType<typeof pos> } {
   const world = new GameWorld(new TileMap({ cols: 40, rows: 40 }), { seed: 777 });
   world.grant('gold', 100_000);
   world.grant('crystal', 10_000);
   for (const id of ['hall', 'barracks', 'arrowTower', 'cannonTower', 'house', 'farm', 'mill', 'field']) {
     world.addPermits(id, 40);
   }
-  const combat = new Combat({ world, maxUnits: 40 });
-  world.raidActive = () => combat.enemiesAlive() > 0;
+  const combat = new Combat({ world, maxUnits: 40, difficulty });
+  world.raidActive = () => combat.engaged();
   return { world, combat, at: (i) => pos(4 + i * 3, 6) };
 }
 
@@ -189,10 +191,12 @@ describe('存档：写下去的账本读回来必须一模一样', () => {
   it('坏档一律不读：非 JSON、版本不符、表里没这栋楼', () => {
     expect(parseSave(null)).toBeNull();
     expect(parseSave('不是 JSON')).toBeNull();
-    expect(parseSave(JSON.stringify({ v: SAVE_VERSION + 1, seed: 1, buildings: [], res: {}, round: {} }))).toBeNull();
+    expect(parseSave(JSON.stringify({ v: SAVE_VERSION + 1, seed: 1, diff: 'normal', buildings: [], res: {}, round: {} }))).toBeNull();
     const bad = {
       v: SAVE_VERSION,
       seed: 1,
+      // 带上一个合法档位：这样"红"只能是因为那栋不存在的楼，不是因为缺字段
+      diff: 'normal',
       time: 0,
       res: { gold: 0, crystal: 0, bread: 0 },
       yields: { gold: 0, crystal: 0, bread: 0 },
@@ -203,6 +207,30 @@ describe('存档：写下去的账本读回来必须一模一样', () => {
       buildings: [{ d: '不存在的楼', c: 0, r: 0, p: 1, built: true, hp: 1, rally: null, lv: 1, placedAt: 0 }],
     };
     expect(parseSave(JSON.stringify(bad))).toBeNull();
+  });
+
+  /** P-012：来敌节奏属于那一局，所以它必须进档、也必须从档里读回来。 */
+  it('档位跟着存档走：简单档存下去，读进一个"默认正常"的新实例也是简单', () => {
+    const { world, combat, at } = arena('easy');
+    build(world, 'hall', at(0));
+    expect(combat.difficulty).toBe('easy');
+    const raw = JSON.stringify(snapshot(world, combat));
+
+    const target = new GameWorld(new TileMap({ cols: 40, rows: 40 }), { seed: 777 });
+    const combat2 = new Combat({ world: target, maxUnits: 40 }); // 没给档位 = 正常
+    expect(combat2.difficulty).toBe('normal');
+    applySave(target, combat2, parseSave(raw)!);
+    expect(combat2.difficulty).toBe('easy');
+    // 波次计划也得跟着翻：同一回合，两档不是一串人
+    expect(combat2.raidPlan(1)).toHaveLength(2);
+    expect(combat.raidPlan(1)).toHaveLength(2);
+
+    // 档位写歪或干脆没有，整份丢掉，不替玩家猜一个档
+    const withJunk = JSON.parse(raw);
+    withJunk.diff = '噩梦';
+    expect(parseSave(JSON.stringify(withJunk))).toBeNull();
+    delete withJunk.diff;
+    expect(parseSave(JSON.stringify(withJunk))).toBeNull();
   });
 
   it('格子被占或越界时 adopt 返回 null，不留下半个楼', () => {

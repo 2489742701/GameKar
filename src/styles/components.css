@@ -697,7 +697,8 @@ html[data-orientation='landscape'] .gacha__grid {
 
 /* ---------- 材质面板（玩家自己调木头与镀金） ---------- */
 
-.resbar__theme {
+.resbar__theme,
+.resbar__diff {
   min-height: 30px;
   padding: 0 10px;
   border-radius: 7px;
@@ -709,6 +710,7 @@ html[data-orientation='landscape'] .gacha__grid {
   background: linear-gradient(180deg, var(--wood-5), var(--wood-2));
   box-shadow: inset 0 1px 0 var(--panel-edge);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .theme {

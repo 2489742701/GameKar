@@ -11,7 +11,7 @@
 
 import type { FlatSize, GridPos } from '@engine/math/Grid';
 import { cellToWorld, pos, worldToCell } from '@engine/math/Grid';
-import { ROUNDS, isStandable } from '@game/config';
+import { DEFAULT_DIFFICULTY, DIFFICULTY, ROUNDS, isStandable, type Difficulty, type RaidProfile } from '@game/config';
 import { UNITS, damageOf, unitDef, type UnitDef } from '@game/data/units';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 
@@ -90,17 +90,20 @@ export interface CombatEvents {
 export interface CombatOptions {
   world: GameWorld;
   maxUnits?: number;
+  /** 这一局按哪一档来敌。不给就是正常档。 */
+  difficulty?: Difficulty;
   on?: <K extends keyof CombatEvents>(type: K, handler: (payload: CombatEvents[K]) => void) => void;
 }
 
-/** 一回合的敌人构成：前期全是杂兵，后面混进石怪与暗影弓手。 */
-function raidComposition(round: number): string[] {
-  const total = Math.min(ROUNDS.maxRaidUnits, 3 + 2 * round);
+/** 一回合的敌人构成：波次大小、什么时候混进远程与石怪，全读档位表。 */
+function raidComposition(profile: RaidProfile, round: number): string[] {
+  const want = Math.round(profile.waveBase + profile.waveGrowth * (round - 1));
+  const total = Math.min(profile.capOnField, ROUNDS.maxRaidUnits, Math.max(0, want));
   const out: string[] = [];
   for (let i = 0; i < total; i++) {
-    if (round >= 4 && i % 6 === 5) out.push('golem');
-    else if (round >= 2 && i % 4 === 3) out.push('shade');
-    else out.push('raider');
+    // 混兵按表里从前往后第一条命中的；everyN 那只进这种兵（与改动前的 i % 6 === 5 同形状）
+    const mix = profile.mix.find((m) => round >= m.fromRound && i % m.everyN === m.everyN - 1);
+    out.push(mix ? mix.unitId : 'raider');
   }
   return out;
 }
@@ -115,10 +118,17 @@ export class Combat {
   private nextId = 1;
   private readonly listeners = new Map<string, Set<(payload: never) => void>>();
   private readonly maxUnits: number;
-  private field: FlowField | null = null;
-  private fieldKey = '';
-  /** 本回合的来点（每局固定一处，按 seed 现量选出来的边缘可站格） */
-  private spawnPoint: GridPos | null = null;
+  /** 档位：出兵量与怪物 AI 的唯一来源。换档只改"接下来怎么来敌"，不动已在场上的兵。 */
+  difficulty: Difficulty;
+  profile: RaidProfile;
+  /** 流场按目标楼分槽：一波里几栋楼被盯上就各算一次，不再互相顶掉 */
+  private readonly fields = new Map<string, FlowField>();
+  /** 本局的来点（每局固定、按 seed 现量选出来的边缘可站格，最多 4 处） */
+  private spawnPointsCache: GridPos[] | null = null;
+  /** 还没进场的那几涌：at = 还有几秒进 */
+  private pendingBursts: { ids: string[]; at: number; point: GridPos }[] = [];
+  /** 打散用节拍：只按序推，不用随机，保证同 seed 同结果 */
+  private spawnSeq = 0;
   defeated = false;
 
   capped = 0;
@@ -127,6 +137,8 @@ export class Combat {
 
   constructor(private readonly opts: CombatOptions) {
     this.maxUnits = opts.maxUnits ?? ROUNDS.maxRaidUnits;
+    this.difficulty = opts.difficulty ?? DEFAULT_DIFFICULTY;
+    this.profile = DIFFICULTY[this.difficulty];
     // 判负只看一件事：**议事厅被打掉**。
     // 不能写成"场上没有议事厅"—— 开局前、以及不带主城的夹具里那都是"还没盖"，不是"输了"。
     opts.world.bus.on('building:destroyed', (b) => {
@@ -176,12 +188,12 @@ export class Combat {
     return (b.def.squad ?? []).reduce((n, m) => n + m.size, 0);
   }
 
-  /** 来点：地图四条边里挑一处能站人的格子，按 seed 固定。 */
-  spawnAt(seed: number): GridPos {
-    if (this.spawnPoint) return this.spawnPoint;
+  /** 本局第 k 处来点：地图四条边里挑能站人的格子，按 seed 固定（k=0 就是原来那一处）。 */
+  private edgePoint(seed: number, k: number): GridPos {
     const size = this.opts.world.map.size;
-    const side = seed % 4;
-    const along = 4 + ((seed >> 2) % Math.max(1, (side % 2 === 0 ? size.cols : size.rows) - 8));
+    const side = (((seed % 4) + 4) % 4 + k) % 4;
+    const span = Math.max(1, (side % 2 === 0 ? size.cols : size.rows) - 8);
+    const along = 4 + (((seed >> 2) + k * 9) % span);
     const cell =
       side === 0
         ? pos(along, 0)
@@ -190,8 +202,102 @@ export class Combat {
           : side === 2
             ? pos(0, along)
             : pos(size.cols - 1, along);
-    this.spawnPoint = this.nearestStandable(cell);
-    return this.spawnPoint;
+    return this.nearestStandable(cell);
+  }
+
+  /** 来点清单（最多 4 处，四条边各一处）。同一局同一 seed 永远同一份。 */
+  private allSpawnPoints(seed: number): GridPos[] {
+    if (!this.spawnPointsCache) this.spawnPointsCache = [0, 1, 2, 3].map((k) => this.edgePoint(seed, k));
+    return this.spawnPointsCache;
+  }
+
+  /** 第一处来点：给"这一波从哪边来"的读数与视图用，口径与改动前一致。 */
+  spawnAt(seed: number): GridPos {
+    return this.allSpawnPoints(seed)[0]!;
+  }
+
+  /** 这一波实际会用到的几处来点（简单档"从三面来"就体现在这里）。 */
+  spawnPointsOf(seed: number, n = this.profile.spawnPoints): GridPos[] {
+    return this.allSpawnPoints(seed).slice(0, Math.max(1, Math.min(n, 4)));
+  }
+
+  /** 换档：正在打的这一波不重排，下一波起按新档来敌。 */
+  setDifficulty(d: Difficulty): void {
+    if (this.difficulty === d) return;
+    this.difficulty = d;
+    this.profile = DIFFICULTY[d];
+    this.fields.clear();
+  }
+
+  /** 这一档要打这一波，计划表上是谁：给测试与"来犯预告"读，不含进场时机。 */
+  raidPlan(round: number): string[] {
+    return raidComposition(this.profile, round);
+  }
+
+  /** 还有没进场的涌：回合的"打完没打完"必须算上它，不然两涌之间会被判成清场。 */
+  burstsPending(): number {
+    return this.pendingBursts.reduce((n, b) => n + b.ids.length, 0);
+  }
+
+  /** 这一回合还在不在打：场上有敌人，或还有后续涌没进。 */
+  engaged(): boolean {
+    return this.enemiesAlive() > 0 || this.pendingBursts.length > 0;
+  }
+
+  /** 一回合开打时调用：这一波按档拆成几涌，第一涌立刻进场，其余按间隔陆续进。 */
+  spawnWave(seed: number, round: number): void {
+    const ids = this.raidPlan(round);
+    const points = this.spawnPointsOf(seed);
+    // 新的一波：旧目标楼的流场不再有意义（楼可能被拆了，占地也变了）
+    this.fields.clear();
+    this.pendingBursts = [];
+    if (ids.length === 0) {
+      this.emit('wave', { round, count: 0, at: points[0]! });
+      return;
+    }
+    const size = Math.max(1, this.profile.burstSize);
+    const groups: string[][] = [];
+    for (let i = 0; i < ids.length; i += size) groups.push(ids.slice(i, i + size));
+    groups.forEach((g, gi) => {
+      // 多处来点轮转分派：简单档"从三面来"就是这么来的
+      const point = points[gi % points.length]!;
+      if (gi === 0) this.emitBurst(g, point);
+      else this.pendingBursts.push({ ids: g, at: gi * this.profile.burstGapSeconds, point });
+    });
+    this.emit('wave', { round, count: ids.length, at: points[0]! });
+  }
+
+  /** 一涌真进场：按档位的散开半径把这一组铺开，同一格不许叠成一坨。 */
+  private emitBurst(ids: string[], at: GridPos): void {
+    for (const unitId of ids) {
+      if (this.size >= this.maxUnits) {
+        this.capped++;
+        continue;
+      }
+      const def = unitDef(unitId);
+      // 黄金角铺开：序号决定位置，不用随机，所以同 seed 同摆法结果一定
+      const k = this.spawnSeq++;
+      const angle = k * 2.399963229728653;
+      const radius = this.profile.scatterTiles * Math.sqrt(((k % 12) + 1) / 12);
+      const w = cellToWorld(at);
+      const cell = this.nearestStandable(worldToCell(w.x + Math.cos(angle) * radius, w.z + Math.sin(angle) * radius));
+      const here = cellToWorld(cell);
+      this.units.push({
+        id: this.nextId++,
+        def,
+        hp: def.hp,
+        x: here.x,
+        z: here.z,
+        home: null,
+        cooldown: 0,
+        specialIn: def.special?.every ?? 0,
+        stun: 0,
+        dead: false,
+        deadFor: 0,
+        knockX: 0,
+        knockZ: 0,
+      });
+    }
   }
 
   private nearestStandable(cell: GridPos): GridPos {
@@ -207,39 +313,6 @@ export class Combat {
       }
     }
     return cell;
-  }
-
-  /** 一回合开打时调用：把这一波敌人放进场。 */
-  spawnWave(seed: number, round: number): void {
-    const ids = raidComposition(round);
-    const at = this.spawnAt(seed);
-    for (let i = 0; i < ids.length; i++) {
-      if (this.size >= this.maxUnits) {
-        this.capped += ids.length - i;
-        break;
-      }
-      const def = unitDef(ids[i]!);
-      // 同一格挤一挤：按序号在 3x3 的小块里散开，别让整波人叠成一个点
-      const cell = this.nearestStandable(pos(at.col + (i % 3) - 1, at.row + Math.floor(i / 3) % 3));
-      const w = cellToWorld(cell);
-      this.units.push({
-        id: this.nextId++,
-        def,
-        hp: def.hp,
-        x: w.x + (i % 3) * 0.02,
-        z: w.z + Math.floor(i / 3) * 0.02,
-        home: null,
-        cooldown: 0,
-        specialIn: def.special?.every ?? 0,
-        stun: 0,
-        dead: false,
-        deadFor: 0,
-        knockX: 0,
-        knockZ: 0,
-      });
-    }
-    this.field = null;
-    this.emit('wave', { round, count: ids.length, at });
   }
 
   /** 兵营把一个小人放进场（由 update 里的读条驱动）。 */
@@ -275,12 +348,23 @@ export class Combat {
     if (this.defeated) return;
     const world = this.opts.world;
 
+    this.drainBursts(dt);
     this.runBarracks(dt, world);
     this.runTowers(dt, world);
     this.runShots(dt, world);
     this.runUnits(dt, world);
 
     this.units = this.units.filter((u) => !u.dead || u.deadFor < 1.2);
+  }
+
+  /** 后续几涌按各自的间隔陆续进场（"慢慢出"落到这一条上）。 */
+  private drainBursts(dt: number): void {
+    if (this.pendingBursts.length === 0) return;
+    for (const b of this.pendingBursts) b.at -= dt;
+    const due = this.pendingBursts.filter((b) => b.at <= 0);
+    if (due.length === 0) return;
+    this.pendingBursts = this.pendingBursts.filter((b) => b.at > 0);
+    for (const b of due) this.emitBurst(b.ids, b.point);
   }
 
   /** 兵营：死一个先从储备补，储备空了才走读条。 */
@@ -533,8 +617,25 @@ export class Combat {
     }
   }
 
-  /** 敌人：沿着流场往最近的自己的楼走，够近了拆楼。 */
+  /** 敌人：沿着流场往它挑中的楼走，够近了拆楼。 */
   private runEnemy(u: Unit, dt: number, world: GameWorld): void {
+    // 困难档：远程敌人会转头射你的兵，先挑奶妈与弓箭手（那句"它会先射你的牧师"归位成真判据）
+    if (this.profile.engageTroops && u.def.range > 1.5) {
+      const prey = this.nearestPrey(u);
+      if (prey) {
+        const d = Math.hypot(prey.x - u.x, prey.z - u.z);
+        if (d <= u.def.range) {
+          if (u.cooldown <= 0) {
+            u.cooldown = u.def.cooldown + this.profile.strikePauseSeconds;
+            this.hurtUnit(prey, u.def.attack);
+            this.emit('impact', { x: prey.x, z: prey.z, y: 0.5, ammo: u.def.attackAnim === 'bowShort' ? 'arrow' : 'magic', splash: 0 });
+          }
+          return;
+        }
+        this.stepToward(u, prey.x, prey.z, dt, world);
+        return;
+      }
+    }
     const own = [...world.buildings.values()].filter((b) => b.built);
     if (own.length === 0) return;
     const objective = this.objective(u, own);
@@ -543,7 +644,8 @@ export class Combat {
     const reach = Math.max(u.def.range, 1.2);
     if (dist <= reach + Math.max(objective.cols, objective.rows) * 0.5) {
       if (u.cooldown <= 0) {
-        u.cooldown = u.def.cooldown;
+        // 简单档的"不急"就落在这里：兵种自己的攻击间隔没动，动的是它打完一下之后的停顿
+        u.cooldown = u.def.cooldown + this.profile.strikePauseSeconds;
         this.hurtBuilding(objective, u.def.attack, world);
       }
       return;
@@ -551,12 +653,31 @@ export class Combat {
     this.followField(u, objective, dt, world);
   }
 
+  /** 这一档眼里"值先打"的兵：奶妈折 2 格、远程折 1 格，其余按距离；索敌半径用兵种自己的 sight。 */
+  private nearestPrey(u: Unit): Unit | null {
+    let best: Unit | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const v of this.units) {
+      if (v.dead || v.def.faction !== 'own') continue;
+      const d = Math.hypot(v.x - u.x, v.z - u.z);
+      if (d > u.def.sight) continue;
+      const fold = v.def.role === 'healer' ? 2 : v.def.role === 'ranged' ? 1 : 0;
+      const score = d - fold;
+      if (score < bestScore) {
+        bestScore = score;
+        best = v;
+      }
+    }
+    return best;
+  }
+
   private objective(u: Unit, own: Building[]): Building {
     let best = own[0]!;
     let bestD = Number.POSITIVE_INFINITY;
     for (const b of own) {
       const c = cellToWorld(this.opts.world.rallyOf(b));
-      const d = Math.hypot(c.x - u.x, c.z - u.z) + (b.def.id === 'hall' ? -2 : 0);
+      // 主城偏置来自档位表：0 = 谁近拆谁，越大越直奔心脏
+      const d = Math.hypot(c.x - u.x, c.z - u.z) + (b.def.id === 'hall' ? -this.profile.hallBias : 0);
       if (d < bestD) {
         bestD = d;
         best = b;
@@ -565,15 +686,16 @@ export class Combat {
     return best;
   }
 
-  /** 流场：目标楼四周往外 BFS 一次，谁的距离小就往谁走。目标换了才重算。 */
+  /** 流场：目标楼四周往外 BFS 一次，谁的距离小就往谁走。同一栋楼复用，换波时整批清。 */
   private followField(u: Unit, target: Building, dt: number, world: GameWorld): void {
     const key = `${target.id}:${target.origin.col},${target.origin.row}`;
-    if (!this.field || this.fieldKey !== key) {
-      this.field = new FlowField(world.map.size, (c) => this.walkable(c, world), this.fieldSeeds(target, world));
-      this.fieldKey = key;
+    let field = this.fields.get(key);
+    if (!field) {
+      field = new FlowField(world.map.size, (c) => this.walkable(c, world), this.fieldSeeds(target, world));
+      this.fields.set(key, field);
     }
     const here = worldToCell(u.x, u.z);
-    const step = this.field.stepToward(here);
+    const step = field.stepToward(here);
     if (!step) {
       this.stepToward(u, ...this.targetPoint(target, world), dt, world);
       return;

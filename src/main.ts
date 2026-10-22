@@ -9,6 +9,7 @@ import './styles/layout.css';
 import './styles/components.css';
 
 import { GameApp } from '@game/GameApp';
+import type { Difficulty } from '@game/config';
 import { Hud } from '@ui/Hud';
 import { installTheme } from '@ui/theme';
 import { giltOf, loadTuning, woodOf } from '@ui/themePrefs';
@@ -26,13 +27,19 @@ function seedFromUrl(fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+/** ?difficulty=easy|normal|hard 直接指定这一局的档位；写错了就当没写（不替玩家猜档）。 */
+function difficultyFromUrl(): Difficulty | undefined {
+  const raw = new URLSearchParams(location.search).get('difficulty');
+  return raw === 'easy' || raw === 'normal' || raw === 'hard' ? raw : undefined;
+}
+
 const container = required<HTMLDivElement>('app');
 const canvas = required<HTMLCanvasElement>('stage');
 const uiHost = required<HTMLDivElement>('ui');
 const splash = document.getElementById('boot');
 
 // boot 是异步的：小人素材包要先取回来
-const app = await GameApp.boot({ container, canvas, seed: seedFromUrl(20261019) });
+const app = await GameApp.boot({ container, canvas, seed: seedFromUrl(20261019), difficulty: difficultyFromUrl() });
 
 // 木纹与镀金是启动时现算的两张小图，必须赶在 HUD 建起来之前挂上 CSS 变量。
 // 参数从玩家偏好里读：他在这台机器上调过什么，开局就是什么长相（没调过 = 默认那套）。

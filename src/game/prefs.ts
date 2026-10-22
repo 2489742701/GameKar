@@ -48,6 +48,7 @@ function browserStore(): KeyValueStore {
 const KEY = {
   neverAskDestroyVein: 'gamekar.pref.neverAskDestroyVein',
   theme: 'gamekar.pref.theme',
+  difficulty: 'gamekar.pref.difficulty',
   save: 'gamekar.save',
 } as const;
 
@@ -78,6 +79,18 @@ export class Prefs {
 
   setThemeId(id: string): void {
     this.store.set(KEY.theme, id);
+  }
+
+  /**
+   * 难度档。这里只管进出字符串，认不认得由 config 的 `difficultyOf` 判 ——
+   * 读回来是别的游戏写歪的值时，回到"正常"而不是照用。
+   */
+  get difficulty(): string | null {
+    return this.store.get(KEY.difficulty);
+  }
+
+  setDifficulty(value: string): void {
+    this.store.set(KEY.difficulty, value);
   }
 
   /** 回合结算时自动写的存档（JSON 串）。读不出来或版本不符时由 world/save 判掉。 */

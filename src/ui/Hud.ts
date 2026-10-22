@@ -6,6 +6,7 @@
  */
 
 import type { GameApp } from '@game/GameApp';
+import { DIFFICULTY, type Difficulty } from '@game/config';
 import { hasRally } from '@game/data/buildings';
 import type { Building } from '@game/world/GameWorld';
 import { ActionDock } from './ActionDock';
@@ -57,7 +58,7 @@ export class Hud {
   ) {
     const world = app.world;
 
-    this.resbar = new ResourceBar(world, () => this.toggleTheme());
+    this.resbar = new ResourceBar(world, () => this.toggleTheme(), () => this.cycleDifficulty(), () => this.difficultyChip());
     this.bars = new BuildingBars(world, app.combat);
     this.raid = new RaidPreview(world, app.combat, app.seed);
     this.defeat = new DefeatPanel(() => {
@@ -151,9 +152,12 @@ export class Hud {
     world.bus.on('round:changed', () => {
       this.raid.refresh();
       this.bars.refresh();
+      // 难度牌上那句"→某档"要在换档那一刻收掉
+      this.resbar.refresh();
     });
     world.bus.on('game:over', ({ round }) => {
       this.defeat.show({
+        difficultyLabel: DIFFICULTY[app.combat.difficulty].label,
         round,
         buildings: world.buildings.size,
         enemies: app.combat.enemiesAlive(),
@@ -276,6 +280,22 @@ export class Hud {
 
   private toggleTheme(): void {
     this.theme.toggle();
+  }
+
+  /** 顶栏那颗难度牌：简 → 正常 → 困难 → 简，一直循环。 */
+  private cycleDifficulty(): void {
+    const order: Difficulty[] = ['easy', 'normal', 'hard'];
+    const next = order[(order.indexOf(this.app.difficulty) + 1) % order.length]!;
+    this.app.setDifficulty(next);
+    this.resbar.refresh();
+  }
+
+  /** 正在打的这波不换节奏，所以牌上要把"排在下一波"的那个也写出来。 */
+  private difficultyChip(): string {
+    const now = DIFFICULTY[this.app.combat.difficulty].label;
+    const picked = this.app.pendingDiff;
+    if (!picked || picked === this.app.combat.difficulty) return `难度·${now}`;
+    return `难度·${now}→${DIFFICULTY[picked].label}`;
   }
 
   /** 点旗子袋：袋空着也给一句话，别让玩家按了个没反应还不吭声。 */

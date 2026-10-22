@@ -11,6 +11,8 @@
 import { make, type HudWidget } from './dom';
 
 export interface DefeatStats {
+  /** 这一局走的哪一档：成绩要和档位一起看，不然"撑到 7 波"没有可比性 */
+  difficultyLabel: string;
   round: number;
   buildings: number;
   enemies: number;
@@ -29,7 +31,7 @@ export class DefeatPanel implements HudWidget {
       make('div', { class: 'defeat__title', text: '议事厅塌了' }),
       make('p', {
         class: 'defeat__hint',
-        text: '领地的心脏被打掉，这一局到此。同一张地图重来一次 —— 抽卡序列也一样，正好试另一套摆法。',
+        text: '领地的心脏被打掉，这一局到此。同一张地图重来一次 —— 抽卡序列也一样，正好试另一套摆法。难度还是刚才那一档，要换就点顶栏的「难度」。',
       }),
       this.lines,
       make('button', { class: 'btn btn--gold defeat__btn', text: '重开这一局', onClick: () => onRestart() }),
@@ -46,6 +48,7 @@ export class DefeatPanel implements HudWidget {
     this.shown = true;
     this.el.hidden = false;
     this.lines.replaceChildren(
+      row('难度', stats.difficultyLabel),
       row('撑过回合', String(stats.round)),
       row('还剩建筑', String(stats.buildings)),
       row('场上敌人', String(stats.enemies)),

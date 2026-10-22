@@ -15,6 +15,13 @@ import type { Combat } from '@game/systems/Combat';
 /** 提前几秒开始预告。 */
 export const PREVIEW_SECONDS = 15;
 
+/**
+ * 预告那句文案。单独抽出来是因为档位会让一波从几处边缘同时来 ——
+ * 这时候还写"从这边来"就是假话。判据只这一处，纯函数，不碰 DOM 也能锁。
+ */
+export const raidPreviewLabel = (roundIndex: number, points: number): string =>
+  `第 ${roundIndex} 波 · ${points > 1 ? `从 ${points} 处来` : '从这边来'}`;
+
 export class RaidPreview implements HudWidget {
   readonly el = make('div', { class: 'raid', attrs: { hidden: '' } });
   private readonly label = make('span', { class: 'raid__label' });
@@ -38,7 +45,8 @@ export class RaidPreview implements HudWidget {
     const soon = phase === 'prep' && phaseSecondsLeft <= PREVIEW_SECONDS;
     this.el.hidden = !soon;
     if (!soon) return;
-    setText(this.label, `第 ${roundIndex} 波 · 从这边来`);
+    const points = this.combat.spawnPointsOf(this.seed).length;
+    setText(this.label, raidPreviewLabel(roundIndex, points));
     setText(this.clock, `${Math.ceil(phaseSecondsLeft)}s`);
   }
 

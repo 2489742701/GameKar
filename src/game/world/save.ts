@@ -14,10 +14,14 @@ import { buildingDef } from '@game/data/buildings';
 import type { Combat } from '@game/systems/Combat';
 import type { GridPos } from '@engine/math/Grid';
 import { pos } from '@engine/math/Grid';
-import type { ResourceId } from '@game/config';
+import type { Difficulty, ResourceId } from '@game/config';
 import type { GameWorld } from './GameWorld';
 
-export const SAVE_VERSION = 1;
+/**
+ * v2：档里开始记"这一局是哪一档"。
+ * v1 的整份丢掉（不猜）：不知道来敌节奏的存档，读回来等于换了一个游戏。
+ */
+export const SAVE_VERSION = 2;
 
 export interface SavedBuilding {
   /** 建筑表 id */
@@ -38,6 +42,8 @@ export interface SavedBuilding {
 export interface SavedWorld {
   v: number;
   seed: number;
+  /** 这一局的难度档：决定接下来几波怎么来 */
+  diff: Difficulty;
   time: number;
   res: Record<ResourceId, number>;
   yields: Record<ResourceId, number>;
@@ -67,6 +73,7 @@ export function snapshot(world: GameWorld, combat: Combat): SavedWorld {
   return {
     v: SAVE_VERSION,
     seed: world.seed,
+    diff: combat.difficulty,
     time: world.time,
     res: { ...world.resources },
     yields: { ...world.cardYields },
@@ -91,6 +98,8 @@ export function parseSave(raw: string | null): SavedWorld | null {
   if (s.v !== SAVE_VERSION) return null;
   if (typeof s.seed !== 'number' || !Array.isArray(s.buildings)) return null;
   if (!s.res || !s.round) return null;
+  // 档位也按"形状对不对"判：不认识的值就是坏档，不替它猜一个
+  if (s.diff !== 'easy' && s.diff !== 'normal' && s.diff !== 'hard') return null;
   if (s.buildings.some((b) => !b || typeof b.d !== 'string' || !buildingDefSafe(b.d))) return null;
   return s as SavedWorld;
 }
@@ -110,6 +119,8 @@ function buildingDefSafe(id: string): boolean {
  * 返回没盖成的楼数（正常应为 0：地形由同一个 seed 生成，格子一定还在）。
  */
 export function applySave(world: GameWorld, combat: Combat, saved: SavedWorld): number {
+  // 先回到那一局记录的档位：来敌节奏是那局的一部分，不跟玩家后来改的偏好走
+  combat.setDifficulty(saved.diff);
   world.loadLedger({
     resources: saved.res,
     cardYields: saved.yields,

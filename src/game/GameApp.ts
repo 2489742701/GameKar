@@ -21,7 +21,7 @@ import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { PointerInput } from '@engine/input/PointerInput';
 import { Viewport, type OrientationMode } from '@engine/viewport/Viewport';
-import { CAMERA, DUDE, ROUNDS, SIM_HZ, WORLD } from '@game/config';
+import { CAMERA, DIFFICULTY, DUDE, ROUNDS, SIM_HZ, WORLD, difficultyOf, type Difficulty } from '@game/config';
 import { buildingName } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService, type Purchase } from '@game/gacha/GachaService';
@@ -50,6 +50,8 @@ export interface GameAppOptions {
   canvas: HTMLCanvasElement;
   /** 换 seed 就换一张图；同一个 seed 永远同一张图，连抽卡序列和小人长相也一样 */
   seed?: number;
+  /** 难度档。给了就压过存档与偏好里的记录（`?difficulty=` 走这一条）。 */
+  difficulty?: Difficulty;
   orientation?: OrientationMode;
   /** 小人素材包位置；默认 /assets/dudes */
   dudesUrl?: string;
@@ -125,6 +127,11 @@ export class GameApp {
 
   readonly prefs = new Prefs();
 
+  /** 开局显式指定的档：它压过存档与偏好里的记录 */
+  private readonly forced: Difficulty | undefined;
+  /** 玩家刚点下的档：正在打的这一波照旧，下一波起才换 */
+  private pendingDifficulty: Difficulty | null = null;
+
   private constructor(options: GameAppOptions, pack: DudePack | null) {
     this.seed = options.seed ?? WORLD.seed;
     this.pack = pack;
@@ -161,7 +168,13 @@ export class GameApp {
 
     // ---------------------------------------------------------------- 战斗
     // 战斗内核不依赖素材包：没有小人贴图也照样打，只是地上看不到人
-    this.combat = new Combat({ world: this.world, maxUnits: ROUNDS.maxRaidUnits });
+    // 档位优先级：显式给的 > 偏好记的 > 默认正常。存档再往上一层，读到档时才盖过来。
+    this.forced = options.difficulty;
+    this.combat = new Combat({
+      world: this.world,
+      maxUnits: ROUNDS.maxRaidUnits,
+      difficulty: options.difficulty ?? difficultyOf(this.prefs.difficulty),
+    });
     this.combat.on('impact', (e) => {
       this.fx.impact(e.x, e.z, this.world.map.surfaceY(worldToCell(e.x, e.z)) + e.y, e.ammo, e.splash);
     });
@@ -171,8 +184,8 @@ export class GameApp {
       // 'game:over' 不在这里发：判负事件是在楼被拆掉**之前**发的，
       // 那时候"还剩几栋楼"会把议事厅自己也算进去。等它真从账上消失再说。
     });
-    // 回合的"敌人还在不在"由战斗内核回答：这就是 prep/raid 的唯一交接点
-    this.world.raidActive = () => this.combat.enemiesAlive() > 0;
+    // 回合的"还在不在打"由战斗内核回答：场上有人 **或还有后续几涌没进**，都算还在打
+    this.world.raidActive = () => this.combat.engaged();
 
     // ---------------------------------------------------------------- 小人
     // 素材包没加载成功时这三个就是 null，玩法与画面其余部分照常工作
@@ -287,9 +300,30 @@ export class GameApp {
     }
     this.restoring = true;
     const skipped = applySave(this.world, this.combat, saved);
+    // 档里记的档位由 applySave 应用；显式指定的（`?difficulty=`）压过它
+    if (this.forced) this.combat.setDifficulty(this.forced);
     this.restoring = false;
     if (skipped > 0) console.warn(`[GameApp] 存档里有 ${skipped} 栋楼没摆回去（格子被占或越界）`);
     return true;
+  }
+
+  /** 这一局现在按哪一档打（含"已点但还没生效"的那一个）。 */
+  get difficulty(): Difficulty {
+    return this.pendingDifficulty ?? this.combat.difficulty;
+  }
+
+  /** 还没生效的那一档：UI 要把"下一波才换"这件事摆到明面上。 */
+  get pendingDiff(): Difficulty | null {
+    return this.pendingDifficulty;
+  }
+
+  /**
+   * 选难度档：立刻记进偏好，但**下一波才换节奏**。
+   * 正在打的这波不许中途变，否则"半波敌人突然变聪明"这种没法解释的事会发生。
+   */
+  setDifficulty(d: Difficulty): void {
+    this.prefs.setDifficulty(d);
+    this.pendingDifficulty = d;
   }
 
   /** 重开：先清档，否则读档会把"已经输了的那局"再端回来。跳转由 UI 层做。 */
@@ -336,7 +370,14 @@ export class GameApp {
 
     // 回合进入接敌 = 这一波敌人进场。准备阶段什么都不发生，正是用户要的"不涨钱"
     this.bus.on('round:changed', ({ phase, index }) => {
-      if (phase === 'raid' && !this.defeated) this.combat.spawnWave(this.seed, index);
+      if (phase !== 'raid' || this.defeated) return;
+      // 换档只在这一刻生效：正在打的这波不许中途变节奏
+      if (this.pendingDifficulty && this.pendingDifficulty !== this.combat.difficulty) {
+        this.combat.setDifficulty(this.pendingDifficulty);
+        this.bus.emit('toast', { text: `从这一波起改走「${DIFFICULTY[this.combat.difficulty].label}」`, tone: 'ok' });
+      }
+      this.pendingDifficulty = null;
+      this.combat.spawnWave(this.seed, index);
     });
 
     // 放置模式的变化只有一个源头：控制器自己广播，
