@@ -8,7 +8,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 225 条回归
+npm run check        # 类型检查 + 230 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -71,7 +71,7 @@ src/
 │                       头顶条 / 来犯预告 / 判负 / 吐司 / 确认框 / 材质面板）+ Hud.ts（组装）
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
-                      roster · rally · combat · rounds · theme · readouts —— 共 225 条
+                      roster · rally · combat · rounds · theme · readouts —— 共 230 条
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**
@@ -190,7 +190,14 @@ tests/                grid · random · terrain · world · gacha · data · geo
 
 | 位置 | 内容 | 什么时候出现 |
 | --- | --- | --- |
+| 顶栏 | **像素图标 + 数字**：金币 / 晶钻 / 面包（现量/上限）/ 人口（用/可用） | 一直在 |
+| 建造托盘 | 造价也是图标 + 数字（不再写"金币 120"那种汉字） | 打开建造托盘 |
+| 信息卡 | **战力一行**：剑=单发伤害或兵的攻击、盾=防御、心=兵的血、人=要几个手、面包=每回合底产 | 选中一座楼 |
 | 楼头顶 | **血条六格**（剩两格以下翻红） | 掉过血才挂；满血不挂，一屏幕条等于没有信息 |
+
+图标是**代码画出来的 8×8 字符画**（`src/ui/icons.ts`，形状就是一串字符，改形状只改那串），
+不用 emoji/字体符号：符号会随系统换字形，而图形必须跟数字对得上。
+伤害数只从开火那一处拿（`Combat.towerDamage`），所以卡片上的剑和真正打出去的弹丸不会是两个字。
 | 楼头顶 | **生产读条** + 一句 `生产中 40%` / `补 2/3 · 储备 1` / `满编 3/3` | 兵没满编时 |
 | 楼头顶 | **弹夹**：`Lv2 · 装填 3.4s` / `Lv1 · 弹夹 5/6` | 塔打空或装填中 |
 | 楼头顶 | 人口头像 + ✕ | 排不到人手（缺员的塔不开火、兵营不产兵） |

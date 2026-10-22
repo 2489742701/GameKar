@@ -5,9 +5,10 @@
  * 这条区别是玩法本身，所以读数上也要看得出来，不能四个资源都挂个"/s"糊过去。
  */
 
-import { RESOURCE_META, type ResourceId } from '@game/config';
+import type { ResourceId } from '@game/config';
 import type { GameWorld } from '@game/world/GameWorld';
-import { cssColor, formatNumber, formatRate, make, setText, type HudWidget } from './dom';
+import { iconEl, resourceIcon, type IconName } from './icons';
+import { formatNumber, formatRate, make, setText, type HudWidget } from './dom';
 
 const ORDER: ResourceId[] = ['gold', 'crystal'];
 /** 容积型读数：显示成 现量/上限，不显示速率 */
@@ -29,45 +30,23 @@ export class ResourceBar implements HudWidget {
     onCycleDifficulty?: () => void,
     private readonly difficultyLabel?: () => string,
   ) {
-    for (const id of ORDER) {
-      const meta = RESOURCE_META[id];
+    // 图形一律是画出来的像素图标，数字就贴在它右边（原来是四个纯色圆点，分不出金币与面包）
+    const item = (name: IconName, value: HTMLElement, rate: HTMLElement): void => {
+      this.el.append(make('div', { class: 'resbar__item' }, [iconEl(name), value, rate]));
+    };
+    const slot = (id: ResourceId): void => {
       const v = make('span', { class: 'resbar__val' });
       const r = make('span', { class: 'resbar__rate' });
       this.value.set(id, v);
       this.rate.set(id, r);
-      this.el.append(
-        make('div', { class: 'resbar__item' }, [
-          make('i', { class: 'resbar__icon', attrs: { style: `color:${cssColor(meta.color)}` } }),
-          v,
-          r,
-        ]),
-      );
-    }
-
-    for (const id of STOCK) {
-      const meta = RESOURCE_META[id];
-      const v = make('span', { class: 'resbar__val' });
-      const r = make('span', { class: 'resbar__rate' });
-      this.value.set(id, v);
-      this.rate.set(id, r);
-      this.el.append(
-        make('div', { class: 'resbar__item' }, [
-          make('i', { class: 'resbar__icon', attrs: { style: `color:${cssColor(meta.color)}` } }),
-          v,
-          r,
-        ]),
-      );
-    }
+      item(resourceIcon[id]!, v, r);
+    };
+    for (const id of ORDER) slot(id);
+    for (const id of STOCK) slot(id);
 
     this.popValue = make('span', { class: 'resbar__val' });
     this.popRate = make('span', { class: 'resbar__rate' });
-    this.el.append(
-      make('div', { class: 'resbar__item' }, [
-        make('i', { class: 'resbar__icon', attrs: { style: `color:${cssColor(0xff9ec4)}` } }),
-        this.popValue,
-        this.popRate,
-      ]),
-    );
+    item('pop', this.popValue, this.popRate);
 
     this.round = make('span', { class: 'resbar__round num' });
     const themeBtn = make('button', { class: 'resbar__theme', text: '材质', onClick: () => onTheme?.() });

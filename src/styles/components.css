@@ -28,13 +28,37 @@
   border-color: rgba(255, 107, 107, 0.7);
 }
 
-.resbar__icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 6px;
+/* 像素图标（ui/icons.ts 画的）：只摆位，尺寸由 iconEl 决定 */
+.ico {
   flex: none;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 10px currentColor;
-  background: currentColor;
+  align-self: center;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.55));
+}
+
+/* 信息卡上的战力一行：图标 + 数字 */
+.selcard__power {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: -2px;
+}
+
+.powerbit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-num);
+  font-size: var(--fs-sm);
+  color: var(--gold-hi);
+}
+
+/* 建造托盘的造价：一枚图标贴一个数 */
+.tray__card__bit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 7px;
 }
 
 .resbar__val {

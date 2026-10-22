@@ -7,7 +7,9 @@
 import { TERRAIN } from '@game/config';
 import type { Building, GameWorld, Selection } from '@game/world/GameWorld';
 import type { Combat } from '@game/systems/Combat';
+import { powerOf } from '@game/systems/Readouts';
 import { buildingFacts, tileMeaning } from './facts';
+import { iconEl } from './icons';
 import { cssColor, make, type HudWidget } from './dom';
 
 export class SelectionCard implements HudWidget {
@@ -86,6 +88,26 @@ export class SelectionCard implements HudWidget {
     );
   }
 
+  /**
+   * 战力一行：图标 + 数字（剑 = 攻击，盾 = 防御，心 = 血，人 = 要几个手，面包 = 每回合底产）。
+   * 数一律来自 `powerOf`，那一处又只从开火与伤害的地方拿数 —— 卡片不会跟实战算出两个数。
+   */
+  private powerStrip(b: Building): HTMLElement | null {
+    const bits = powerOf(b, this.combat);
+    // 塔楼、田地这类"既不打人也不用人"的楼，这行干脆不出现，别留一个空框
+    if (bits.length === 0) return null;
+    const row = make('div', { class: 'selcard__power' });
+    for (const bit of bits) {
+      row.append(
+        make('span', { class: 'powerbit', attrs: { title: bit.title } }, [
+          iconEl(bit.icon),
+          make('span', { class: 'powerbit__n num', text: bit.value }),
+        ]),
+      );
+    }
+    return row;
+  }
+
   private renderBuilding(b: Building): void {
     this.current = b;
     this.lastBuilt = b.built;
@@ -99,8 +121,10 @@ export class SelectionCard implements HudWidget {
 
     const facts = buildingFacts(this.world, b, this.runnersOf, this.combat);
 
+    const strip = this.powerStrip(b);
     this.el.append(
       make('div', { class: 'selcard__head' }, [make('span', { class: 'selcard__name', text: b.def.name }), this.chip]),
+      ...(strip ? [strip] : []),
       make('div', { class: 'label', text: b.def.blurb }),
       this.rows([
         ['坐标', `${b.origin.col}, ${b.origin.row}`],

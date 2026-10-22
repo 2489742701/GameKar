@@ -10,6 +10,7 @@ import { STARTER_POOL } from '@game/data/cards';
 import { RESOURCE_META, type ResourceId } from '@game/config';
 import type { PocketState } from '@game/systems/FlagPocket';
 import type { GameWorld } from '@game/world/GameWorld';
+import { iconEl, resourceIcon } from './icons';
 import { make, setFlag, setText, type HudWidget } from './dom';
 
 export interface DockActions {
@@ -123,9 +124,13 @@ export class ActionDock implements HudWidget {
     }
 
     for (const def of owned) {
-      const costLabel = Object.entries(def.cost)
-        .map(([res, amount]) => `${RESOURCE_META[res as ResourceId].label} ${amount}`)
-        .join(' ') || '免费';
+      // 造价画成"图标 + 数"：卡片一屏七八张，读汉字比读图形慢一档
+      const costBits = Object.entries(def.cost).map(([res, amount]) =>
+        make('span', { class: 'tray__card__bit', attrs: { title: RESOURCE_META[res as ResourceId]?.label ?? res } }, [
+          iconEl(resourceIcon[res] ?? 'gold'),
+          make('span', { class: 'num', text: String(amount ?? 0) }),
+        ]),
+      );
       this.tray.append(
         make(
           'button',
@@ -136,7 +141,9 @@ export class ActionDock implements HudWidget {
           },
           [
             make('div', { class: 'tray__card__name', text: `${def.name} ×${this.world.permitCount(def.id)}` }),
-            make('div', { class: 'tray__card__cost', text: costLabel }),
+            costBits.length > 0
+              ? make('div', { class: 'tray__card__cost' }, costBits)
+              : make('div', { class: 'tray__card__cost', text: '免费' }),
           ],
         ),
       );

@@ -11,6 +11,7 @@ import { BREAD, DIFFICULTY, ROUNDS, type Difficulty } from '@game/config';
 import { buildingDef } from '@game/data/buildings';
 import { unitDef } from '@game/data/units';
 import { Combat, type Unit } from '@game/systems/Combat';
+import { powerOf } from '@game/systems/Readouts';
 import { GameWorld, type Building } from '@game/world/GameWorld';
 import { TileMap } from '@game/world/TileMap';
 import { raidPreviewLabel } from '@ui/RaidPreview';
@@ -231,6 +232,43 @@ describe('塔的弹药、装填与升级', () => {
     combat.update(2);
     const totalHp = combat.liveUnits().reduce((n, u) => n + u.hp, 0);
     expect(totalHp).toBeLessThan(hpBefore * 5); // 五个敌人里至少挨了一下
+  });
+
+  /**
+   * 信息卡上那枚"剑"的数，必须等于弹丸真正带走的数 —— 两处各算一遍必出一个假话。
+   * 升到 Lv2 再对一次：等级缩放只许有一处公式。
+   */
+  it('卡片上的攻击力 = 弹丸真正带的数（Lv1 与 Lv2 都相等）', () => {
+    const { world, combat, at } = arena();
+    const tower = build(world, 'arrowTower', at(0));
+    putEnemyNear(combat, tower, 3);
+
+    combat.update(0.05);
+    const shot1 = combat.liveShots()[0];
+    expect(shot1).toBeTruthy();
+    const card1 = powerOf(tower, combat).find((b) => b.icon === 'sword');
+    expect(card1).toBeTruthy();
+    expect(Number(card1!.value)).toBe(shot1!.damage);
+
+    combat.setTowerLevel(tower.id, 2);
+    let shot2: ReturnType<typeof combat.liveShots>[number] | undefined;
+    for (let i = 0; i < 20 && !shot2; i++) {
+      combat.update(0.05);
+      shot2 = combat.liveShots().find((s) => s.damage !== shot1!.damage);
+    }
+    expect(shot2, '升到 Lv2 后打出的那一发应当更痛').toBeTruthy();
+    expect(Number(powerOf(tower, combat).find((b) => b.icon === 'sword')!.value)).toBe(shot2!.damage);
+  });
+
+  it('兵营卡片上是队里那个兵的攻防血：骑士 12 / 5 / 60', () => {
+    const { world, at } = arena();
+    const barracks = build(world, 'barracks', at(0));
+    const bits = powerOf(barracks);
+    const byIcon = new Map(bits.map((b) => [b.icon, b.value]));
+    expect(byIcon.get('sword')).toBe('12');
+    expect(byIcon.get('shield')).toBe('5');
+    expect(byIcon.get('heart')).toBe('60'); // 兵营这行的心是兵的血；楼的血走头顶那条血格
+    expect(byIcon.get('pop')).toBe('4'); // 兵营要 4 个人手
   });
 
   it('升级只花钱与水晶，不扣许可、不抽卡；Lv3 之后不再收钱', () => {

@@ -141,3 +141,44 @@ export function squadNames(b: Building): string {
   return squad.map((m) => `${unitDef(m.unitId).name}×${m.size}`).join('、');
 }
 
+/** 一格图标 + 一个数：屏幕上那种"像游戏"的战力条。 */
+export interface PowerBit {
+  icon: 'sword' | 'shield' | 'heart' | 'pop' | 'bread';
+  value: string;
+  /** 人话说明（也当 title 提示用），免得只有图形没处问 */
+  title: string;
+}
+
+/**
+ * 一栋楼的战力读数。数字一律从**开火与伤害的那一处**拿：
+ * 塔伤走 `combat.towerDamage()`（含等级缩放），兵走单位表本体。
+ * `combat` 缺席时（早期夹具、素材没加载）塔伤退回表上的基线值，不显示放大后的数。
+ *
+ * 楼自己的血量不在这行里 —— 它已经有头顶那条血格了，再画一颗心只会让人猜"这两颗心哪个算哪个"。
+ */
+export function powerOf(b: Building, combat?: Combat): PowerBit[] {
+  const out: PowerBit[] = [];
+  const spec = b.def.tower;
+  if (spec) {
+    const level = combat ? combat.towerState(b).level : 1;
+    const dmg = combat ? combat.towerDamage(b) : spec.damage;
+    out.push({ icon: 'sword', value: String(dmg), title: `Lv${level} 单发伤害` });
+  }
+  for (const m of b.def.squad ?? []) {
+    const u = unitDef(m.unitId);
+    out.push({ icon: 'sword', value: String(u.attack), title: `${u.name} 的攻击（队里 ${m.size} 个）` });
+    out.push({ icon: 'shield', value: String(u.defense), title: `${u.name} 的防御` });
+    out.push({ icon: 'heart', value: String(u.hp), title: `${u.name} 的血量` });
+  }
+  if (b.def.population > 0) {
+    out.push({ icon: 'pop', value: String(b.def.population), title: '要几个人手' });
+  }
+  if (b.def.populationCap) {
+    out.push({ icon: 'pop', value: `+${b.def.populationCap}`, title: '给人口上限' });
+  }
+  if (b.def.breadPerRound) {
+    out.push({ icon: 'bread', value: `+${b.def.breadPerRound.base}`, title: '每回合面包底产（贴田另加）' });
+  }
+  return out;
+}
+

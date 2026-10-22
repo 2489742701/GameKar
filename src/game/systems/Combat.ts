@@ -436,7 +436,7 @@ export class Combat {
         toZ: target.z,
         t: 0,
         seconds: flight,
-        damage: Math.round(spec.damage * level.damage),
+        damage: this.towerDamage(b),
         splash: spec.splashTiles ?? 0,
         targetUnit: target.kind === 'unit' ? target.unit.id : null,
         targetBuilding: null,
@@ -444,6 +444,7 @@ export class Combat {
     }
   }
 
+  /** 空仓装填、弹夹与等级 —— 头顶条与信息卡共用这一份。 */
   towerState(b: Building): TowerState {
     let s = this.towers.get(b.id);
     if (!s) {
@@ -451,6 +452,16 @@ export class Combat {
       this.towers.set(b.id, s);
     }
     return s;
+  }
+
+  /**
+   * 这一发现在多痛（等级缩放之后）。开火与读数都走这一处：
+   * 信息卡上写 8、实际打 10 这种事，只可能发生在两处各算一遍的时候。
+   */
+  towerDamage(b: Building): number {
+    const spec = b.def.tower;
+    if (!spec) return 0;
+    return Math.round(spec.damage * levelScale(this.towerState(b).level).damage);
   }
 
   /** 读档用：把塔的等级摆回去（不花钱、不判许可）。 */
