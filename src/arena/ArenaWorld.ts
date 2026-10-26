@@ -65,6 +65,8 @@ export interface ArenaUnit {
   maxHp: number;
   cooldown: number;
   stun: number;
+  /** 玩家下达的移动目标（世界坐标）。null = 自己朝对面核心推进 */
+  order: { x: number; z: number } | null;
 }
 
 /** 一发"看得见的"弹丸。伤害已结算，这里只是让玩家看到"从塔顶飞过去"的那一下。 */
@@ -207,6 +209,22 @@ export class ArenaWorld {
   // ---------------------------------------------------------------- 出牌
 
   /**
+   * 指挥：让己方所有兵朝某一点推进（用户问的"怎么控制单位"）。
+   * 只是改移动目标，不改变它们"路上遇敌就打"的本能 —— 想撤回来也是同一条指令。
+   * 到达后自动清空，恢复默认的"朝对面核心推进"。返回受影响的人数。
+   */
+  command(side: Side, col: number, row: number): number {
+    const at = { x: col + 0.5, z: row + 0.5 };
+    let n = 0;
+    for (const u of this.units) {
+      if (u.side !== side || u.hp <= 0) continue;
+      u.order = { ...at };
+      n++;
+    }
+    return n;
+  }
+
+  /**
    * 打出手牌第 slot 张。
    * 失败原因会原样给 HUD 用：金不够 / 半场不对 / 这格被占 / 卡还在冷却。
    */
@@ -269,6 +287,7 @@ export class ArenaWorld {
           maxHp: def.hp,
           cooldown: 0,
           stun: 0,
+          order: null,
         });
         i++;
       }
@@ -325,7 +344,13 @@ export class ArenaWorld {
       if (b.fireIn > 0) continue;
       const spec = b.kind === 'arrowTower' ? TOWER.arrow : TOWER.cannon;
       const c = this.buildingCenter(b);
-      const target = this.nearestEnemyUnit(b.side, c.x, c.z, spec.range);
+      /**
+       * 射程一律**从占地边缘量**，和"兵打建筑时按边缘算距离"同一口径。
+       * 3×3 之后这条必须改：以前塔从中心量 4.4 格，只够到边缘外 2.9 格，
+       * 而弓箭手在边缘外 3.6 格就能打到它 —— 差 0.7 格，正好白嫖整座炮塔。
+       */
+      const edge = Math.max(b.cols, b.rows) / 2;
+      const target = this.nearestEnemyUnit(b.side, c.x, c.z, spec.range + edge);
       if (!target) continue;
       b.fireIn = spec.interval;
       b.aim = Math.atan2(target.z - c.z, target.x - c.x);
@@ -377,6 +402,20 @@ export class ArenaWorld {
         if (foe.unit) this.hurtUnit(foe.unit, def.attack);
         else if (foe.building) this.hurtBuilding(foe.building, def.attack);
         continue;
+      }
+
+      // 有玩家指令就先朝那儿走；走到了自动清空、恢复默认推进
+      if (u.order) {
+        const dx = u.order.x - u.x;
+        const dz = u.order.z - u.z;
+        const d = Math.hypot(dx, dz);
+        if (d <= 0.35) u.order = null;
+        else {
+          const step = Math.min(d, def.speed * dt);
+          u.x += (dx / d) * step;
+          u.z += (dz / d) * step;
+          continue;
+        }
       }
 
       // 没得打就朝对方核心走；路上被谁挡住就贴上去打（下面这一支）

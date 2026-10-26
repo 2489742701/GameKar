@@ -115,7 +115,23 @@ export class ArenaApp {
     apron.rotation.x = -Math.PI / 2;
     apron.position.set(this.map.size.cols / 2, -0.06, this.map.size.rows / 2);
     apron.receiveShadow = true;
-    this.scene.add(apron, this.ground.group);
+
+    // 中场土黄色分隔线：一条发亮的薄板贴在草地上，压在两半场之间。
+    // 抬 0.02 是为了不和地皮共面打架（z-fighting 会闪成锯齿）。
+    const divider = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.7, this.map.size.rows),
+      new THREE.MeshStandardMaterial({
+        color: 0xc8a24c,
+        emissive: 0xa9762c,
+        emissiveIntensity: 0.28,
+        roughness: 0.75,
+        transparent: true,
+        opacity: 0.85,
+      }),
+    );
+    divider.rotation.x = -Math.PI / 2;
+    divider.position.set(FIELD.midCol, 0.52, this.map.size.rows / 2);
+    this.scene.add(apron, divider, this.ground.group);
     this.gallery = pack ? new DudeGallery(pack) : null;
 
     this.loop = new GameLoop({
@@ -252,11 +268,15 @@ export class ArenaApp {
 
     const building = this.buildingAtCell(cell);
     if (this.selectedSlot < 0) {
-      // 没选手牌：点自家兵营 = 准备挪旗；点空地什么都不做
+      // 没选手牌：点自家兵营 = 准备挪旗
       if (building && building.side === 'blue' && building.kind === 'barracks') {
         this.selectedBuilding = building.id;
         this.opts.onToast?.('再点一处地面，把出兵旗放过去');
+        return;
       }
+      // 点空地 = 指挥己方所有兵往那儿走（再点一次对面也不管用，它们路上遇敌照打）
+      const n = this.world.command('blue', cell.col, cell.row);
+      this.opts.onToast?.(n > 0 ? `全军向 (${cell.col}, ${cell.row}) 推进` : '场上还没有你的兵', n > 0 ? 'ok' : 'warn');
       return;
     }
 

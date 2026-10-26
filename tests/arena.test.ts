@@ -37,11 +37,14 @@ describe('金币：上限 20、按秒回、开局 5', () => {
 
   it('花出去的钱不会把金库打穿（金不够时出不了牌）', () => {
     const world = new ArenaWorld({ seed: 1 });
-    give(world, 'cannonTower'); // 7 费，开局只有 5
+    // 开局 8 金：先压到只剩 2，再试 7 费的炮塔
+    world.gold.blue = 2;
+    give(world, 'cannonTower');
     const res = world.playCard('blue', 0, 6, 12);
     expect(res.ok).toBe(false);
     expect(res.reason).toContain('金币不够');
-    expect(world.gold.blue).toBe(ECONOMY.start);
+    // 没付成就是一分没动（这里是先压到 2 金的夹具）
+    expect(world.gold.blue).toBe(2);
   });
 });
 
@@ -155,6 +158,7 @@ describe('兵：会往前走、会互相打', () => {
       maxHp: 26,
       cooldown: 0,
       stun: 0,
+      order: null,
     });
     const red = world.units.find((u) => u.id === 9999)!;
     run(world, 2);
@@ -178,6 +182,7 @@ describe('胜负：拆掉对方核心才算', () => {
       maxHp: 80,
       cooldown: 0,
       stun: 0,
+      order: null,
     });
     run(win, 3);
     expect(win.outcome).toBe('win');
@@ -195,6 +200,7 @@ describe('胜负：拆掉对方核心才算', () => {
       maxHp: 80,
       cooldown: 0,
       stun: 0,
+      order: null,
     });
     run(lose, 3);
     expect(lose.outcome).toBe('lose');
@@ -233,5 +239,57 @@ describe('场地口径', () => {
     expect(red.col).toBeGreaterThanOrEqual(FIELD.midCol);
     expect(world.cellFree(blue.col, blue.row, blue.cols, blue.rows)).toBe(false); // 自己占着
     expect(blue.hp).toBe(CORE.hp);
+  });
+});
+
+describe('指挥与射程口径', () => {
+  it('点地面 = 全军朝那儿走，到了自动恢复推进', () => {
+    const world = new ArenaWorld({ seed: 21 });
+    give(world, 'archers');
+    world.playCard('blue', 0, 6, 9);
+    const unit = world.units[0]!;
+    unit.x = 8;
+    unit.z = 10;
+    const n = world.command('blue', 12, 10);
+    expect(n).toBeGreaterThan(0);
+    expect(unit.order).not.toBeNull();
+    run(world, 6);
+    // 走过去了：要么到了（order 清空），要么已经在打东西（位置应当已经跨过中间那条线）
+    expect(unit.x).toBeGreaterThan(9.5);
+  });
+
+  it('塔的射程从占地边缘量：站在塔边缘外 3.5 格的弓手会被炮塔打到（不再白嫖）', () => {
+    const world = new ArenaWorld({ seed: 22 });
+    // 红方炮塔（3×3）放在右半场
+    give(world, 'cannonTower');
+    expect(world.playCard('red', 0, 21, 9).ok).toBe(true);
+    const tower = [...world.buildings.values()].find((b) => b.kind === 'cannonTower')!;
+    const cx = tower.col + tower.cols / 2;
+    const cz = tower.row + tower.rows / 2;
+    const archer = {
+      id: 8000,
+      side: 'blue' as const,
+      defId: 'archer',
+      x: cx - (tower.cols / 2 + 3.5),
+      z: cz,
+      hp: 26,
+      maxHp: 26,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+    };
+    world.units.push(archer);
+    const hp0 = archer.hp;
+    let died = false;
+    let minHp = hp0;
+    // 清掉双方其它兵（含 AI 出的兵），只为量这一座塔和这一个弓手
+    run(world, 8, () => {
+      world.units = world.units.filter((u) => u.id === 8000);
+      const left = world.units.find((u) => u.id === 8000);
+      if (!left) died = true;
+      else minHp = Math.min(minHp, left.hp);
+    });
+    // 被打死算过，只掉血也算过 —— 关键是"站那儿不会毫无代价"
+    expect(died || minHp < hp0).toBe(true);
   });
 });
