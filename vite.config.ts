@@ -9,6 +9,7 @@ export default defineConfig({
       '@engine': src('engine'),
       '@game': src('game'),
       '@ui': src('ui'),
+      '@arena': src('arena'),
     },
   },
   server: {
@@ -20,6 +21,11 @@ export default defineConfig({
     target: 'es2022',
     sourcemap: true,
     rollupOptions: {
+      // 两个入口：index.html 是老模式（抽卡 RTS），arena.html 是对战模式
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        arena: fileURLToPath(new URL('./arena.html', import.meta.url)),
+      },
       output: {
         manualChunks: {
           three: ['three'],

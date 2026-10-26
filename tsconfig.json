@@ -25,7 +25,8 @@
     "paths": {
       "@engine/*": ["src/engine/*"],
       "@game/*": ["src/game/*"],
-      "@ui/*": ["src/ui/*"]
+      "@ui/*": ["src/ui/*"],
+      "@arena/*": ["src/arena/*"]
     }
   },
   "include": ["src", "tests"]

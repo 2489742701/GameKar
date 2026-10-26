@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#080b12" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>GAMEKAR · 对战（以建筑为主）</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #080b12;
+        color: #e8edf7;
+        overflow: hidden;
+        overscroll-behavior: none;
+        font: 500 14px/1.6 system-ui, sans-serif;
+        touch-action: none;
+      }
+      #arena-stage {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #arena-ui {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="arena-stage"></canvas>
+    <div id="arena-ui"></div>
+    <script type="module" src="/src/arena/main.ts"></script>
+  </body>
+</html>
