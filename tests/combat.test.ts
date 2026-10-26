@@ -74,15 +74,18 @@ describe('卡池里加了军事卡之后', () => {
     const byRarity = (r: string) =>
       STARTER_POOL.entries.filter((e) => CARDS[e.cardId]!.rarity === r).map((e) => e.cardId);
     expect(byRarity('rare')).toContain('bowyerWarrant');
-    expect(byRarity('epic')).toEqual(expect.arrayContaining(['warrenTreaty', 'templeDecree', 'recruitDecree']));
+    // 2026-10-26：成军两张（兵营/兽穴）从史诗挪到稀有 ——
+    // 压在 9% 的史诗带里，实测 600 抽只出 16 张兵营卡，玩家一局都摸不到军队
+    expect(byRarity('rare')).toEqual(expect.arrayContaining(['recruitDecree', 'warrenTreaty']));
+    expect(byRarity('epic')).not.toContain('recruitDecree');
+    expect(byRarity('epic')).not.toContain('warrenTreaty');
   });
 
-  it('精英带权重合计 148 —— 两张塔卡把精炼厂从 30/100 稀释到 30/148，这条是故意的，改它要留字据', () => {
+  it('精英带权重合计 108 —— 成军两张（兵营 26 + 兽穴 14）挪到稀有档之后，精炼厂从 30/148 回到 30/108，2026-10-26 改的，再动要留字据', () => {
     const epic = STARTER_POOL.entries
       .filter((e) => CARDS[e.cardId]!.rarity === 'epic')
       .reduce((sum, e) => sum + e.weight, 0);
-    expect(epic).toBe(148);
-    expect(30 / epic).toBeLessThan(0.21);
+    expect(epic).toBe(108);
   });
 });
 

@@ -181,6 +181,17 @@
 .tray__card[data-ok='false'] {
   opacity: 0.45;
 }
+/* 已经在手上的那面旗：金边 + 右上角一个小点，一眼看出"这面拿不走第二次" */
+.tray__card--held {
+  border-color: var(--gold-hi);
+  background-color: var(--wood-6);
+  box-shadow: inset 0 0 0 2px var(--gold), 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.tray__card--held .tray__card__cost {
+  color: var(--gold-hi);
+}
+
 .tray__card[data-active='true'] {
   border-color: var(--gold-hi);
   background-color: var(--wood-6);
@@ -200,6 +211,10 @@
   font-family: var(--font-num);
   font-size: var(--fs-xs);
   color: var(--text-dim);
+  /* 旗卡副行是"几,几"这种短坐标：不许折行，否则 96px 的卡片会被撑成两条 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- 选中信息卡 ---------- */
@@ -209,6 +224,73 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 窄机上这卡会被内容顶到 700px 宽、把战场盖掉——卡是"看指标"的，不是"看长句"的 */
+  width: max-content;
+  max-width: min(430px, 88vw);
+}
+
+/* 两栏：左边它是谁，右边它花多少/产多少 */
+.selcard__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.selcard__main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  /* 左栏定宽：不定宽的话，全宽的"拆除"按钮会把整张卡顶到 max-width，
+     右栏的数值就被推到屏幕中间去了 */
+  flex: 0 1 210px;
+}
+
+.selcard__stats {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-left: 14px;
+  border-left: 1px solid var(--panel-line);
+}
+
+.statrow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.statrow__k {
+  color: var(--text-faint);
+  min-width: 32px;
+}
+
+.statrow__v {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 一项 = 图标 + 数（图标是画出来的像素 SVG，和顶栏同一套） */
+.statbit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 语义色：成本压暗、产出提亮、缺员报警 */
+.statrow[data-tone='cost'] .statrow__v {
+  color: var(--text-dim);
+}
+.statrow[data-tone='gain'] .statrow__v {
+  color: #9ad07a;
+}
+.statrow[data-tone='warn'] .statrow__v {
+  color: #ff9b8a;
 }
 
 .selcard__head {
@@ -689,6 +771,26 @@ html[data-orientation='landscape'] .gacha__grid {
   transform: translateY(1px);
 }
 
+/* 站姿那一行：两个瘦按钮并排，选中那个金边 */
+.bmenu__stance {
+  display: flex;
+  gap: 4px;
+}
+.bmenu__stance[hidden] {
+  display: none;
+}
+
+.bmenu__btn--thin {
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.bmenu__btn[data-active='true'] {
+  border-color: var(--gold-hi);
+  box-shadow: inset 0 0 0 2px var(--gold);
+  color: var(--gold-hi);
+}
+
 .bmenu__btn--up {
   color: #23180a;
   font-weight: 700;
@@ -915,24 +1017,28 @@ html[data-orientation='landscape'] .gacha__grid {
 }
 
 .bar__hp {
-  display: flex;
-  gap: 2px;
-}
-
-.bar__cell {
-  width: 7px;
+  width: 52px;
   height: 5px;
-  background: var(--wood-6);
-  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.5);
-}
-
-.bar__cell[data-on='0'] {
   background: rgba(0, 0, 0, 0.55);
-  box-shadow: none;
+  border: 1px solid var(--wood-1);
+  border-radius: 2px;
+  overflow: hidden;
 }
 
-.bar__cell[data-low='1'] {
-  background: #c0433a;
+.bar__hp__fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--teal), #6fe8d6);
+  transition: width 0.12s linear;
+}
+
+.bar__hp__fill[data-mid='1'] {
+  background: linear-gradient(90deg, var(--gold), var(--gold-hi));
+}
+
+.bar__hp__fill[data-low='1'] {
+  background: linear-gradient(90deg, #c0433a, #e8584c);
 }
 
 .bar__train,
@@ -940,7 +1046,27 @@ html[data-orientation='landscape'] .gacha__grid {
   display: flex;
   align-items: center;
   gap: 4px;
-  width: 52px;
+  /* 一发一个方块：比原来那条 52px 的连续条更宽，因为要能数得清 */
+  width: auto;
+}
+
+/* 弹夹方块：空格是描边，实心是已装 */
+.bar__pips {
+  display: flex;
+  gap: 2px;
+}
+
+.bar__pip {
+  width: 5px;
+  height: 7px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.bar__pip[data-on='1'] {
+  background: #ffd479;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .bar__train[hidden],
@@ -1051,4 +1177,148 @@ html[data-orientation='landscape'] .gacha__grid {
 
 .defeat__btn {
   align-self: flex-end;
+}
+/* ---------- 建筑头顶动态 SVG ---------- */
+.bfx {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.bfx__icon {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  transform: translate3d(-9999px, -9999px, 0);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.6));
+}
+
+.bfx__icon[hidden] {
+  display: none;
+}
+
+.bfx-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.bfx-mine__pick {
+  transform-origin: 7px 3px;
+  animation: bfx-pick 0.6s ease-in-out infinite;
+}
+
+@keyframes bfx-pick {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-35deg); }
+}
+
+.bfx-fire__flash {
+  transform-origin: 8px 8px;
+  animation: bfx-flash 0.25s ease-in-out infinite alternate;
+}
+
+.bfx-fire__spark {
+  transform-origin: 8px 8px;
+  animation: bfx-spark 0.25s ease-in-out infinite alternate;
+}
+
+@keyframes bfx-flash {
+  0% { opacity: 0.4; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1.15); }
+}
+
+@keyframes bfx-spark {
+  0% { opacity: 0.2; transform: scale(0.5); }
+  100% { opacity: 0.9; transform: scale(1); }
+}
+
+.bfx-clash__l {
+  transform-origin: 6px 7.7px;
+  animation: bfx-clash-l 0.5s ease-in-out infinite;
+}
+
+.bfx-clash__r {
+  transform-origin: 10px 7.7px;
+  animation: bfx-clash-r 0.5s ease-in-out infinite;
+}
+
+@keyframes bfx-clash-l {
+  0%, 100% { transform: rotate(-20deg); }
+  50% { transform: rotate(10deg); }
+}
+
+@keyframes bfx-clash-r {
+  0%, 100% { transform: rotate(20deg); }
+  50% { transform: rotate(-10deg); }
+}
+/* ---------- 手机适配：小屏滑动 + 省格子 ---------- */
+@media (max-width: 768px) {
+  .resbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 4px;
+    padding: 5px 6px;
+  }
+  .resbar::-webkit-scrollbar {
+    display: none;
+  }
+  .resbar__item {
+    gap: 4px;
+    padding: 3px 6px 3px 4px;
+    flex: none;
+  }
+  .resbar__val {
+    font-size: 12px;
+  }
+  .resbar__rate {
+    font-size: 9px;
+  }
+  .resbar__title {
+    display: none;
+  }
+  .resbar__round {
+    font-size: 10px;
+  }
+  .dock {
+    padding: 5px;
+    gap: 4px;
+  }
+  .dock__slot {
+    min-height: 52px;
+  }
+  .dock__slot__text {
+    font-size: 10px;
+  }
+  .dock__slot__glyph {
+    font-size: 16px;
+  }
+}
+
+/* 修理中的锤子：绕柄尾抡。刻意用 steps() —— 平滑插值一动就不像素了 */
+.bfx-repair__hammer {
+  transform-origin: 8px 13px;
+  animation: bfx-hammer 0.55s steps(4, end) infinite;
+}
+
+@keyframes bfx-hammer {
+  0% { transform: rotate(-18deg); }
+  50% { transform: rotate(26deg); }
+  100% { transform: rotate(-18deg); }
+}
+
+/* 锤子落下去那一下的亮点：和既有的 spark 同一节奏 */
+.bfx-repair__spark {
+  transform-origin: 13px 2px;
+  animation: bfx-spark 0.55s steps(2, end) infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bfx-repair__hammer,
+  .bfx-repair__spark {
+    animation: none;
+  }
 }

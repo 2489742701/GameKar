@@ -40,6 +40,14 @@ export interface Building {
    * 只有产兵的楼用得上，别的楼一直是 null。
    */
   rally: GridPos | null;
+  /** 等级 1..3：所有楼都能升，产出/伤害按它放大（原来只有塔有等级，存在战斗层里） */
+  level: number;
+  /**
+   * 有兵的楼的站姿：
+   * - `hunt`（自动锁敌）：看见敌人就追上去打；
+   * - `guard`（守卫定点）：只打照面的，不离开岗位。
+   */
+  stance: 'hunt' | 'guard';
   /** 当前血量，从 def.hp 起算；归零就走 demolish（议事厅归零 = 输） */
   hp: number;
 }
@@ -286,13 +294,24 @@ export class GameWorld {
    */
   yieldOf(b: Building): Partial<Record<ResourceId, number>> {
     if (!b.built) return {};
+    // 升级就是"生产得更快"：每级 +30%
+    const boost = 1 + 0.3 * ((b.level ?? 1) - 1);
     this.ensureVeinPlan();
     const out: Partial<Record<ResourceId, number>> = {};
     for (const [res, rate] of Object.entries(b.def.yields ?? {})) {
       out[res as ResourceId] = (out[res as ResourceId] ?? 0) + (rate ?? 0);
     }
-    for (const claim of this.claims.get(b.id) ?? []) {
-      out[claim.resource] = (out[claim.resource] ?? 0) + claim.perSecond;
+    const claims = this.claims.get(b.id) ?? [];
+    if (claims.length > 0) {
+      const bonus = 1 + 0.25 * claims.length;
+      for (const claim of claims) {
+        out[claim.resource] = (out[claim.resource] ?? 0) + claim.perSecond * bonus;
+      }
+    } else if (b.def.veinWork) {
+      out.gold = (out.gold ?? 0) + 0.5;
+    }
+    if (boost !== 1) {
+      for (const key of Object.keys(out) as ResourceId[]) out[key] = (out[key] ?? 0) * boost;
     }
     return out;
   }
@@ -449,6 +468,21 @@ export class GameWorld {
     return n;
   }
 
+  /**
+   * 修楼：回到上限为止，返回**实际补了多少**（0 = 本来就是满的）。
+   *
+   * 返回值不是摆设：工匠靠它判断"这栋楼还值不值得蹲"，0 就该去找下一栋。
+   */
+  repair(id: number, amount: number): number {
+    const b = this.buildings.get(id);
+    if (!b || amount <= 0) return 0;
+    const max = b.def.hp;
+    if (b.hp >= max) return 0;
+    const before = b.hp;
+    b.hp = Math.min(max, before + amount);
+    return b.hp - before;
+  }
+
   /** 缺哪些资源、各缺多少。给提示语用，让玩家知道去哪儿补。 */
   missingCost(cost: Partial<Record<ResourceId, number>>): string {
     const parts = (Object.keys(cost) as ResourceId[])
@@ -484,6 +518,8 @@ export class GameWorld {
         surfaceY: 0,
         placedAt: 0,
         rally: null,
+        level: 1,
+        stance: 'hunt',
         hp: def.hp,
       };
       if (this.adjacentOf(probe, def.requiresAdjacent) === 0) return 'no-adjacent';
@@ -604,6 +640,8 @@ export class GameWorld {
       surfaceY: this.map.footprintSurfaceY(origin, def.footprint.cols, def.footprint.rows),
       placedAt: this.time,
       rally: null,
+      level: 1,
+      stance: 'hunt',
       hp: def.hp,
     };
 
@@ -618,9 +656,13 @@ export class GameWorld {
     return building;
   }
 
-  demolish(id: number): void {
+  demolish(id: number, byPlayer = false): void {
     const b = this.buildings.get(id);
     if (!b) return;
+    if (byPlayer && b.def.unique) {
+      this.bus.emit('toast', { text: `${b.def.name}不能拆除`, tone: 'warn' });
+      return;
+    }
     this.map.release(id);
     this.buildings.delete(id);
     this.invalidateVeinPlan();
@@ -638,6 +680,7 @@ export class GameWorld {
    */
   rallyOf(b: Building): GridPos {
     if (b.rally) return b.rally;
+    // 默认落在占地里靠镜头（东南）那一格：实测这条有锁钉着，是当初特意定的
     return pos(b.origin.col + (b.cols >> 1), b.origin.row + (b.rows >> 1));
   }
 
@@ -751,6 +794,9 @@ export class GameWorld {
       surfaceY: this.map.footprintSurfaceY(origin, def.footprint.cols, def.footprint.rows),
       placedAt: state.placedAt,
       rally: state.rally,
+      // 读档：旧档没有这两项，一律从 Lv1 / 自动锁敌起步
+      level: 1,
+      stance: 'hunt',
       hp: state.hp,
     };
     this.map.claim(origin, building.cols, building.rows, building.id);

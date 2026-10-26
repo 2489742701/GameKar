@@ -53,6 +53,11 @@ export interface UnitDef {
   /** 脸型候选区间；不给就是"多半不叠脸" */
   faceBand?: readonly [number, number];
   special?: UnitSpecial;
+  /**
+   * 岗位。`repair` = 议事厅派出来的工匠：谁掉血就去补谁，路上遇敌就抡一锤。
+   * 不给就是普通战斗单位。
+   */
+  duty?: 'repair';
   /** 造一队要几秒、初始储备几个（兵营用） */
   trainSeconds: number;
   stockInitial: number;
@@ -64,10 +69,37 @@ const U = (def: UnitDef): UnitDef => def;
 const COMBAT_ANIMS = (attack: AnimName, idle: AnimName): AnimName[] => [idle, 'run', attack, 'hurt', 'die'];
 
 export const UNITS: Record<string, UnitDef> = {
+  /**
+   * 工匠 —— 议事厅自己的杂役，不由兵营生产。
+   * 数值故意压得很低（攻 3、血 30）：它的本职是补墙，不是当兵用。
+   */
+  worker: U({
+    id: 'worker',
+    name: '工匠',
+    blurb: '议事厅派出来的杂役：会补墙，也会抡锤。',
+    role: 'melee',
+    faction: 'own',
+    duty: 'repair',
+    hp: 30,
+    attack: 3,
+    defense: 1,
+    range: 0.9,
+    speed: 1.25,
+    cooldown: 1.5,
+    sight: 4,
+    attackAnim: 'sword',
+    idleAnim: 'idle',
+    anims: COMBAT_ANIMS('sword', 'idle'),
+    headBands: [[0, 63]],
+    faceBand: [1, 60],
+    trainSeconds: 0,
+    stockInitial: 0,
+  }),
+
   archer: U({
     id: 'archer',
     name: '弓箭手',
-    blurb: '远处先手。血薄腿快，被贴住就很惨，别让他站在最前面。',
+    blurb: '远程，血薄腿快。',
     role: 'ranged',
     faction: 'own',
     hp: 26,
@@ -90,7 +122,7 @@ export const UNITS: Record<string, UnitDef> = {
   knight: U({
     id: 'knight',
     name: '骑士',
-    blurb: '站得住的主力。防最高，撞到谁都不亏。',
+    blurb: '近战主力，防高。',
     role: 'melee',
     faction: 'own',
     hp: 60,
@@ -113,7 +145,7 @@ export const UNITS: Record<string, UnitDef> = {
   orc: U({
     id: 'orc',
     name: '兽人',
-    blurb: '冲进去把人撞开。血最厚、跑得最慢，专门用来把敌群撕开。',
+    blurb: '冲撞击飞，血厚。',
     role: 'tank',
     faction: 'own',
     hp: 80,
@@ -137,7 +169,7 @@ export const UNITS: Record<string, UnitDef> = {
   priest: U({
     id: 'priest',
     name: '牧师',
-    blurb: '不打人，奶附近血最少的那个。一队只配两个，死了全线崩。',
+    blurb: '奶附近血少的。',
     role: 'healer',
     faction: 'own',
     hp: 30,
@@ -163,11 +195,11 @@ export const UNITS: Record<string, UnitDef> = {
   raider: U({
     id: 'raider',
     name: '劫掠兽人',
-    blurb: '第一波来的是这种。人多，单个不算强，但拆房子很快。',
+    blurb: '第一波，拆楼快。',
     role: 'melee',
     faction: 'enemy',
     hp: 40,
-    attack: 6,
+    attack: 4,
     defense: 2,
     range: 1.2,
     speed: 1.05,
@@ -185,11 +217,11 @@ export const UNITS: Record<string, UnitDef> = {
   golem: U({
     id: 'golem',
     name: '石怪',
-    blurb: '又硬又慢，压在场上的那种。让骑士顶它，弓手绕后面打。',
+    blurb: '硬慢坦克。',
     role: 'tank',
     faction: 'enemy',
     hp: 120,
-    attack: 14,
+    attack: 8,
     defense: 6,
     range: 1.2,
     speed: 0.85,
@@ -207,11 +239,11 @@ export const UNITS: Record<string, UnitDef> = {
   shade: U({
     id: 'shade',
     name: '暗影弓手',
-    blurb: '对面也有远程。它会先射你的牧师。',
+    blurb: '敌方远程。',
     role: 'ranged',
     faction: 'enemy',
     hp: 24,
-    attack: 8,
+    attack: 5,
     defense: 1,
     range: 3.4,
     speed: 1.4,

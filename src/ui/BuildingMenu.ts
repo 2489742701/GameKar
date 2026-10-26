@@ -6,18 +6,20 @@
  * 这也是触屏上最稳的形状：两个大按钮 + 一次反悔的机会。
  */
 
-import { buildingName } from '@game/data/buildings';
+import type { Combat } from '@game/systems/Combat';
 import type { Building } from '@game/world/GameWorld';
 import { lift } from './BuildingBars';
 import { make, setFlag, setText, type HudWidget } from './dom';
 
 /** 菜单让开血条与徽章两档，正好压在它们上面。 */
-const MENU_LIFT = 52;
+const MENU_LIFT = 62;
 
 export interface MenuActions {
   onUpgrade(building: Building): void;
   /** 二级确认之后才真拆 */
   onDemolish(building: Building): void;
+  /** 有兵的楼：切 自动锁敌 / 守卫定点 */
+  onStance(building: Building, stance: 'hunt' | 'guard'): void;
 }
 
 export class BuildingMenu implements HudWidget {
@@ -25,10 +27,30 @@ export class BuildingMenu implements HudWidget {
   private readonly upgradeBtn = make('button', { class: 'bmenu__btn bmenu__btn--up' });
   private readonly demolishBtn = make('button', { class: 'bmenu__btn bmenu__btn--danger' });
   private readonly confirmRow = make('div', { class: 'bmenu__confirm' });
+  /** 站姿那一行：只有带兵的楼才出现 */
+  private readonly stanceRow = make('div', { class: 'bmenu__stance' });
+  private readonly stanceBtns = new Map<'hunt' | 'guard', HTMLElement>();
   private target: Building | null = null;
   private confirming = false;
 
-  constructor(private readonly actions: MenuActions) {
+  constructor(
+    private readonly actions: MenuActions,
+    private readonly combat?: Combat,
+  ) {
+    for (const [key, label] of [
+      ['hunt', '自动锁敌'],
+      ['guard', '守卫定点'],
+    ] as const) {
+      const btn = make('button', {
+        class: 'bmenu__btn bmenu__btn--thin',
+        text: label,
+        onClick: () => {
+          if (this.target) this.actions.onStance(this.target, key);
+        },
+      });
+      this.stanceBtns.set(key, btn);
+      this.stanceRow.append(btn);
+    }
     this.upgradeBtn.addEventListener('click', () => {
       if (this.target) this.actions.onUpgrade(this.target);
     });
@@ -57,16 +79,19 @@ export class BuildingMenu implements HudWidget {
         },
       }),
     );
-    this.el.append(this.upgradeBtn, this.demolishBtn, this.confirmRow);
+    this.el.append(this.upgradeBtn, this.stanceRow, this.demolishBtn, this.confirmRow);
   }
 
   get targetBuilding(): Building | null {
     return this.target;
   }
 
-  /** 只有塔才弹菜单：别的楼没有可升级的东西，弹了是骗人。 */
+  /**
+   * 现在**所有楼都弹菜单**：塔升级加强火力，其它楼升级加快生产（用户："各建筑物、房屋都可以升级"）。
+   * 议事厅能升级但不能拆（没有拆除按钮）。
+   */
   show(building: Building | null): void {
-    this.target = building && building.def.tower ? building : null;
+    this.target = building;
     if (!this.target) this.confirming = false;
     this.el.hidden = this.target === null;
     this.render();
@@ -74,26 +99,20 @@ export class BuildingMenu implements HudWidget {
 
   private render(): void {
     const b = this.target;
-    if (!b?.def.tower) return;
-    const spec = b.def.tower;
+    if (!b) return;
     this.confirmRow.hidden = !this.confirming;
     this.upgradeBtn.hidden = this.confirming;
-    this.demolishBtn.hidden = this.confirming;
+    this.stanceRow.hidden = this.confirming || !(b.def.squad && b.def.squad.length > 0);
+    // 议事厅不能拆：按钮根本不出现（和选中卡片同一条规矩）
+    this.demolishBtn.hidden = this.confirming || !!b.def.unique;
     if (this.confirming) return;
 
-    const level = this.levelOf(b);
-    const price = spec.upgrades[level - 1];
-    setText(
-      this.upgradeBtn,
-      price ? `升级 Lv${level + 1} · 金${price.gold}${price.crystal ? ` 水${price.crystal}` : ''}` : '已满级',
-    );
+    const price = this.combat?.upgradePrice(b) ?? null;
+    setText(this.upgradeBtn, price ? `升级 Lv${b.level + 1} · 金${price.gold}${price.crystal ? ` 水${price.crystal}` : ''}` : '已满级');
     setFlag(this.upgradeBtn, 'maxed', !price);
-    setText(this.demolishBtn, `拆除 ${buildingName(b.def.id)}`);
-  }
 
-  /** 等级由战斗内核持有，这里只读不改；读不到就按 Lv1 显示。 */
-  private levelOf(b: Building): number {
-    return this.levels.get(b.id) ?? 1;
+    setText(this.demolishBtn, `拆除 ${b.def.name}`);
+    for (const [key, btn] of this.stanceBtns) setFlag(btn, 'active', b.stance === key);
   }
 
   /** GameApp 每次升级后把最新等级写进来，避免菜单自己留一份旧账。 */

@@ -13,7 +13,7 @@ import { lift } from './BuildingBars';
 import { make, type HudWidget } from './dom';
 
 /** 徽章让开血条一档。 */
-const BADGE_LIFT = 26;
+const BADGE_LIFT = 44;
 
 export class StaffBadges implements HudWidget {
   readonly el = make('div', { class: 'badges' });

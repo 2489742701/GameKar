@@ -228,7 +228,7 @@ describe('材质 ID（可分享的调参码）', () => {
   });
 
   it('默认参数的码钉死在这里：偷偷改默认值会红，这是故意的', () => {
-    expect(encodeTuning(DEFAULT_TUNING)).toBe('mk-11q37sz');
+    expect(encodeTuning(DEFAULT_TUNING)).toBe('mk-110dp37');
   });
 
   it('非法码一律拒绝：前缀、长度、版本、表外字符、越界档位', () => {

@@ -13,7 +13,10 @@
 import * as THREE from 'three';
 import type { Combat, Shot } from '@game/systems/Combat';
 
-const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16 };
+const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16, haze: 72 };
+
+/** 单栋楼同时最多几团雾（global cap 之上的第二道闸，防止一栋楼吃满全场） */
+const PER_SITE_HAZE = 26;
 
 /** 烟雾 alpha 的台阶：0.8 → 0.5 → 0.28 → 0.1，然后收掉。台阶是"像素感"的来源。 */
 const SMOKE_STEPS = [0.8, 0.5, 0.28, 0.1];
@@ -53,6 +56,56 @@ function smokeTexture(seed: number): THREE.Texture {
     ctx.fillRect(x, y, 2, 2);
   }
   return pixelTexture(c);
+}
+
+/**
+ * 体积雾的一张"雾团"：中心近实、边缘化到全透明，再拿几个圆把渐变挖出豁口。
+ * 三张不同种子 ⇒ 叠在一起不会看成同一个甜甜圈盖了两遍。
+ *
+ * 和命中烟的像素风刻意不同：那是"溅起的土"，这是"悬在空气里的尘"，
+ * 所以这里走 LinearFilter 的软边，不是 NearestFilter 的硬块。
+ */
+function hazeTexture(seed: number): THREE.Texture {
+  const size = 96;
+  const { c, ctx } = canvasOf(size);
+  let s = seed;
+  const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+
+  // 一团雾 = 5 个错开的白团相加：中间叠满、边上自然稀，轮廓是团絮状的而不是一个圆
+  ctx.clearRect(0, 0, size, size);
+  for (let i = 0; i < 5; i++) {
+    const cx = size * (0.3 + rnd() * 0.4);
+    const cy = size * (0.3 + rnd() * 0.4);
+    const r = size * (0.26 + rnd() * 0.2);
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.5)');
+    g.addColorStop(0.55, 'rgba(255,255,255,0.26)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+  }
+
+  // 收边：整张乘一个大径向遮罩，别让雾在画布方框上被切成四道直边。
+  // （上一版用 destination-out 挖洞，16 个圆加起来比整张画布还大 ⇒ 把雾擦干净了，
+  //   于是"雾生成了、读数是 42 团、屏幕上一片没有"。）
+  ctx.globalCompositeOperation = 'destination-in';
+  const mask = ctx.createRadialGradient(size / 2, size / 2, size * 0.26, size / 2, size / 2, size * 0.5);
+  mask.addColorStop(0, 'rgba(255,255,255,1)');
+  mask.addColorStop(0.7, 'rgba(255,255,255,0.85)');
+  mask.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = mask;
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalCompositeOperation = 'source-over';
+
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  // 96×96 是非 2 的幂：配 mipmap 在部分 WebGL 实现里会得到"贴图不完整"，
+  // 采样结果整片 alpha=0（实测：雾生成了 42 团、贴图 alpha 0.89、屏幕上一片没有）。
+  // 雾要的是软，不是锐，所以干脆不要 mipmap，直接双线性。
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  return t;
 }
 
 /** 炮口火光：一个十字亮片。 */
@@ -97,11 +150,27 @@ interface Puff {
   scale: number;
 }
 
+/** 一团体积雾：大到能挡住楼、淡到不脏屏，起身快、散得慢。 */
+interface Haze {
+  sprite: THREE.Sprite;
+  /** 哪栋楼的雾（按楼限额用；同一栋楼的雾才有资格抢同一个配额） */
+  key: number;
+  life: number;
+  seconds: number;
+  scale: number;
+  alpha: number;
+  rise: number;
+  driftX: number;
+  driftZ: number;
+  rotate: number;
+}
+
 export interface FxReadout {
   arrows: number;
   cannons: number;
   magics: number;
   puffs: number;
+  haze: number;
   dropped: number;
 }
 
@@ -112,12 +181,16 @@ export class BattleFx {
     flash: flashTexture(),
     magic: magicTexture(),
     smoke: [smokeTexture(7), smokeTexture(101), smokeTexture(2023)],
+    haze: [hazeTexture(11), hazeTexture(77), hazeTexture(313)],
   };
   private readonly box = new THREE.BoxGeometry(0.17, 0.17, 0.17);
   private readonly iron = new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.62, metalness: 0.35, flatShading: true });
   private readonly cubes: THREE.Mesh[] = [];
   private readonly quads = new Map<string, THREE.Sprite[]>();
   private readonly puffs: Puff[] = [];
+  private readonly hazes: Haze[] = [];
+  /** 散掉的雾不销毁，留着下一团复用 —— 否则每团一次材质分配，跑十分钟就是几千份 */
+  private readonly hazeFree: THREE.Sprite[] = [];
   dropped = 0;
 
   constructor() {
@@ -134,6 +207,7 @@ export class BattleFx {
     this.cannons(byKind.cannon);
     this.magics(byKind.magic);
     this.age(dt);
+    this.ageHaze(dt);
   }
 
   private arrows(list: Shot[]): void {
@@ -198,9 +272,149 @@ export class BattleFx {
     }
   }
 
-  /** 开火那一下的炮口火光。 */
-  muzzle(x: number, z: number, y: number): void {
-    this.flash(x, z, y, 0.3);
+  /**
+   * 开火那一下的炮口效果。
+   *
+   * 上一版只有一颗 0.14 秒的火星，而且落在**塔心**（from 坐标）不是炮口 ——
+   * 炮塔转起来以后火光还留在原地，看着像"塔在冒烟"。现在由视图把炮口位置算好传进来，
+   * 再按朝向补几团往前吹的烟，炮才有后坐感。
+   */
+  muzzle(x: number, z: number, y: number, ammo: Shot['ammo'] = 'arrow', dirX = 0, dirZ = 1): void {
+    const heavy = ammo === 'cannon';
+    this.flash(x, z, y, heavy ? 0.55 : ammo === 'magic' ? 0.34 : 0.2);
+    if (!heavy) return;
+    for (let i = 0; i < 3; i++) {
+      const ahead = 0.1 + i * 0.12;
+      this.puff(x + dirX * ahead, z + dirZ * ahead, y + 0.03 * i, 0.26 + i * 0.12, 0.24 + i * 0.08);
+    }
+  }
+
+  /**
+   * 建造雾霭：一块地上升起几团软雾，楼身在雾里半遮半露。
+   *
+   * 和 `impact` 的像素烟是两套东西：那是"打中了、土飞起来"，硬边、短命、几十粒；
+   * 这是"工地扬尘"，软边、大、慢，主要作用是**挡住** —— 所以强度靠叠层数，
+   * 不靠把单张调黑（调黑就成黑烟了）。
+   */
+  buildHaze(x: number, z: number, baseY: number, radius: number, strength: number, key: number): void {
+    /**
+     * 每栋楼自己的配额。
+     *
+     * 只做全局上限是不够的：开局议事厅也在建造，它一栋就能把 72 团的额度吃满，
+     * 后面开工的楼一团雾都排不上（实测 dropped 99、屏幕上只有议事厅在冒烟）。
+     */
+    let live = 0;
+    for (const h of this.hazes) if (h.key === key) live++;
+    if (live >= PER_SITE_HAZE) return;
+
+    // 一次只出 2 团：单团叠太多就是一块白布，叠不动反而看得清楼
+    const count = Math.max(1, Math.round(2 * strength));
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      // 开方是为了让点在圆里均匀，直接取 r=random 会挤在中心，雾团叠成一坨
+      const r = Math.sqrt(Math.random()) * radius;
+      this.spawnHaze(
+        x + Math.cos(a) * r,
+        z + Math.sin(a) * r,
+        baseY + Math.random() * 0.9,
+        /**
+         * 单团直径 ≈ 1.0~1.7 个世界单位（半格到一格）。
+         * 这个数是量出来的：sprite 的 scale 就是世界单位，上一版给到 3~5 ⇒
+         * 一团雾 3 格多宽，几团一叠屏幕上就是一整块白布，楼都看不见了。
+         */
+        (1.5 + Math.random() * 0.7) * (0.85 + radius * 0.3),
+        0.3 * strength,
+        2.6 + Math.random() * 1.4,
+        key,
+      );
+    }
+    // 贴地那一层：更宽更扁更久，负责"脚下看不清"。半空孤零零几团雾看着像贴片，
+    // 有了落地这一层，整团雾才"站"在地上。它最淡，因为它是底噪不是主体。
+    this.spawnHaze(x, z, baseY - 0.04, 2.2 + radius * 0.6, 0.18 * strength, 3.4 + Math.random(), key);
+  }
+
+  private spawnHaze(
+    x: number,
+    z: number,
+    y: number,
+    scale: number,
+    alpha: number,
+    seconds: number,
+    key: number,
+  ): void {
+    if (this.hazes.length >= CAP.haze) {
+      this.dropped++;
+      return;
+    }
+    let sprite = this.hazeFree.pop();
+    if (!sprite) {
+      sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          transparent: true,
+          depthWrite: false,
+          /**
+           * **不做深度测试**：雾要在楼前面。
+           *
+           * 试过守着 depthTest：雾心就在楼里，楼把它挡掉 80%，屏幕上只剩楼上沿一小片 ——
+           * 那就成了"楼后面有雾"，不是"楼在雾里"。关掉之后雾永远叠在世界之上，
+           * 这才是"看不清楚"该有的样子。
+           */
+          depthTest: false,
+          opacity: 0,
+          color: 0xe8eef6,
+        }),
+      );
+      sprite.renderOrder = 8;
+      this.group.add(sprite);
+    }
+    const mat = sprite.material as THREE.SpriteMaterial;
+    const variant = this.tex.haze[(this.hazes.length + Math.floor(Math.random() * 3)) % 3]!;
+    if (mat.map !== variant) {
+      mat.map = variant;
+      // 贴图是后挂上去的：不标脏，着色器还停在没有 map 的那套程序上
+      mat.needsUpdate = true;
+    }
+    mat.rotation = Math.random() * Math.PI * 2;
+    mat.opacity = 0;
+    sprite.visible = true;
+    sprite.position.set(x, y, z);
+    sprite.scale.set(scale, scale, 1);
+    this.hazes.push({
+      sprite,
+      key,
+      life: 0,
+      seconds,
+      scale,
+      alpha,
+      rise: 0.22 + Math.random() * 0.2,
+      driftX: (Math.random() - 0.5) * 0.35,
+      driftZ: (Math.random() - 0.5) * 0.35,
+      rotate: (Math.random() - 0.5) * 0.6,
+    });
+  }
+
+  private ageHaze(dt: number): void {
+    for (let i = this.hazes.length - 1; i >= 0; i--) {
+      const h = this.hazes[i]!;
+      h.life += dt;
+      const k = h.life / h.seconds;
+      if (k >= 1) {
+        h.sprite.visible = false;
+        this.hazeFree.push(h.sprite);
+        this.hazes.splice(i, 1);
+        continue;
+      }
+      // 前 15% 涌上来，之后按幂次散：雾是"先压过来再慢慢化开"，线性淡出像开关
+      const fade = Math.min(1, k / 0.15) * Math.pow(1 - k, 1.35);
+      const mat = h.sprite.material as THREE.SpriteMaterial;
+      mat.opacity = h.alpha * fade;
+      mat.rotation += h.rotate * dt;
+      h.sprite.position.x += h.driftX * dt;
+      h.sprite.position.y += h.rise * dt;
+      h.sprite.position.z += h.driftZ * dt;
+      const grow = h.scale * (1 + k * 0.8);
+      h.sprite.scale.set(grow, grow, 1);
+    }
   }
 
   private flash(x: number, z: number, y: number, scale: number): void {
@@ -237,8 +451,10 @@ export class BattleFx {
       p.life += dt;
       const k = p.life / p.seconds;
       if (k >= 1) {
-        p.sprite.visible = false;
-        if (p.sprite.material.map === null) p.sprite.removeFromParent();
+        // 必须真的摘掉：只 visible=false 的话，每团烟都留一份材质和一个场景节点，
+        // 一局下来就是几千份 —— 这是"看不见的 draw call 与显存"，不是"没事发生"
+        p.sprite.removeFromParent();
+        (p.sprite.material as THREE.Material).dispose();
         this.puffs.splice(i, 1);
         continue;
       }
@@ -290,6 +506,7 @@ export class BattleFx {
       cannons: this.cubes.filter((m) => m.visible).length,
       magics: this.quads.get('magic')?.filter((s) => s.visible).length ?? 0,
       puffs: this.puffs.length,
+      haze: this.hazes.length,
       dropped: this.dropped,
     };
   }
@@ -299,5 +516,10 @@ export class BattleFx {
     this.iron.dispose();
     for (const list of this.quads.values()) for (const s of list) (s.material as THREE.Material).dispose();
     for (const p of this.puffs) (p.sprite.material as THREE.Material).dispose();
+    for (const s of [...this.hazes.map((h) => h.sprite), ...this.hazeFree]) {
+      (s.material as THREE.Material).dispose();
+    }
+    this.hazes.length = 0;
+    this.hazeFree.length = 0;
   }
 }

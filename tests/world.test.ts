@@ -87,6 +87,34 @@ describe('建造许可与落位判定', () => {
     expect(world.inspectPlacement(buildingDef('hall'), pos(spot.col + 6, spot.row))).toBe('unique');
   });
 
+  it('议事厅不能被玩家拆除 —— 全场唯一的心脏', () => {
+    const { world, spot } = freshWorld();
+    world.addPermits('hall', 1);
+    const hall = world.build('hall', spot)!;
+    expect(hall).not.toBeNull();
+
+    world.demolish(hall.id, true);
+
+    expect(world.buildings.has(hall.id)).toBe(true);
+    expect(world.map.buildingAt(spot)).toBe(hall.id);
+    expect(world.hallAlive).toBe(true);
+  });
+
+  it('但敌人把议事厅打爆照常拆 —— 否则永远不会输', () => {
+    const { world, spot } = freshWorld();
+    world.addPermits('hall', 1);
+    const hall = world.build('hall', spot)!;
+    const removed: number[] = [];
+    world.bus.on('building:removed', (b) => removed.push(b.id));
+
+    const destroyed = world.damage(hall.id, hall.hp);
+
+    expect(destroyed).toBe(true);
+    expect(world.buildings.has(hall.id)).toBe(false);
+    expect(world.hallAlive).toBe(false);
+    expect(removed).toEqual([hall.id]);
+  });
+
   // 这条原来断的是"人口不足 → inspectPlacement 返回 'population'"。
   // 用户 2026-10-20 改了规则：缺人手也要让人把塔/兵营盖下去，代价是那栋楼缺员不干活。
   // 所以闸门整个拿掉，改断"盖得下去 + 排不到的那几栋当场缺员"。
@@ -160,13 +188,12 @@ describe('建造许可与落位判定', () => {
 });
 
 describe('采矿：产量是脚程算出来的', () => {
-  // 矿井：速度 1.2 格/秒、每趟 2 晶钻。往返 = 2×格数，所以
-  //   d=1 → 1.2/2×2 = 1.2   d=3 → 1.2/6×2 = 0.4   d=6 → 1.2/12×2 = 0.2
-  // 这些数是手算的，不是把产品公式抄一遍，否则公式写错也照样绿。
+  // 矿井：速度 0.3 格/秒、每趟 12 晶钻、1 矿点增益 25%。往返 = 2×格数
+  //   d=1 → 12/(2/0.3)×1.25 = 2.25   d=3 → 12/(6/0.3)×1.25 = 0.75   d=6 → 12/(12/0.3)×1.25 = 0.375
   it.each([
-    [1, 1.2],
-    [3, 0.4],
-    [6, 0.2],
+    [1, 2.25],
+    [3, 0.75],
+    [6, 0.375],
   ])('矿在 %i 格外 → 每秒 %s 晶钻', (d, expected) => {
     const { world, vein } = flatWorld();
     const mine = placeNear(world, 'mine', vein, d)!;
@@ -193,10 +220,10 @@ describe('采矿：产量是脚程算出来的', () => {
     const refinery = placeNear(b.world, 'refinery', b.vein, 3)!;
     const refineryRate = b.world.yieldOf(refinery).crystal!;
 
-    expect(mineRate).toBeCloseTo(0.4, 5);
-    // 3.2/6×2.2
-    expect(refineryRate).toBeCloseTo(1.173333, 4);
-    expect(refineryRate / mineRate).toBeGreaterThan(2.5);
+    expect(mineRate).toBeCloseTo(0.75, 5);
+    // 6/(6/0.8)×1.25 = 1.0
+    expect(refineryRate).toBeCloseTo(1.0, 4);
+    expect(refineryRate / mineRate).toBeGreaterThan(1.2);
   });
 
   it('一条晶脉只归一栋楼，第二栋挤不进去', () => {
@@ -350,7 +377,7 @@ describe('经济结算', () => {
 
     mine.built = true;
     expect(world.claimsOf(mine)).toHaveLength(1);
-    expect(world.incomeRates().crystal).toBeCloseTo(1.2, 5);
+    expect(world.incomeRates().crystal).toBeCloseTo(2.25, 5);
   });
 
   it('抽到的经济卡把永久产出叠进同一张账', () => {

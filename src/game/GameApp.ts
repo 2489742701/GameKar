@@ -26,6 +26,7 @@ import { buildingName } from '@game/data/buildings';
 import { STARTER_POOL } from '@game/data/cards';
 import { GachaService, type Purchase } from '@game/gacha/GachaService';
 import { Prefs } from '@game/prefs';
+import { updateFlagTime } from '@game/models/kit';
 import { ModelLibrary } from '@game/models/registry';
 import { BuildingView } from '@game/world/BuildingView';
 import { GroundView } from '@game/world/GroundView';
@@ -70,6 +71,8 @@ export interface Telemetry {
   dudeStyles: number;
   /** 因为人数上限没派出去的任务数 */
   capped: number;
+  /** 寻路失败、退回直线（会穿墙）的小人数；非零就该看见 */
+  noPath: number;
   /** 在场士兵 + 敌人 */
   units: number;
   /** 在飞的弹丸 */
@@ -117,6 +120,7 @@ export class GameApp {
   /** 议事厅归零之后停掉一切生产，等玩家重开 */
   defeated = false;
   private readonly seenShots = new Set<number>();
+  private smokeAccum = 0;
   /** 一栋楼一张脸，算过一次就记住：随机数只在第一次动 */
   private readonly styles = new Map<number, DudeStyle>();
 
@@ -197,9 +201,10 @@ export class GameApp {
         styleFor: (b) => this.styleOf(b),
         appearance: { ...DEFAULT_APPEARANCE, height: DUDE.heightTiles },
         maxRunners: DUDE.maxRunners,
+        combat: this.combat,
       });
       this.roster = new Roster(pack, rng.fork('dude-style'));
-      this.unitView = new UnitView(this.combat, pack, this.gallery, this.roster, DUDE.heightTiles);
+      this.unitView = new UnitView(this.combat, pack, this.gallery, this.roster, DUDE.heightTiles, (x, z) => this.world.map.surfaceY(worldToCell(x, z)));
       this.scene.add(this.crew.group, this.unitView.group, this.fx.group);
     } else {
       this.gallery = null;
@@ -235,7 +240,8 @@ export class GameApp {
     this.wireEvents();
     // 有档就读档，没档才走开局（bootstrap 会白送一座议事厅，读档时不能再送一次）
     this.restored = this.tryRestore();
-    if (!this.restored) this.bootstrap();
+    // 有档就读档，没档才走开局；但坏档（主城被拆过）读回来没主城，也要补盖一座
+    if (!this.restored || !this.world.hallAlive) this.bootstrap();
   }
 
   /** 读档期间不许回写存档：adopt 会发 building:placed，那是读不是写。 */
@@ -391,7 +397,22 @@ export class GameApp {
     const spot = findNearestClearSpot(this.world.map, home, 2, 2);
     if (spot) {
       this.world.addPermits('hall', 1);
-      this.world.build('hall', spot);
+      // 兵营许可开局就给：成军是核心路径，不该压在抽卡运气上
+      // （实测 600 抽里兵营卡只出 16 张，玩家一局都摸不到军队）
+      this.world.addPermits('barracks', 1);
+      const hall = this.world.build('hall', spot);
+      if (hall) {
+        /**
+         * 开局视野锁**大本营自己**，不是地图中心格。
+         *
+         * `findNearestClearSpot` 找的空地未必就是中心：中心被树/水占着时会挪出去好几格，
+         * 而镜头原来固定落在中心格上 —— 玩家开局先看到一片野地，得自己拖回家。
+         * 直接按楼的占地中心算，锁死。
+         */
+        const center = footprintCenter(hall);
+        this.rig.centerOnWorld(center.x, center.z, true);
+        return;
+      }
     }
     const center = cellToWorld(home);
     this.rig.centerOnWorld(center.x, center.z, true);
@@ -423,15 +444,20 @@ export class GameApp {
   private draw(info: FrameInfo): void {
     this.lastFrame = info;
     this.rig.update(info.delta);
+    this.lighting.update(info.time);
     this.lighting.follow(this.rig);
     this.ground.update(info.time);
     this.markers.update(info.time);
-    this.buildingView.syncAll(this.world.buildings.values());
+    // 旗面是顶点动画：每帧喂一次时间，布才会飘（树/屋不飘，只更新一个 uniform）
+    updateFlagTime(info.time);
+    this.buildingView.syncAll(this.world.buildings.values(), info.delta);
     // 小人每帧按时间重算位置：用 time%trip，所以快进与回放都对得上
-    this.crew?.update(info.time, this.rig.yaw);
+    this.crew?.update(info.time, this.rig.yaw, info.delta);
     this.unitView?.sync(info.time, info.delta, this.rig.yaw);
+    this.aimTurrets(info.delta);
     this.fx.sync(this.combat, info.delta);
     this.muzzleFlashes();
+    this.buildSmoke(info.delta);
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -524,9 +550,57 @@ export class GameApp {
     for (const shot of this.combat.liveShots()) {
       if (this.seenShots.has(shot.id)) continue;
       this.seenShots.add(shot.id);
-      this.fx.muzzle(shot.fromX, shot.fromZ, shot.y + 1.0);
+      // 炮口火光落在**炮口**上，不是塔心：炮台会转，火光必须跟着转
+      const tip = shot.fromBuilding !== null ? this.buildingView.turretTip(shot.fromBuilding) : null;
+      const x = tip ? tip.x : shot.fromX;
+      const z = tip ? tip.z : shot.fromZ;
+      const y = tip ? tip.y : shot.y + 1.0;
+      const dx = shot.toX - x;
+      const dz = shot.toZ - z;
+      const len = Math.hypot(dx, dz) || 1;
+      this.fx.muzzle(x, z, y, shot.ammo, dx / len, dz / len);
     }
     if (this.seenShots.size > 512) this.seenShots.clear();
+  }
+
+  /**
+   * 炮台转向：每帧把有炮台的塔转向 `combat.aimOf()` 给的点。
+   *
+   * 没目标就**不转**（停在最后朝向）—— 回正会让人以为它在待机，其实只是没看见人。
+   */
+  private aimTurrets(dt: number): void {
+    for (const b of this.world.buildings.values()) {
+      if (!b.built || !b.def.tower) continue;
+      const aim = this.combat.aimOf(b.id);
+      if (aim) this.buildingView.aimAt(b.id, aim.x, aim.z, dt);
+    }
+  }
+
+  /**
+   * 工地雾霭：没封顶的楼每 0.28 秒从地面往上涌一层软雾，楼身半遮半露。
+   *
+   * 雾的高度跟着建造进度抬（不是钉在楼顶）：楼在长，尘也在往上翻，
+   * 这样"长高"和"扬尘"是同一件事，而不是两条各演各的动画。
+   */
+  private buildSmoke(dt: number): void {
+    // 封顶那一记雾爆不受节流管：它只发生一次，错过就没了
+    for (const id of this.buildingView.takeSettled()) {
+      const b = this.world.buildings.get(id);
+      if (!b) continue;
+      const c = footprintCenter({ origin: b.origin, cols: b.cols, rows: b.rows });
+      this.fx.buildHaze(c.x, c.z, b.surfaceY + 0.1, Math.max(b.cols, b.rows) * 0.85, 1.7, b.id);
+    }
+
+    this.smokeAccum += dt;
+    if (this.smokeAccum < 0.24) return;
+    this.smokeAccum = 0;
+    for (const b of this.world.buildings.values()) {
+      if (b.built) continue;
+      const c = footprintCenter({ origin: b.origin, cols: b.cols, rows: b.rows });
+      const radius = Math.max(b.cols, b.rows) * 0.55;
+      const top = this.buildingView.heightOf(b.id) * b.progress;
+      this.fx.buildHaze(c.x, c.z, b.surfaceY + 0.12 + top * 0.45, radius, 0.75, b.id);
+    }
   }
 
   /** 升级一座塔：只花钱与水晶，不碰许可。返回 false = 不是塔 / 已满级 / 钱不够。 */
@@ -596,22 +670,28 @@ export class GameApp {
   }
 
   // ---------------------------------------------------------------- 集合旗
+  /*
+   * 取旗**只有一条路**：旗子袋 → 旗架（旗子卡）→ 点卡 → 点地面。
+   *
+   * 原来还有 `stowFlag`（点头顶那面旗收进袋）和 `armFlag`（点旗子袋直接进落旗），
+   * 三条路各维护一半状态，玩家看到的就是"几个界面串在一起、到底先点哪个"。
+   * 那两个方法已经删掉：少一条路，就少一处能对不上的状态。
+   */
 
-  /** 点旗子 = 把这栋楼的集合旗收进袋。旗子本身还指着原来那一格，只是"拿在手里"。 */
-  stowFlag(building: Building): void {
-    this.flags.take(building.id);
-    this.bus.emit('toast', { text: `收了${building.def.name}的旗 —— 点下面的旗子袋，再点一处地面放下` });
-    this.emitFlag();
-  }
-
-  /** 点旗子袋 = 进入"等一次落点"。建造模式先放下：两种"等一次点地面"不并存。 */
-  armFlag(): boolean {
-    if (!this.flags.arm()) {
-      this.bus.emit('toast', { text: '袋里没有旗子，先点一下兵营上方的旗', tone: 'warn' });
-      return false;
-    }
+  /**
+   * 旗架上点一张卡：把这面旗拿到手上，**并直接进入落旗**。
+   *
+   * 以前要三步（点楼上的旗 → 点旗子袋 → 点地面），旗架把前两步合成一步；
+   * 手还是只握一面（`FlagPocket` 的规则没变，收第二面时第一面自动回位）。
+   */
+  pickFlag(buildingId: number): boolean {
+    const b = this.world.buildings.get(buildingId);
+    if (!b) return false;
+    this.flags.take(buildingId);
+    if (!this.flags.arm()) return false;
     this.placement.cancel();
     this.emitFlag();
+    this.bus.emit('toast', { text: `拿了${b.def.name}的旗 —— 点一处地面放下` });
     return true;
   }
 
@@ -660,13 +740,47 @@ export class GameApp {
     return building;
   }
 
+  /** 拆除模式：进"拆"状态后，选一栋楼、再按一次那一格才真的拆。 */
+  demolishMode = false;
+
+  /** 拆除模式下选中的楼（给操作坞显示"拆除 · 民居"用）；议事厅不算。 */
+  get demolishTargetName(): string | null {
+    const sel = this.world.selection;
+    if (!this.demolishMode || sel?.kind !== 'building') return null;
+    return sel.building.def.unique ? null : sel.building.def.name;
+  }
+
+  /**
+   * 操作坞"建造/拆除"那一格。
+   *
+   * 和放建筑同构：第一次按**进入**拆除模式，选好楼之后再按一次**执行**。
+   * 没有选中可拆的楼时再按一次，就是退出 —— 不然会卡在一个不知道自己在干什么的状态里。
+   */
+  onDemolishSlot(): void {
+    const sel = this.world.selection;
+    const target = sel?.kind === 'building' ? sel.building : null;
+    if (!this.demolishMode) {
+      this.demolishMode = true;
+      this.cancelBuild(); // 手上还握着建造卡就先放下，两种模式不并存
+      return;
+    }
+    if (target && !target.def.unique) {
+      this.demolish(target.id);
+      this.world.select(null);
+      return;
+    }
+    this.demolishMode = false;
+  }
+
   demolish(id: number): void {
-    this.world.demolish(id);
+    this.world.demolish(id, true);
   }
 
   focusHome(): void {
-    const home = pos(Math.floor(this.world.size.cols / 2), Math.floor(this.world.size.rows / 2));
-    const center = cellToWorld(home);
+    // 回城要回**实际那座议事厅**，不是地图中心（中心被占的时候楼会挪出去）
+    const homeHall = [...this.world.buildings.values()].find((b) => b.def.unique);
+    const fallback = cellToWorld(pos(Math.floor(this.world.size.cols / 2), Math.floor(this.world.size.rows / 2)));
+    const center = homeHall ? footprintCenter(homeHall) : fallback;
     this.rig.centerOnWorld(center.x, center.z);
   }
 
@@ -739,6 +853,7 @@ export class GameApp {
       runners: this.crew?.count ?? 0,
       dudeStyles: this.gallery?.styleCount ?? 0,
       capped: (this.crew?.capped ?? 0) + this.combat.capped,
+      noPath: this.crew?.noPath ?? 0,
       dudesReady: this.pack !== null,
       units: this.combat.size,
       shots: this.combat.liveShots().length,

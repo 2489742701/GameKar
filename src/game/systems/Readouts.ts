@@ -7,6 +7,7 @@
  * 这里只做**纯读**：不改世界、不碰 DOM，所以在 node 里能一次断完。
  */
 
+import { RESOURCE_META } from '@game/config';
 import { unitDef } from '@game/data/units';
 import type { Combat } from '@game/systems/Combat';
 import type { Building, GameWorld } from '@game/world/GameWorld';
@@ -40,6 +41,10 @@ export interface AmmoReadout {
   size: number;
   /** 空仓装填还剩几秒；0 = 没在装 */
   reloading: number;
+  /** 这次装填一共几秒（画方块用） */
+  reloadTotal: number;
+  /** 已经装好几发（0..size）：装填中按进度算，不然就是弹夹余量 */
+  filled: number;
   level: number;
   maxLevel: number;
   line: string;
@@ -90,13 +95,25 @@ export function ammoOf(combat: Combat, b: Building): AmmoReadout | null {
     st.reloading > 0
       ? `装填 ${st.reloading.toFixed(1)}s`
       : `弹夹 ${st.magazine}/${spec.magazine}`;
+  const reloadTotal = combat.reloadSeconds(b);
+  // 装填时按时间进度逐格点亮；平时就是弹夹余量
+  // 装填中：从"已有几发"往上填到满（空闲补弹是从 5/6 补到 6/6，不是从 0 开始重画）
+  const filled =
+    st.reloading > 0 && reloadTotal > 0
+      ? Math.min(
+          spec.magazine,
+          st.magazine + Math.floor((1 - st.reloading / reloadTotal) * (spec.magazine - st.magazine)),
+        )
+      : st.magazine;
   return {
     left: st.magazine,
     size: spec.magazine,
     reloading: st.reloading,
-    level: st.level,
+    reloadTotal,
+    filled: Math.max(0, filled),
+    level: b.level,
     maxLevel,
-    line: `Lv${st.level} · ${line}`,
+    line: `Lv${b.level} · ${line}`,
   };
 }
 
@@ -143,7 +160,7 @@ export function squadNames(b: Building): string {
 
 /** 一格图标 + 一个数：屏幕上那种"像游戏"的战力条。 */
 export interface PowerBit {
-  icon: 'sword' | 'shield' | 'heart' | 'pop' | 'bread';
+  icon: 'sword' | 'shield' | 'heart' | 'pop' | 'bread' | 'gold' | 'crystal';
   value: string;
   /** 人话说明（也当 title 提示用），免得只有图形没处问 */
   title: string;
@@ -160,7 +177,7 @@ export function powerOf(b: Building, combat?: Combat): PowerBit[] {
   const out: PowerBit[] = [];
   const spec = b.def.tower;
   if (spec) {
-    const level = combat ? combat.towerState(b).level : 1;
+    const level = b.level;
     const dmg = combat ? combat.towerDamage(b) : spec.damage;
     out.push({ icon: 'sword', value: String(dmg), title: `Lv${level} 单发伤害` });
   }
@@ -170,14 +187,28 @@ export function powerOf(b: Building, combat?: Combat): PowerBit[] {
     out.push({ icon: 'shield', value: String(u.defense), title: `${u.name} 的防御` });
     out.push({ icon: 'heart', value: String(u.hp), title: `${u.name} 的血量` });
   }
+  /**
+   * 下面这几条统一写成**带符号的收支**："人口 +4 / 面包 −1 / 金币 −45"。
+   *
+   * 原来写成"住 4 人，吃 1 面包"这种人话，两个问题：① 得靠读句子才知道是收入还是支出；
+   * ② 句子是手写的，改了表它不会跟着变（民居的 +3/+4 就是这么漂过一回）。
+   * 现在一律从 `def` 现算，符号就是方向。
+   */
   if (b.def.population > 0) {
-    out.push({ icon: 'pop', value: String(b.def.population), title: '要几个人手' });
+    out.push({ icon: 'pop', value: `−${b.def.population}`, title: `占 ${b.def.population} 个人手（从人口里扣）` });
   }
   if (b.def.populationCap) {
-    out.push({ icon: 'pop', value: `+${b.def.populationCap}`, title: '给人口上限' });
+    out.push({ icon: 'pop', value: `+${b.def.populationCap}`, title: `人口上限 +${b.def.populationCap}` });
   }
   if (b.def.breadPerRound) {
     out.push({ icon: 'bread', value: `+${b.def.breadPerRound.base}`, title: '每回合面包底产（贴田另加）' });
+  }
+  // 造价：一次性支出。放在最后，跟上面的产出/占用分开读
+  const cost = b.def.cost ?? {};
+  for (const res of ['gold', 'crystal', 'bread'] as const) {
+    const amount = cost[res];
+    if (!amount) continue;
+    out.push({ icon: res, value: `−${amount}`, title: `${RESOURCE_META[res].label} 造价 ${amount}` });
   }
   return out;
 }

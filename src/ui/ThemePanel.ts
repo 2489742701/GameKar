@@ -21,7 +21,7 @@ import {
   snapTuning,
   type Tuning,
 } from './themePrefs';
-import { make, setText, type HudWidget } from './dom';
+import { make, setFlag, setText, type HudWidget } from './dom';
 
 interface Row {
   key: keyof Tuning;
@@ -51,6 +51,12 @@ export interface ThemePanelHooks {
   /** 重算纹理并挂上 CSS 变量；返回耗时读数（毫秒） */
   apply(tuning: Tuning): { woodMs: number; giltMs: number };
   say(text: string, tone?: 'ok' | 'warn'): void;
+  /** 难度档：options 静态、state() 动态拿当前与已选待生效、onSet 选档 */
+  difficulty?: {
+    options: { id: string; label: string }[];
+    state(): { activeId: string; pendingId?: string };
+    onSet(id: string): void;
+  };
 }
 
 export class ThemePanel implements HudWidget {
@@ -67,7 +73,7 @@ export class ThemePanel implements HudWidget {
     this.tuning = snapTuning(hooks.prefs.themeId ? (decodeTuning(hooks.prefs.themeId) ?? DEFAULT_TUNING) : DEFAULT_TUNING);
 
     const head = make('div', { class: 'theme__head' }, [
-      make('span', { class: 'theme__title', text: '界面材质' }),
+      make('span', { class: 'theme__title', text: '设置' }),
       make('button', {
         class: 'theme__close',
         text: '×',
@@ -75,6 +81,8 @@ export class ThemePanel implements HudWidget {
         onClick: () => this.hide(),
       }),
     ]);
+
+    const diffRow = this.buildDifficultyRow();
 
     const presetRow = make('div', { class: 'theme__row theme__row--presets' });
     for (const preset of PRESETS) {
@@ -136,6 +144,7 @@ export class ThemePanel implements HudWidget {
 
     this.el.append(
       head,
+      ...(diffRow ? [diffRow] : []),
       make('p', { class: 'theme__hint', text: '改动自动保存在这台机器上；把 ID 发给别人，他能贴出同一块木头。' }),
       presetRow,
       rows,
@@ -154,7 +163,40 @@ export class ThemePanel implements HudWidget {
     if (this.open) this.hide();
     else {
       this.el.hidden = false;
-      this.hooks.say('材质面板：调完点右上角 × 收起来');
+      this.hooks.say('设置：调完点右上角 × 收起来');
+    }
+  }
+
+  private readonly diffButtons = new Map<string, HTMLElement>();
+
+  private buildDifficultyRow(): HTMLElement | null {
+    const d = this.hooks.difficulty;
+    if (!d) return null;
+    const row = make('div', { class: 'theme__row theme__row--difficulty' });
+    row.append(make('span', { class: 'theme__label', text: '难度' }));
+    for (const opt of d.options) {
+      const btn = make('button', {
+        class: 'theme__chip',
+        text: opt.label,
+        onClick: () => {
+          d.onSet(opt.id);
+          this.refreshDifficulty();
+        },
+      });
+      this.diffButtons.set(opt.id, btn);
+      row.append(btn);
+    }
+    this.refreshDifficulty();
+    return row;
+  }
+
+  private refreshDifficulty(): void {
+    const d = this.hooks.difficulty;
+    if (!d) return;
+    const { activeId, pendingId } = d.state();
+    for (const [id, btn] of this.diffButtons) {
+      setFlag(btn, 'active', id === activeId);
+      setFlag(btn, 'armed', !!pendingId && pendingId !== activeId && id === pendingId);
     }
   }
 

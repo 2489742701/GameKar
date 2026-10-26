@@ -104,10 +104,15 @@ export const BREAD = {
   capPerMill: 6,
   /** 主城每回合白送的面包（"默认给你一些面包"） */
   perRoundFromHall: 2,
-  /** 磨坊自己每回合的底产，以及每块邻接田地再加一点 */
+  /**
+   * 磨坊每回合的底产、每块邻接田地的加成。
+   *
+   * 这两个数**真的在管事**：`buildings.ts` 的 `mill.breadPerRound` 直接读这里。
+   * 以前它们是两份各写各的（表里 1/1、这里 1/1），改哪边都不动对方，
+   * 而 `tests/rounds.test.ts` 那条锁钉的恰好是这里的数 —— 于是"改表测试不会红"。
+   */
   perRoundPerMill: 1,
   perRoundPerAdjacentField: 1,
-  /** 一栋民居要 1 个面包才盖得起来 */
 };
 
 /** 回合节奏。准备阶段什么都不涨，敌人清完（或超时）才结算一次。 */
@@ -221,8 +226,21 @@ export const difficultyOf = (raw: unknown): Difficulty =>
  * 小人视觉参数。素材一帧是 16x24 像素，卡片宽高比由素材决定，
  * 这里只定"站多高"——0.82 大约是"比一格矮一点、又压得住 2x2 建筑"的读数。
  */
+/** 议事厅派出的工匠：几个、多久补一个、每秒补多少血。 */
+export const WORKER = {
+  count: 2,
+  /** 阵亡后隔几秒补一个 */
+  respawnSeconds: 8,
+  /** 每个工匠每秒补的血 */
+  repairPerSecond: 5,
+};
+
 export const DUDE = {
-  heightTiles: 0.82,
+  /**
+   * 小人身高（格）。0.82 → 1.12：一格多一点的卡片在默认机位下才看得清脸和动作，
+   * 之前 0.82 配上像素素材，缩到一半就只剩一团色块。
+   */
+  heightTiles: 1.12,
   /** 一个小人上限：矿脉多时不至于把 draw call 顶爆 */
   maxRunners: 48,
 };

@@ -10,8 +10,9 @@
  */
 
 import type { FlatSize, GridPos } from '@engine/math/Grid';
-import { cellToWorld, pos, worldToCell } from '@engine/math/Grid';
-import { DEFAULT_DIFFICULTY, DIFFICULTY, ROUNDS, isStandable, type Difficulty, type RaidProfile } from '@game/config';
+import { cellToWorld, footprintRect, pos, worldToCell } from '@engine/math/Grid';
+import { DEFAULT_DIFFICULTY, DIFFICULTY, ROUNDS, WORKER, isStandable, type Difficulty, type RaidProfile } from '@game/config';
+import { findPath } from '@game/dudes/walk';
 import { UNITS, damageOf, unitDef, type UnitDef } from '@game/data/units';
 import type { Building, GameWorld } from '@game/world/GameWorld';
 
@@ -34,6 +35,8 @@ export interface Shot {
   /** 打谁：null = 打地面（炮塔预判落点） */
   targetUnit: number | null;
   targetBuilding: number | null;
+  /** 从哪栋楼打出来的（炮塔转台与炮口火光要用）；野兵打的不填 */
+  fromBuilding: number | null;
 }
 
 export interface Unit {
@@ -63,8 +66,6 @@ export interface TowerState {
   reloading: number;
   /** 两发之间的间隔剩余 */
   cooldown: number;
-  /** 升级等级 1..3 */
-  level: number;
 }
 
 export interface BarracksState {
@@ -96,6 +97,13 @@ export interface CombatOptions {
 }
 
 /** 一回合的敌人构成：波次大小、什么时候混进远程与石怪，全读档位表。 */
+/**
+ * "正在修"这个标记活多久。
+ * 0.35 秒 = 两个 20Hz 模拟步多一点：屏幕按 10Hz 采样不会闪；
+ * 工匠一停手（走了 / 死了 / 补满了），锤子在三分之一秒内自己收起来。
+ */
+export const REPAIR_MARK_SECONDS = 0.35;
+
 function raidComposition(profile: RaidProfile, round: number): string[] {
   const want = Math.round(profile.waveBase + profile.waveGrowth * (round - 1));
   const total = Math.min(profile.capOnField, ROUNDS.maxRaidUnits, Math.max(0, want));
@@ -108,11 +116,30 @@ function raidComposition(profile: RaidProfile, round: number): string[] {
   return out;
 }
 
+/**
+ * 单位之间的最小间距（世界单位，一格 = 1）。
+ *
+ * 小人卡片宽 0.75（1.12 高 × 16:24 的比例），所以 0.34 的间距仍然叠得很凶
+ * —— 实测截图上还是"一坨"。0.42 是"能看出是两个人、又不至于把一波兵摊成散兵线"的折中。
+ */
+const UNIT_SPACING = 0.42;
+
 export class Combat {
   units: Unit[] = [];
   shots: Shot[] = [];
   readonly towers = new Map<number, TowerState>();
+  /**
+   * 每座塔这一帧瞄着谁（视图拿它转炮台）。塔没目标就删掉 —— 视图据此知道"别转"。
+   * 只存坐标不存 id：目标死了/挪了都不影响，下一帧重算。
+   */
+  private readonly aims = new Map<number, { x: number; z: number }>();
   readonly barracks = new Map<number, BarracksState>();
+  /**
+   * "这一帧真的有工匠在补这栋楼"的短时标记（楼 id → 剩余秒）。
+   * 为什么不记"谁被派去修"：派去 ≠ 修到 —— 人还在路上、被敌人缠住、或者已经补满，
+   * 那时候头顶挂锤子就是在骗人。只有 `world.repair()` 真返回了 >0 才打标记。
+   */
+  private readonly repairMarks = new Map<number, number>();
   /** 被毁掉的楼 id，避免同一栋楼被反复结算 */
   private readonly gone = new Set<number>();
   private nextId = 1;
@@ -164,6 +191,16 @@ export class Combat {
 
   enemiesAlive(): number {
     return this.units.filter((u) => !u.dead && u.def.faction === 'enemy').length;
+  }
+
+  /** 这一帧有没有工匠**真的**在补这栋楼（头顶那把锤子读它）。 */
+  isRepairing(buildingId: number): boolean {
+    return (this.repairMarks.get(buildingId) ?? 0) > 0;
+  }
+
+  /** 正在被修的楼号（视图每 10Hz 刷一次名单）。 */
+  repairingIds(): number[] {
+    return [...this.repairMarks.keys()];
   }
 
   // ---------------------------------------------------------------- 兵营与波次
@@ -349,12 +386,22 @@ export class Combat {
     const world = this.opts.world;
 
     this.drainBursts(dt);
+    for (const [id, left] of this.repairMarks) {
+      if (left - dt <= 0) this.repairMarks.delete(id);
+      else this.repairMarks.set(id, left - dt);
+    }
+    this.ensureWorkers(dt, world);
     this.runBarracks(dt, world);
     this.runTowers(dt, world);
     this.runShots(dt, world);
     this.runUnits(dt, world);
 
     this.units = this.units.filter((u) => !u.dead || u.deadFor < 1.2);
+    // 工匠的活计跟着人走：人没了，任务也删掉，别让表越攒越大
+    if (this.workerJobs.size > 0) {
+      const live = new Set(this.units.map((u) => u.id));
+      for (const id of [...this.workerJobs.keys()]) if (!live.has(id)) this.workerJobs.delete(id);
+    }
   }
 
   /** 后续几涌按各自的间隔陆续进场（"慢慢出"落到这一条上）。 */
@@ -365,6 +412,219 @@ export class Combat {
     if (due.length === 0) return;
     this.pendingBursts = this.pendingBursts.filter((b) => b.at > 0);
     for (const b of due) this.emitBurst(b.ids, b.point);
+  }
+
+  /** 场上有楼在掉血吗（工匠出勤的唯一判据）。 */
+  private hasDamage(world: GameWorld): boolean {
+    for (const b of world.buildings.values()) if (b.built && b.hp < b.def.hp) return true;
+    return false;
+  }
+
+  /**
+   * 楼的"门口"：占地外圈里第一格能站的地方，优先 +Z 那一面（默认机位正对的方向）。
+   *
+   * 工匠出门/回屋都走这个点 —— 玩家看到的才是"从门里进出"，
+   * 而不是"在原地点一下消失"（上一版就是原地摘掉，看着像被吞了）。
+   */
+  private doorCell(b: Building, world: GameWorld): GridPos | null {
+    const blocked = (c: GridPos): boolean => {
+      const t = world.map.terrainAt(c);
+      return !t || !isStandable(t);
+    };
+    const c0 = b.origin.col;
+    const r0 = b.origin.row;
+    const ring: GridPos[] = [];
+    for (const cell of footprintRect({ origin: pos(c0 - 1, r0 - 1), cols: b.cols + 2, rows: b.rows + 2 })) {
+      const inside = cell.col >= c0 && cell.col < c0 + b.cols && cell.row >= r0 && cell.row < r0 + b.rows;
+      if (!inside) ring.push(cell);
+    }
+    // 正 +Z 那排优先，其次按到"正前方中点"的距离排
+    const front = { col: c0 + (b.cols - 1) / 2, row: r0 + b.rows };
+    ring.sort(
+      (a, c) =>
+        Math.abs(a.row - front.row) - Math.abs(c.row - front.row) ||
+        Math.abs(a.col - front.col) - Math.abs(c.col - front.col),
+    );
+    for (const cell of ring) if (!blocked(cell)) return cell;
+    return null;
+  }
+
+  /** 工匠的活：目标楼 + 到它门口的路线 + 卡住计时。目标不变就不重算路径。 */
+  private readonly workerJobs = new Map<
+    number,
+    { target: number; path: GridPos[]; idx: number; stuck: number; px: number; pz: number }
+  >();
+
+  /**
+   * 议事厅的工匠 —— **有伤才出门，修完走到门口进屋**。
+   *
+   * 三条都是踩出来的：
+   * 1. 常驻两个 → 玩家以为"多了两个守卫"，所以默认不在场上；
+   * 2. 原地摘掉 → 看着像被吞了，所以**走回门口那格再摘**；
+   * 3. 直线撞地形 → 一到水边/石头就卡死（"他们也不修，就卡在那里"），
+   *    所以给工匠也接上 A*（和矿工同一份 `walk.ts`）。
+   */
+  private ensureWorkers(dt: number, world: GameWorld): void {
+    const hall = [...world.buildings.values()].find((b) => b.def.unique && b.built);
+    if (!hall) return;
+    if (!this.hasDamage(world)) return; // 没活：不再补人，场上的人自己走回门口
+
+    const alive = this.units.filter((u) => !u.dead && u.def.duty === 'repair').length;
+    this.workerTimer = Math.max(0, this.workerTimer - dt);
+    if (alive >= WORKER.count || this.workerTimer > 0) return;
+    this.workerTimer = alive === 0 ? 0.4 : WORKER.respawnSeconds;
+
+    const door = this.doorCell(hall, world);
+    const at = door ? cellToWorld(door) : this.buildingAnchor(hall);
+    this.units.push({
+      id: this.nextId++,
+      def: unitDef('worker'),
+      hp: unitDef('worker').hp,
+      x: at.x,
+      z: at.z,
+      home: hall.id,
+      cooldown: 0,
+      specialIn: 0,
+      stun: 0,
+      dead: false,
+      deadFor: 0,
+      knockX: 0,
+      knockZ: 0,
+    });
+  }
+
+  private workerTimer = 0;
+
+  /** 最惨的那栋楼（修好/拆掉的不算）。 */
+  private worstBuilding(world: GameWorld): Building | null {
+    let worst: Building | null = null;
+    let worstFrac = 0.999;
+    for (const b of world.buildings.values()) {
+      if (!b.built) continue;
+      const frac = b.hp / b.def.hp;
+      if (frac < worstFrac && frac < 1) {
+        worstFrac = frac;
+        worst = b;
+      }
+    }
+    return worst;
+  }
+
+  /**
+   * 工匠的日常：眼前有敌人就抡一锤；否则去补最惨的那栋；没得补就走回门口进屋。
+   *
+   * 走路一律走 A* 的折线（`followPath`），不再直线撞地形 —— 直线撞到水/石头时
+   * `move()` 会沿轴滑，屏幕上就是那种"一卡一卡"的抖动。
+   */
+  private runWorker(u: Unit, dt: number, world: GameWorld): void {
+    const foe = this.nearestEnemy(u.x, u.z, u.def.sight);
+    if (foe) {
+      const dist = Math.hypot(foe.x - u.x, foe.z - u.z);
+      if (dist > u.def.range) this.stepToward(u, foe.x, foe.z, dt, world);
+      else if (u.cooldown <= 0) {
+        u.cooldown = u.def.cooldown;
+        this.fireSpecial(u, foe.kind === 'unit' ? foe.unit : null, world);
+      }
+      return;
+    }
+
+    const hall = [...world.buildings.values()].find((b) => b.def.unique && b.built);
+    /**
+     * 目标要**粘住**：两栋楼伤得差不多时，每帧重新选"最惨的那栋"会来回横跳，
+     * 路径每帧重算、人原地打转 —— 玩家看到的就是"AI 在打架"。
+     * 只有当前目标修好了、没了，或者新目标明显更惨（差 15% 以上）才换。
+     */
+    let target = this.worstBuilding(world);
+    let job = this.workerJobs.get(u.id);
+    const current = job && job.target > 0 ? world.buildings.get(job.target) : undefined;
+    if (current && current.built && current.hp < current.def.hp) {
+      const better = target && target.hp / target.def.hp < (current.hp / current.def.hp) - 0.15;
+      if (!better) target = current;
+    }
+    const goalBuilding = target ?? hall;
+    if (!goalBuilding) return;
+
+    const home = target === null; // 没活干 = 回家
+    /**
+     * 注意：新建的 job **必须写回 Map**。
+     * 上一版写成 `get() ?? {...}` 直接在表达式里造对象，等于每帧都从零开始：
+     * `idx` 永远停在 0、`followPath` 每帧都判定"已经到了第一个路点"而推进不了 ——
+     * 屏幕上就是工匠站在门口一动不动，也不修东西。
+     */
+    if (!job) {
+      job = { target: 0, path: [], idx: 0, stuck: 0, px: u.x, pz: u.z };
+      this.workerJobs.set(u.id, job);
+    }
+
+    // 目标变了（换楼 / 干完活要回家）才重算路径
+    const goalKey = home ? -1 : goalBuilding.id;
+    if (job.target !== goalKey || job.path.length === 0) {
+      const from = worldToCell(u.x, u.z);
+      const door = this.doorCell(goalBuilding, world);
+      const path = door ? findPath(world.map.size, from, door, (c) => !isStandable(world.map.terrainAt(c) ?? 'rock')) : null;
+      job.target = goalKey;
+      job.path = path ?? [];
+      job.idx = 0;
+      job.stuck = 0;
+    }
+
+    const arrived = this.followPath(u, job, dt, world);
+
+    if (home) {
+      // 走到门口就进屋（从名单里摘掉）
+      if (arrived) {
+        this.workerJobs.delete(u.id);
+        u.dead = true;
+        u.deadFor = 1.2; // 立刻不进逐帧动画，下一帧就被过滤掉
+      }
+      return;
+    }
+
+    if (arrived && target) {
+      // 到门口就开修：多站半格也无所谓，反正门就在楼边上。
+      // 只有真补到了血才打标记 —— 补满的那一帧之后锤子会在 0.35 秒内自己收起来
+      const healed = world.repair(target.id, WORKER.repairPerSecond * dt);
+      if (healed > 0) this.repairMarks.set(target.id, REPAIR_MARK_SECONDS);
+    }
+  }
+
+  /**
+   * 沿折线走一步，返回"到没到终点"。
+   *
+   * 还带一个卡住看门狗：原地不动超过 1.5 秒就重算路径；超过 5 秒就认栽，
+   * 直接把人放到下一个路点上（比"永远卡在水边"好，而且这种情况本来就不该出现）。
+   */
+  private followPath(
+    u: Unit,
+    job: { path: GridPos[]; idx: number; stuck: number; px: number; pz: number },
+    dt: number,
+    world: GameWorld,
+  ): boolean {
+    if (job.path.length === 0) return true;
+    if (job.idx >= job.path.length) return true;
+
+    const cell = job.path[job.idx]!;
+    const point = cellToWorld(cell);
+    const dist = Math.hypot(point.x - u.x, point.z - u.z);
+    if (dist < 0.25) {
+      job.idx++;
+      job.stuck = 0;
+      return job.idx >= job.path.length;
+    }
+    this.stepToward(u, point.x, point.z, dt, world);
+
+    const moved = Math.hypot(u.x - job.px, u.z - job.pz);
+    job.px = u.x;
+    job.pz = u.z;
+    job.stuck = moved < 0.004 ? job.stuck + dt : 0;
+    if (job.stuck > 5) {
+      // 认栽：直接放到当前路点上。卡死比这一下瞬移更糟
+      u.x = point.x;
+      u.z = point.z;
+      job.idx++;
+      job.stuck = 0;
+    }
+    return job.idx >= job.path.length;
   }
 
   /** 兵营：死一个先从储备补，储备空了才走读条。 */
@@ -401,7 +661,7 @@ export class Combat {
       const spec = b.def.tower;
       if (!spec || !b.built) continue;
       const st = this.towerState(b);
-      const level = levelScale(st.level);
+      const level = levelScale(b.level);
       st.cooldown = Math.max(0, st.cooldown - dt);
       if (st.magazine <= 0) {
         st.reloading = Math.max(0, st.reloading - dt);
@@ -413,9 +673,25 @@ export class Combat {
       const from = this.buildingAnchor(b);
       const target = this.nearestEnemy(from.x, from.z, spec.rangeTiles * level.range);
       if (!target) {
+        /**
+         * **空闲补弹**：没敌人、弹夹又不满，就慢慢补满。
+         *
+         * 原来只有"打空才装"：一座打了一半的塔在没敌人的时候会一直停在 3/6，
+         * 玩家要等下波怪来了才看见它重新开火 —— 读起来就是"等怪物来了才装填"。
+         * 这里只在**没有目标**时补，所以不会为了补弹耽误输出。
+         */
+        if (st.magazine > 0 && st.magazine < spec.magazine) {
+          if (st.reloading <= 0) st.reloading = spec.reloadSeconds * level.reload;
+          st.reloading = Math.max(0, st.reloading - dt);
+          if (st.reloading <= 0) st.magazine = spec.magazine;
+        }
         st.cooldown = Math.min(st.cooldown, spec.shotSeconds * 0.5);
+        // 没有目标就不记瞄准点：炮塔会停在最后朝向，视图据此决定转不转
+        this.aims.delete(b.id);
         continue;
       }
+      // 视图每帧拿这个点转炮台。记在塔的循环里，视图就不用自己再找一遍敌人。
+      this.aims.set(b.id, { x: target.x, z: target.z });
       if (st.cooldown > 0) continue;
 
       st.magazine -= 1;
@@ -440,15 +716,70 @@ export class Combat {
         splash: spec.splashTiles ?? 0,
         targetUnit: target.kind === 'unit' ? target.unit.id : null,
         targetBuilding: null,
+        fromBuilding: b.id,
       });
     }
+  }
+
+  /**
+   * 半径内最近的敌方**单位**（矿工自卫用）。
+   *
+   * 矿工不是 Combat 的单位（他们是 MiningCrew 画的运输工），但他们就站在矿区里，
+   * 敌人从旁边过还站着不动很假。所以给矿工两个口子：`nearestEnemyTo` 找目标、
+   * `strike` 打一下 —— 伤害仍然走这里，不跟视图各算一套。
+   * 这是**临时办法**：等矿工真被单位化，这两个方法就该删。
+   */
+  nearestEnemyTo(x: number, z: number, radius: number): Unit | null {
+    let best: Unit | null = null;
+    let bestD = radius;
+    for (const u of this.units) {
+      if (u.dead || u.def.faction !== 'enemy') continue;
+      const d = Math.hypot(u.x - x, u.z - z);
+      if (d <= bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
+  /** 对着某个单位打一下（伤害走与塔/兵同一个公式）。 */
+  strike(unitId: number, attack: number): void {
+    const u = this.units.find((x) => x.id === unitId && !x.dead);
+    if (!u) return;
+    this.hurtUnit(u, attack);
+  }
+
+  /**
+   * 这一次装填一共要几秒（含等级缩放）。
+   * 头顶那排小方块靠它算"填到第几个" —— 没有总时长就只能画一个满格跳变。
+   */
+  reloadSeconds(b: Building): number {
+    const spec = b.def.tower;
+    if (!spec) return 0;
+    return spec.reloadSeconds * levelScale(b.level).reload;
+  }
+
+  /** 换站姿：自动锁敌 / 守卫定点。只对有兵的楼有意义。 */
+  setStance(b: Building, stance: 'hunt' | 'guard'): void {
+    if (!b.def.squad) return;
+    b.stance = stance;
+    const world = this.opts.world;
+    world.bus.emit('toast', {
+      text: `${b.def.name}：${stance === 'hunt' ? '自动锁敌' : '守卫定点'}`,
+    });
+  }
+
+  /** 这座塔此刻瞄着哪个点；没有目标返回 null。 */
+  aimOf(buildingId: number): { x: number; z: number } | null {
+    return this.aims.get(buildingId) ?? null;
   }
 
   /** 空仓装填、弹夹与等级 —— 头顶条与信息卡共用这一份。 */
   towerState(b: Building): TowerState {
     let s = this.towers.get(b.id);
     if (!s) {
-      s = { magazine: b.def.tower!.magazine, reloading: 0, cooldown: 0, level: 1 };
+      s = { magazine: b.def.tower!.magazine, reloading: 0, cooldown: 0 };
       this.towers.set(b.id, s);
     }
     return s;
@@ -461,26 +792,52 @@ export class Combat {
   towerDamage(b: Building): number {
     const spec = b.def.tower;
     if (!spec) return 0;
-    return Math.round(spec.damage * levelScale(this.towerState(b).level).damage);
+    return Math.round(spec.damage * levelScale(b.level).damage);
   }
 
-  /** 读档用：把塔的等级摆回去（不花钱、不判许可）。 */
-  setTowerLevel(buildingId: number, level: number): void {
+  /** 读档用：把等级摆回去（不花钱、不判许可）。 */
+  setLevel(buildingId: number, level: number): void {
     const b = this.opts.world.buildings.get(buildingId);
-    const spec = b?.def.tower;
-    if (!b || !spec) return;
-    const st = this.towerState(b);
-    st.level = Math.min(spec.upgrades.length + 1, Math.max(1, Math.round(level)));
-    st.magazine = spec.magazine;
-    st.reloading = 0;
+    if (!b) return;
+    b.level = Math.min(this.maxLevel(b), Math.max(1, Math.round(level)));
+    const spec = b.def.tower;
+    if (spec) {
+      const st = this.towerState(b);
+      st.magazine = spec.magazine;
+      st.reloading = 0;
+    }
   }
 
-  /** 升级：只花钱与水晶，不碰许可。返回 false = 钱不够或已满级。 */
-  upgrade(b: Building): boolean {
+  /** 一栋楼最高能升到几级：塔按升级表，其它楼统一 3 级。 */
+  maxLevel(b: Building): number {
     const spec = b.def.tower;
-    if (!spec) return false;
-    const st = this.towerState(b);
-    const price = spec.upgrades[st.level - 1];
+    return spec ? spec.upgrades.length + 1 : 3;
+  }
+
+  /**
+   * 下一次升级的价钱。
+   *
+   * 塔走它自己的升级表（表里有水晶价）；**其它楼按造价的 60%×当前等级**折算，
+   * 只花金币 —— 田、房、矿井这些楼本来就没打算让人用晶钻去堆。
+   */
+  upgradePrice(b: Building): { gold: number; crystal: number } | null {
+    if (b.level >= this.maxLevel(b)) return null;
+    const spec = b.def.tower;
+    if (spec) return spec.upgrades[b.level - 1] ?? null;
+    const base = b.def.cost.gold ?? 60;
+    return { gold: Math.round(base * 0.6 * b.level), crystal: 0 };
+  }
+
+  /**
+   * 升级：**所有建筑都能升**（用户："箭塔、各建筑物、房屋都可以升级"）。
+   *
+   * 升级的收益分两种：
+   * - 塔：伤害/射速按 `levelScale` 放大（表里写着）；
+   * - 生产类：`yieldOf` 里每级 +30%（`GameWorld` 那一头算）。
+   * 所以这里只负责扣钱、加级、把塔的弹夹补满。
+   */
+  upgrade(b: Building): boolean {
+    const price = this.upgradePrice(b);
     if (!price) return false;
     const world = this.opts.world;
     const cost = { gold: price.gold, crystal: price.crystal };
@@ -489,10 +846,14 @@ export class Combat {
       return false;
     }
     world.spend(cost);
-    st.level += 1;
-    st.magazine = spec.magazine;
-    st.reloading = 0;
-    world.bus.emit('toast', { text: `${b.def.name}升到 Lv${st.level}` });
+    b.level += 1;
+    const spec = b.def.tower;
+    if (spec) {
+      const st = this.towerState(b);
+      st.magazine = spec.magazine;
+      st.reloading = 0;
+    }
+    world.bus.emit('toast', { text: `${b.def.name}升到 Lv${b.level}` });
     return true;
   }
 
@@ -508,9 +869,18 @@ export class Combat {
       const k = shot.t;
       shot.x = shot.fromX + (shot.toX - shot.fromX) * k;
       shot.z = shot.fromZ + (shot.toZ - shot.fromZ) * k;
-      // 炮弹走一条抛物线，箭与魔弹基本平飞
-      const arc = shot.ammo === 'cannon' ? Math.sin(k * Math.PI) * 1.1 : Math.sin(k * Math.PI) * 0.12;
-      shot.y = arc;
+      /**
+       * 弹道弧高。炮弹本来就抛物线（固定 1.1），箭原来几乎是平飞（0.12），
+       * 现在按**距离**抬：射得远就抛得高，近射还是接近平推 —— 读起来才像弓箭。
+       */
+      const dist = Math.hypot(shot.toX - shot.fromX, shot.toZ - shot.fromZ);
+      const peak =
+        shot.ammo === 'cannon'
+          ? 1.1
+          : shot.ammo === 'arrow'
+            ? Math.min(0.95, 0.12 + dist * 0.11)
+            : 0.2;
+      shot.y = Math.sin(k * Math.PI) * peak;
 
       if (shot.t < 1) continue;
       this.impact(shot, world);
@@ -566,10 +936,57 @@ export class Combat {
       if (u.def.faction === 'own') this.runOwn(u, dt, world);
       else this.runEnemy(u, dt, world);
     }
+    this.separateUnits(world);
+  }
+
+  /**
+   * 单位互相挤开 —— 他们脚下是**半径 0.17 的小碰撞点**，不是一整格。
+   *
+   * 不挤的话，一波兵围着同一栋楼时坐标会完全重合：屏幕上就是"一个格子里站了十个兵"，
+   * 只能看见最上面那张卡片。这里每帧只推半个重叠量（不是刚体求解），
+   * 推的时候照走 `move()`，所以不会把人推进水里或石头里。
+   */
+  private separateUnits(world: GameWorld): void {
+    const live = this.units.filter((u) => !u.dead);
+    const min = UNIT_SPACING;
+    for (let i = 0; i < live.length; i++) {
+      const a = live[i]!;
+      for (let j = i + 1; j < live.length; j++) {
+        const b = live[j]!;
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > min * min) continue;
+        if (d2 < 1e-8) {
+          /**
+           * 完全重合（同一波兵在同一格出生）——**这正是要修的那种情况**。
+           * 第一版把 d2=0 当成"没事"直接跳过了，于是屏幕上 minDist 依旧是 0：
+           * 挤开的逻辑写了、也每帧调了，唯独漏了唯一需要它的那个分支。
+           * 方向用两个 id 派生，保证每一对都有确定的分离方向，不会来回抖。
+           */
+          const ang = (((a.id * 37 + b.id * 17) % 360) / 360) * Math.PI * 2;
+          const ux = Math.cos(ang) * min * 0.5;
+          const uz = Math.sin(ang) * min * 0.5;
+          this.move(a, -ux, -uz, world);
+          this.move(b, ux, uz, world);
+          continue;
+        }
+        const d = Math.sqrt(d2);
+        const push = (min - d) * 0.5;
+        const ux = dx / d;
+        const uz = dz / d;
+        this.move(a, -ux * push, -uz * push, world);
+        this.move(b, ux * push, uz * push, world);
+      }
+    }
   }
 
   /** 自己人：守在自己的集合旗附近，敌人进视野就打。 */
   private runOwn(u: Unit, dt: number, world: GameWorld): void {
+    if (u.def.duty === 'repair') {
+      this.runWorker(u, dt, world);
+      return;
+    }
     const home = u.home !== null ? world.buildings.get(u.home) : undefined;
     if (!home) {
       u.home = null;
@@ -579,6 +996,35 @@ export class Combat {
 
     const anchor = cellToWorld(world.rallyOf(home));
     const foe = this.nearestEnemy(u.x, u.z, u.def.sight);
+
+    /**
+     * 兵营的两种站姿（用户在菜单里切）：
+     *
+     * - `guard` **守卫定点**：岗位是一个圆，只打圆里的，不出圈。圈外的敌人当没看见 ——
+     *   "会在那个方向的位置上找周围的敌人，而不会乱跑"。
+     * - `hunt` **自动锁敌**：视野里看见就追（下面那段老逻辑）。
+     *
+     * 守卫半径取"半个视野"：比射程大，所以够得着的都能打；比视野小，所以不会一追追出半张图。
+     */
+    if (home.stance === 'guard') {
+      const guardR = Math.max(u.def.range + 0.8, u.def.sight * 0.55);
+      const homeDist = Math.hypot(anchor.x - u.x, anchor.z - u.z);
+      if (homeDist > guardR) {
+        this.stepToward(u, anchor.x, anchor.z, dt, world);
+        return;
+      }
+      if (!foe) return;
+      const fromPost = Math.hypot(foe.x - anchor.x, foe.z - anchor.z);
+      if (fromPost > guardR) return; // 圈外的不管
+      const d = Math.hypot(foe.x - u.x, foe.z - u.z);
+      if (d > u.def.range) this.stepToward(u, foe.x, foe.z, dt, world);
+      else if (u.cooldown <= 0) {
+        u.cooldown = u.def.cooldown;
+        this.fireSpecial(u, foe.kind === 'unit' ? foe.unit : null, world);
+      }
+      return;
+    }
+
     if (!foe) {
       // 归位：离锚点超过 1.5 格就慢慢走回去
       const d = Math.hypot(anchor.x - u.x, anchor.z - u.z);
@@ -620,32 +1066,58 @@ export class Combat {
         foe.stun = spec.stunSeconds ?? 0.5;
       }
     }
-    if (foe) this.hurtUnit(foe, def.attack);
-    else {
+    if (foe) {
+      if (def.range > 1.5) {
+        const flight = Math.max(0.08, Math.hypot(foe.x - u.x, foe.z - u.z) / 8);
+        this.shots.push({
+          id: this.nextId++,
+          ammo: 'arrow',
+          x: u.x, z: u.z, y: 0.5,
+          fromX: u.x, fromZ: u.z,
+          toX: foe.x, toZ: foe.z,
+          t: 0, seconds: flight,
+          damage: def.attack, splash: 0,
+          targetUnit: foe.id, targetBuilding: null, fromBuilding: null,
+        });
+      } else {
+        this.hurtUnit(foe, def.attack);
+      }
+    } else {
       // 远程打建筑也算打到了：把伤害记在楼上
       const target = this.buildingAt(u.x, u.z, def.range);
       if (target) this.hurtBuilding(target, def.attack, world);
     }
   }
 
-  /** 敌人：沿着流场往它挑中的楼走，够近了拆楼。 */
+  /** 敌人：有己方兵时优先打兵，没兵才沿流场去拆楼。 */
   private runEnemy(u: Unit, dt: number, world: GameWorld): void {
-    // 困难档：远程敌人会转头射你的兵，先挑奶妈与弓箭手（那句"它会先射你的牧师"归位成真判据）
-    if (this.profile.engageTroops && u.def.range > 1.5) {
-      const prey = this.nearestPrey(u);
-      if (prey) {
-        const d = Math.hypot(prey.x - u.x, prey.z - u.z);
-        if (d <= u.def.range) {
-          if (u.cooldown <= 0) {
-            u.cooldown = u.def.cooldown + this.profile.strikePauseSeconds;
+    const prey = this.nearestPrey(u);
+    if (prey) {
+      const d = Math.hypot(prey.x - u.x, prey.z - u.z);
+      if (d <= u.def.range) {
+        if (u.cooldown <= 0) {
+          u.cooldown = u.def.cooldown + this.profile.strikePauseSeconds;
+          if (u.def.range > 1.5) {
+            const flight = Math.max(0.08, d / 8);
+            this.shots.push({
+              id: this.nextId++,
+              ammo: u.def.attackAnim === 'bowShort' ? 'arrow' : 'magic',
+              x: u.x, z: u.z, y: 0.5,
+              fromX: u.x, fromZ: u.z,
+              toX: prey.x, toZ: prey.z,
+              t: 0, seconds: flight,
+              damage: u.def.attack, splash: 0,
+              targetUnit: prey.id, targetBuilding: null, fromBuilding: null,
+            });
+          } else {
             this.hurtUnit(prey, u.def.attack);
-            this.emit('impact', { x: prey.x, z: prey.z, y: 0.5, ammo: u.def.attackAnim === 'bowShort' ? 'arrow' : 'magic', splash: 0 });
+            this.emit('impact', { x: prey.x, z: prey.z, y: 0.5, ammo: 'magic', splash: 0 });
           }
-          return;
         }
-        this.stepToward(u, prey.x, prey.z, dt, world);
         return;
       }
+      this.stepToward(u, prey.x, prey.z, dt, world);
+      return;
     }
     const own = [...world.buildings.values()].filter((b) => b.built);
     if (own.length === 0) return;
@@ -670,6 +1142,15 @@ export class Combat {
     let bestScore = Number.POSITIVE_INFINITY;
     for (const v of this.units) {
       if (v.dead || v.def.faction !== 'own') continue;
+      /**
+       * 工匠不算"猎物"。
+       *
+       * 一开始把他们算进去：结果一波兵冲进城就围着两个修墙的抡，楼一点血都不掉 ——
+       * 难度表的"先拆近的 / 直奔主城"整套偏置直接被两个杂役废掉了
+       * （`rounds.test` 那条波次偏置就是当场红的）。
+       * 他们是家里的杂役，不是战场上的目标。
+       */
+      if (v.def.duty === 'repair') continue;
       const d = Math.hypot(v.x - u.x, v.z - u.z);
       if (d > u.def.sight) continue;
       const fold = v.def.role === 'healer' ? 2 : v.def.role === 'ranged' ? 1 : 0;
@@ -756,7 +1237,7 @@ export class Combat {
   /** 打楼：伤害与"归零就没了"都交给世界层，这里只负责在楼消失后清掉自己的那部分状态。 */
   private hurtBuilding(b: Building, attack: number, world: GameWorld): void {
     if (this.gone.has(b.id)) return;
-    const destroyed = world.damage(b.id, damageOf(attack, 0));
+    const destroyed = world.damage(b.id, damageOf(attack, 2));
     if (!destroyed) return;
     this.gone.add(b.id);
     this.barracks.delete(b.id);

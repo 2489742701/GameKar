@@ -95,8 +95,16 @@ html[data-orientation='landscape'] .hud__side {
 
 .telemetry {
   position: absolute;
-  left: calc(var(--safe-left) + 10px);
-  top: calc(var(--safe-top) + 10px);
+  /*
+   * 这块读数被挪过两次：
+   *   ① 左上角贴着资源条 → 挡读数；② 左下角托盘上方 → 旗架/建造托盘一展开就被它压住。
+   * 现在放**右上角**、资源条下面那一行：左边留给选中卡片，下边留给托盘，只有这里是空的。
+   */
+  right: calc(var(--safe-right) + 12px);
+  top: calc(var(--safe-top) + 64px);
+  left: auto;
+  bottom: auto;
+  text-align: right;
   font-family: var(--font-num);
   font-size: var(--fs-xs);
   line-height: 1.5;

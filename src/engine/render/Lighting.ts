@@ -16,13 +16,17 @@ export interface LightingOptions {
 
 /** 太阳相对目标的偏移方向（世界坐标，乘以 shadowReach 得到实际灯位）。 */
 const SUN_DIR = new THREE.Vector3(-0.62, 1.0, 0.46).normalize();
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 export class LightingRig {
   readonly sun: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   readonly rim: THREE.DirectionalLight;
   private readonly target = new THREE.Object3D();
+  private readonly dir = SUN_DIR.clone();
   private reach = 20;
+  /** 太阳偏摆角：影子方向随它缓慢偏，画面才不是一张静态海报 */
+  private sway = 0;
 
   constructor(scene: THREE.Scene, options: LightingOptions = {}) {
     const shadowMapSize = options.shadowMapSize ?? 1024;
@@ -71,9 +75,20 @@ export class LightingRig {
       this.reach = reach;
       this.applyShadowReach();
     }
-    this.sun.position.copy(center).addScaledVector(SUN_DIR, this.reach * 2.2 + 40);
+    this.dir.copy(SUN_DIR).applyAxisAngle(Y_AXIS, this.sway);
+    this.sun.position.copy(center).addScaledVector(this.dir, this.reach * 2.2 + 40);
     this.sun.target.position.copy(center);
     this.sun.target.updateMatrixWorld();
+  }
+
+  /**
+   * 太阳的缓慢偏摆（±3°，一个来回约两分钟）。
+   *
+   * 不这么做的话，一局里所有影子一动不动，看着像贴图；偏摆的幅度必须小到
+   * "说不出哪里变了，但再看一眼发现影子挪了" —— 大了就变成日轨模拟，反而假。
+   */
+  update(time: number): void {
+    this.sway = Math.sin(time * 0.052) * 0.055;
   }
 
   dispose(scene: THREE.Scene): void {

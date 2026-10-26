@@ -16,7 +16,7 @@ import { VEIN_WORK } from '@game/config';
 import { buildingDef } from '@game/data/buildings';
 import { KNOWN_ANIMS } from '@game/dudes/anims';
 import { atlasLayout, frameRect } from '@game/dudes/atlas';
-import { frameOf } from '@game/dudes/DudeView';
+import { facingFlip, frameOf, frameUv } from '@game/dudes/DudeView';
 import { tripSeconds } from '@game/dudes/Miners';
 import { SUBSTITUTIONS, hexToRgb, parsePack, type ColorSet, type DudePack, type PaletteRole, type Rgb } from '@game/dudes/pack';
 import { compileRules, recolorRgba } from '@game/dudes/recolor';
@@ -266,13 +266,14 @@ describe('运输小人的脚程 == 账上的脚程', () => {
       Math.max(VEIN_WORK.overheadTiles, 2 * d) / spec.speed,
       8,
     );
-    expect(spec.perTrip / tripSeconds(claim.tiles, spec.speed)).toBeCloseTo(world.yieldOf(b).crystal!, 8);
+    expect(spec.perTrip / tripSeconds(claim.tiles, spec.speed)).toBeCloseTo(claim.perSecond, 8);
   });
 
   it('同一栋楼：小人来回一趟的秒数就是产量倒数（画与账同源）', () => {
     const { world, b } = rig(3, 'refinery');
     const spec = buildingDef('refinery').veinWork!;
-    const perSecond = world.yieldOf(b).crystal!;
+    const claim = world.claimsOf(b)[0]!;
+    const perSecond = claim.perSecond;
     expect(perSecond).toBeGreaterThan(0);
     expect(tripSeconds(3, spec.speed)).toBeCloseTo(spec.perTrip / perSecond, 6);
   });
@@ -282,5 +283,40 @@ describe('运输小人的脚程 == 账上的脚程', () => {
     const spec = buildingDef('mine').veinWork!;
     const halfTrip = spec.perTrip / (tripSeconds(3, spec.speed) / 2);
     expect(halfTrip).not.toBeCloseTo(world.yieldOf(b).crystal!, 5);
+  });
+});
+
+/**
+ * 朝向：素材默认朝右，往**屏幕左**走要镜像贴图。
+ *
+ * 这里钉两件事：① 镜像就是把 u 两头对调（不是翻 mesh）；
+ * ② 判定要看**投影到相机右向量**上的位移 —— 相机转 180° 后，"往左走"必须跟着反。
+ */
+describe('小人朝向', () => {
+  it('镜像 = u 区间对调，其余不动', () => {
+    const rect = { x: 48, w: 16 };
+    expect(frameUv(rect, 352, false)).toEqual({ u0: 48 / 352, u1: 64 / 352 });
+    expect(frameUv(rect, 352, true)).toEqual({ u0: 64 / 352, u1: 48 / 352 });
+  });
+
+  it('相机不转时：往 +X 走不镜像，往 -X 走镜像', () => {
+    expect(facingFlip(0.1, 0, 0, false)).toBe(false);
+    expect(facingFlip(-0.1, 0, 0, false)).toBe(true);
+  });
+
+  it('相机转 180° 后方向反过来', () => {
+    expect(facingFlip(0.1, 0, 180, false)).toBe(true);
+    expect(facingFlip(-0.1, 0, 180, false)).toBe(false);
+  });
+
+  it('相机转 90° 时，屏幕左右是世界 ±Z', () => {
+    // yaw=90：screenDx = dx*cos90 - dz*sin90 = -dz
+    expect(facingFlip(0, 0.1, 90, false)).toBe(true);
+    expect(facingFlip(0, -0.1, 90, false)).toBe(false);
+  });
+
+  it('几乎纯上下走时保持上次朝向，不左右抽', () => {
+    expect(facingFlip(0.004, 0.2, 0, true)).toBe(true);
+    expect(facingFlip(0.004, 0.2, 0, false)).toBe(false);
   });
 });

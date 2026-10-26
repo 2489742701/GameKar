@@ -21,14 +21,10 @@ export class ResourceBar implements HudWidget {
   private popValue!: HTMLElement;
   private popRate!: HTMLElement;
   private round!: HTMLElement;
-  private diffBtn!: HTMLElement;
 
   constructor(
     private readonly world: GameWorld,
     onTheme?: () => void,
-    /** 点一下换档，读数由 Hud 给（顶栏不知道 GameApp，只管显示与转达意图） */
-    onCycleDifficulty?: () => void,
-    private readonly difficultyLabel?: () => string,
   ) {
     // 图形一律是画出来的像素图标，数字就贴在它右边（原来是四个纯色圆点，分不出金币与面包）
     const item = (name: IconName, value: HTMLElement, rate: HTMLElement): void => {
@@ -49,13 +45,12 @@ export class ResourceBar implements HudWidget {
     item('pop', this.popValue, this.popRate);
 
     this.round = make('span', { class: 'resbar__round num' });
-    const themeBtn = make('button', { class: 'resbar__theme', text: '材质', onClick: () => onTheme?.() });
-    this.diffBtn = make('button', { class: 'resbar__diff', text: '难度', onClick: () => onCycleDifficulty?.() });
-    this.el.append(this.round, this.diffBtn, themeBtn, make('span', { class: 'resbar__title', text: 'GAMEKAR' }));
+    const settingsBtn = make('button', { class: 'resbar__theme', text: '设置', onClick: () => onTheme?.() });
+    this.el.append(this.round, settingsBtn, make('span', { class: 'resbar__title', text: 'GAMEKAR' }));
   }
 
   refresh(): void {
-    if (this.difficultyLabel) setText(this.diffBtn, this.difficultyLabel());
+
     const rates = this.world.incomeRates();
     for (const id of ORDER) {
       setText(this.value.get(id)!, formatNumber(this.world.resources[id], 0));

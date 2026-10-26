@@ -122,11 +122,11 @@ describe('兵营三态与塔的弹夹读数', () => {
     const dry = ammoOf(combat, tower)!;
     expect(dry.line).toContain('装填 3.4s');
 
-    combat.setTowerLevel(tower.id, 3);
+    combat.setLevel(tower.id, 3);
     expect(ammoOf(combat, tower)!.level).toBe(3);
     // 超上限要夹住，别把等级读成 99
-    combat.setTowerLevel(tower.id, 99);
-    expect(combat.towerState(tower).level).toBe(3);
+    combat.setLevel(tower.id, 99);
+    expect(tower.level).toBe(3);
   });
 });
 
@@ -148,7 +148,7 @@ describe('存档：写下去的账本读回来必须一模一样', () => {
     const hall = build(world, 'hall', at(0));
     const tower = build(world, 'arrowTower', at(3));
     const bar = build(world, 'barracks', at(6));
-    combat.setTowerLevel(tower.id, 2);
+    combat.setLevel(tower.id, 2);
     world.setRally(bar.id, pos(20, 21));
     hall.hp = 421;
     world.tick(ROUNDS.prepSeconds);

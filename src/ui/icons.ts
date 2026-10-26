@@ -30,6 +30,7 @@ const PIXELS: Record<IconName, string[]> = {
   sword: ['...bBb..', '...bBb..', '...bBb..', '...bSb..', '...bBb..', '.GGGGGG.', '...WW...', '...WW...'],
   shield: ['.RRRRRR.', 'RLLLLLLR', 'RLLLLLLR', 'RLLLLLLR', '.RRRRRR.', '..RRRR..', '...RR...', '........'],
   heart: ['.RR..RR.', 'RWRRRRRR', 'RRRRRRRR', 'RRRRRRRR', '.RRRRRR.', '..RRRR..', '...RR...', '........'],
+  // 锤子：横着的铁锤头 + 斜下来的木柄。修理中的楼头顶挂它，CSS 里绕着柄尾抡
 };
 
 /**

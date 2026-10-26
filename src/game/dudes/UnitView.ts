@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import type { Combat, Unit } from '@game/systems/Combat';
 import type { AnimName } from '@game/dudes/anims';
-import { DudeGallery, DudeSprite, DEFAULT_APPEARANCE } from '@game/dudes/DudeView';
+import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import type { DudePack } from '@game/dudes/pack';
 import { Roster } from '@game/dudes/roster';
 
@@ -21,6 +21,18 @@ interface Tracked {
   cooldown: number;
   /** 攻击动作还剩几秒播完；>0 期间不切回待命 */
   attackLeft: number;
+  /** 受击动作还剩几秒播完 */
+  hurtLeft: number;
+  /** 上一帧的血量，用来检测挨打 */
+  lastHp: number;
+  /**
+   * "还在走"的保留时间。
+   *
+   * 直接用 `moved > 0.004` 判跑步，会在"挤开/停下"那一两帧上反复真假 ——
+   * 动画就在 run 和 idle 之间每帧切一次，屏幕上就是抽搐（"多个状态在打架"）。
+   * 这里给 0.18 秒迟滞：只要这期间动过就一直算走。
+   */
+  runHold: number;
 }
 
 export class UnitView {
@@ -33,6 +45,7 @@ export class UnitView {
     private readonly gallery: DudeGallery,
     private readonly roster: Roster,
     heightTiles: number,
+    private readonly surfaceAt: (x: number, z: number) => number,
   ) {
     this.group.name = 'units';
     void heightTiles;
@@ -60,23 +73,35 @@ export class UnitView {
           z: unit.z,
           cooldown: unit.cooldown,
           attackLeft: 0,
+          hurtLeft: 0,
+          lastHp: unit.hp,
+          runHold: 0,
         };
         this.group.add(entry.sprite.mesh);
         this.tracked.set(unit.id, entry);
       }
 
-      const moved = Math.hypot(unit.x - entry.x, unit.z - entry.z);
+      const dx = unit.x - entry.x;
+      const dz = unit.z - entry.z;
+      const moved = Math.hypot(dx, dz);
       const justFired = unit.cooldown > entry.cooldown;
       entry.x = unit.x;
       entry.z = unit.z;
       entry.cooldown = unit.cooldown;
       if (justFired) entry.attackLeft = 0.55;
       else entry.attackLeft = Math.max(0, entry.attackLeft - dt);
+      if (unit.hp < entry.lastHp && !unit.dead) entry.hurtLeft = 0.3;
+      entry.lastHp = unit.hp;
+      entry.hurtLeft = Math.max(0, entry.hurtLeft - dt);
+      // 迟滞：这一帧动过就续 0.18 秒，否则慢慢放掉
+      entry.runHold = moved > 0.004 ? 0.18 : Math.max(0, entry.runHold - dt);
 
       entry.sprite.moveTo(unit.x, unit.z);
+      entry.sprite.mesh.position.y = this.surfaceAt(unit.x, unit.z) + this.appearance.height / 2 + this.appearance.lift;
       entry.sprite.faceCamera(yaw);
-      entry.sprite.play(this.animOf(unit, entry, moved), time, !unit.dead);
-      if (unit.dead) entry.sprite.mesh.position.y = this.appearance.height / 2 + this.appearance.lift;
+      // 朝向：默认朝右，往屏幕左走就镜像贴图（和矿工同一个入口）
+      if (!unit.dead) entry.sprite.setFlipX(facingFlip(dx, dz, yaw, entry.sprite.flipped));
+      entry.sprite.play(this.animOf(unit, entry), time, !unit.dead);
     }
 
     for (const [id, entry] of this.tracked) {
@@ -86,11 +111,12 @@ export class UnitView {
     }
   }
 
-  /** 死亡 > 刚开火 > 在走 > 待命。顺序不能反：死了还在播 run 就穿帮了。 */
-  private animOf(unit: Unit, entry: Tracked, moved: number): AnimName {
+  /** 死亡 > 刚开火 > 挨打 > 在走 > 待命。顺序不能反：死了还在播 run 就穿帮了。 */
+  private animOf(unit: Unit, entry: Tracked): AnimName {
     if (unit.dead) return 'die';
     if (entry.attackLeft > 0) return unit.def.attackAnim;
-    if (moved > 0.004) return 'run';
+    if (entry.hurtLeft > 0) return 'hurt';
+    if (entry.runHold > 0) return 'run';
     if (unit.stun > 0) return 'hurt';
     return unit.def.idleAnim;
   }

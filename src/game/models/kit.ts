@@ -31,7 +31,13 @@ export type Part =
   | { kind: 'cone'; radius: number; height: number; seg?: number }
   | { kind: 'sphere'; radius: number; seg?: number }
   | { kind: 'crystal'; radius: number; height: number }
-  | { kind: 'plinth'; size: Vec3 };
+  | { kind: 'plinth'; size: Vec3 }
+  /**
+   * 布：一片挂在杆上的旗面，顶点随风摆动（不是刚体，必须单独走材质）。
+   * `dir = -1` 是**镜像**而不是旋转 180°：旋转会把局部 +Z 翻到世界 -Z，
+   * 两面旗就朝相反方向抖（实测就是"风向不一样"）；镜像只翻 X，风向仍是同一阵。
+   */
+  | { kind: 'flag'; width: number; height: number; dir?: number };
 
 export interface Node {
   part: Part;
@@ -39,7 +45,42 @@ export interface Node {
   at?: Vec3;
   rot?: Vec3;
   paint?: PaintOptions;
+  /**
+   * 绕 `pivot` 自转的角速度（弧度/秒，绕 Z 轴）。给了它，这件就不是静物：
+   * `buildModel` 会给它包一层转轴 Group，视图每帧推进 `rotation.z`。
+   * 只支持绕 Z，是因为现在的"活件"只有风车帆与齿轮，多一个轴就多一套约定；
+   * 真需要绕 Y 的时候再加，别提前抽象。
+   */
+  spin?: number;
+  /** 自转轴心（模型局部坐标）。帆板必须绕轮毂转，不能绕自己中心转。 */
+  pivot?: Vec3;
+  /** 挂在杆顶的布：它靠**上沿**挂住，不是被下面的东西托着。几何锁按这个判。 */
+  hang?: boolean;
+  /**
+   * 可转炮台：带这个字段的件会被收进同一个转台 Group，轴心就是这个坐标。
+   * 视图侧拿 `userData.turret` 转它去瞄敌人（炮管朝 +Z，所以 yaw = atan2(dx, dz)）。
+   */
+  turret?: Vec3;
+  /**
+   * 设计上就悬空的件（魔法塔中间那颗磁浮晶核）。
+   *
+   * 只有这一种情况该写它：件**本来就该浮在那儿**，不是"忘了接上去"。
+   * 几何锁看到这个标记会放行，所以写它之前先问一句"这是故意的吗"。
+   */
+  float?: boolean;
 }
+
+/** 会自转的件：包在 pivot Group 里，`rotation.z` 每帧按 speed 推进。 */
+export interface Spinner {
+  group: THREE.Group;
+  speed: number;
+}
+
+/** `Group.userData` 上挂 spinner 列表的键；视图侧只认这一个字符串。 */
+export const SPINNERS = 'spinners';
+
+/** `Group.userData` 上挂"可转炮台"的键。 */
+export const TURRET = 'turret';
 
 export type ModelSpec = readonly Node[];
 
@@ -56,10 +97,14 @@ export const PAL = {
   roofBlue: 0x4b6f9a,
   roofGold: 0xc8a24c,
   metal: 0x9aa6b4,
+  /** 炮管用的深铁：比 metal 暗两档，压在木台/石堡上才分得出来 */
+  iron: 0x666f80,
   glow: 0x74e0ff,
   crystal: 0x8f6de0,
   grassTuft: 0x74a04f,
   snow: 0xeef3ff,
+  /** 帆布：比墙白一点、比雪黄一点，叠在木杆上不糊成一片 */
+  canvas: 0xe4d8b8,
 } as const;
 
 const geometryCache = new Map<string, THREE.BufferGeometry>();
@@ -79,6 +124,8 @@ function partKey(part: Part): string {
       return `sphere:${part.radius},${part.seg ?? 8}`;
     case 'crystal':
       return `crystal:${part.radius},${part.height}`;
+    case 'flag':
+      return `flag:${part.width},${part.height},${part.dir ?? 1}`;
   }
 }
 
@@ -137,10 +184,17 @@ function makePlinth(w: number, h: number, d: number, inset = 0.12): THREE.Buffer
   return fromTriangles(t);
 }
 
-/** 晶体：八面体纵向拉长，抽卡经济体系里"资源"的统一视觉符号。 */
+/**
+ * 晶体：八面体纵向拉长，抽卡经济体系里"资源"的统一视觉符号。
+ *
+ * `height` 是**总高**（和 box/cyl/cone 一个口径）。这里踩过一次坑：
+ * 八面体的 Y 半径是 radius，直接 `scale(1, height/radius, 1)` 得到的是
+ * **±height**（总高 2×height），于是"高 0.52 的晶核"实际纵向 1.04，
+ * 把魔法塔的楼板和檐口一起插穿 —— 而测试里看着它"被楼板托住"，一切正常。
+ */
 function makeCrystal(radius: number, height: number): THREE.BufferGeometry {
   const geo = new THREE.OctahedronGeometry(radius, 0);
-  geo.scale(1, height / radius, 1);
+  geo.scale(1, height / 2 / radius, 1);
   geo.computeVertexNormals();
   return geo;
 }
@@ -180,6 +234,15 @@ export function geometryFor(part: Part): THREE.BufferGeometry {
     case 'crystal':
       geo = makeCrystal(part.radius, part.height);
       break;
+    case 'flag': {
+      // 细分够多才摆得动；锚点挪到**左上角**（贴杆那头），挂旗时 at 直接写杆顶
+      const g = new THREE.PlaneGeometry(part.width, part.height, 10, 5);
+      g.translate(part.width / 2, -part.height / 2, 0);
+      // 往 -X 飘的那面用镜像，不用旋转（见 Part 上的注释：旋转会让风向反过来）
+      if ((part.dir ?? 1) < 0) g.scale(-1, 1, 1);
+      geo = g;
+      break;
+    }
   }
   geometryCache.set(key, geo);
   return geo;
@@ -203,6 +266,55 @@ export function paint(color: number, options: PaintOptions = {}): THREE.MeshStan
     emissiveIntensity: options.emissiveIntensity ?? 1,
   });
   materialCache.set(key, mat);
+  return mat;
+}
+
+// ---------------------------------------------------------------- 布
+
+/**
+ * 旗面的时间轴 —— 全场共用一份。
+ *
+ * 布料不能靠"整体转一下"糊弄：那样旗子是块硬纸板，转起来像块牌子。
+ * 这里在顶点着色器里按 uv.x（0 = 贴杆那头，1 = 自由端）叠两道不同频率的正弦，
+ * 越靠自由端甩得越大，顶点一动光照跟着动，看着才是布。
+ */
+const flagClock = { value: 0 };
+
+/** 每帧调用一次（GameApp.draw）。传的是游戏时间，暂停/回放才对得上。 */
+export function updateFlagTime(t: number): void {
+  flagClock.value = t;
+}
+
+const flagMaterials = new Map<number, THREE.MeshStandardMaterial>();
+
+function clothMaterial(color: number): THREE.MeshStandardMaterial {
+  const hit = flagMaterials.get(color);
+  if (hit) return hit;
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.92,
+    metalness: 0,
+    // 转 180° 挂的那面旗，背面朝外，必须双面
+    side: THREE.DoubleSide,
+    flatShading: false,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uFlagTime = flagClock;
+    shader.vertexShader = `uniform float uFlagTime;
+${shader.vertexShader}`;
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+      float hoist = clamp(uv.x, 0.0, 1.0);
+      float amp = hoist * hoist;
+      transformed.z += (sin(hoist * 6.5 - uFlagTime * 4.2) * 0.075
+                      + sin(hoist * 2.7 - uFlagTime * 2.3) * 0.04) * amp;
+      transformed.y += sin(hoist * 5.0 - uFlagTime * 3.4) * 0.022 * amp - amp * 0.035;`,
+    );
+  };
+  // 不加这一句，three 可能把旗子和普通材质共用一份已编译程序，我们的顶点位移就不生效
+  mat.customProgramCacheKey = () => 'gamekar-flag';
+  flagMaterials.set(color, mat);
   return mat;
 }
 
@@ -280,21 +392,74 @@ export const crystal = (
   paint: paintOpts,
 });
 
+export const flag = (
+  size: readonly [number, number],
+  color: number,
+  at: Vec3 = [0, 0, 0],
+  dir: number = 1,
+): Node => ({
+  part: { kind: 'flag', width: size[0], height: size[1], dir },
+  color,
+  at,
+  hang: true,
+});
+
 // ---------------------------------------------------------------- 装配
 
 export function meshFor(node: Node): THREE.Mesh {
-  const mesh = new THREE.Mesh(geometryFor(node.part), paint(node.color, node.paint));
+  const cloth = node.part.kind === 'flag';
+  const mesh = new THREE.Mesh(geometryFor(node.part), cloth ? clothMaterial(node.color) : paint(node.color, node.paint));
   if (node.at) mesh.position.set(node.at[0], node.at[1], node.at[2]);
   if (node.rot) mesh.rotation.set(node.rot[0], node.rot[1], node.rot[2]);
-  mesh.castShadow = true;
+  // 顶点是在着色器里动的，阴影贴图那一遍不跟着动 —— 投出来的是一块硬纸板影子，干脆不投
+  mesh.castShadow = !cloth;
   mesh.receiveShadow = true;
   return mesh;
 }
 
 export function buildModel(spec: ModelSpec): THREE.Group {
   const group = new THREE.Group();
-  for (const node of spec) group.add(meshFor(node));
+  const spinners: Spinner[] = [];
+  // 可转炮台：同一次装配里所有带 turret 的件共用一个转台（轴心取第一个写的那个）
+  const turretPivot = spec.find((n) => n.turret)?.turret ?? null;
+  const turret = turretPivot ? new THREE.Group() : null;
+  if (turret && turretPivot) {
+    turret.position.set(turretPivot[0], turretPivot[1], turretPivot[2]);
+    group.add(turret);
+  }
+  for (const node of spec) {
+    const mesh = meshFor(node);
+    if (turret && turretPivot && node.turret) {
+      // 件本身按绝对 at 摆，坐标系换成"相对轴心"
+      const a = node.at ?? [0, 0, 0];
+      mesh.position.set(a[0] - turretPivot[0], a[1] - turretPivot[1], a[2] - turretPivot[2]);
+      turret.add(mesh);
+      continue;
+    }
+    if (node.spin && node.pivot) {
+      const pivot = new THREE.Group();
+      pivot.position.set(node.pivot[0], node.pivot[1], node.pivot[2]);
+      // 件本身仍然按绝对 at 摆，只是坐标系换成"相对轴心"
+      mesh.position.set(
+        (node.at?.[0] ?? 0) - node.pivot[0],
+        (node.at?.[1] ?? 0) - node.pivot[1],
+        (node.at?.[2] ?? 0) - node.pivot[2],
+      );
+      pivot.add(mesh);
+      group.add(pivot);
+      spinners.push({ group: pivot, speed: node.spin });
+      continue;
+    }
+    group.add(mesh);
+  }
+  if (spinners.length > 0) group.userData[SPINNERS] = spinners;
+  if (turret) group.userData[TURRET] = turret;
   return group;
+}
+
+/** 取一栋楼上的自转件；没有就是空数组（静物楼不需要特判）。 */
+export function spinnersOf(group: THREE.Object3D): Spinner[] {
+  return (group.userData[SPINNERS] as Spinner[] | undefined) ?? [];
 }
 
 /**
@@ -387,5 +552,7 @@ function nodeSize(part: Part): Vec3 {
       return [part.radius * 2, part.radius * 2, part.radius * 2];
     case 'crystal':
       return [part.radius * 2, part.height, part.radius * 2];
+    case 'flag':
+      return [part.width, part.height, 0.02];
   }
 }

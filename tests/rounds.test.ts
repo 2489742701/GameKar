@@ -95,18 +95,24 @@ describe('面包是容积', () => {
     expect(world.resources.bread).toBe(BREAD.baseCap + BREAD.capPerMill);
   });
 
-  it('每回合面包 = 主城 2 + 磨坊(1 + 每块邻田 +1)', () => {
+  it('每回合面包 = 主城 2 + 磨坊表里的 base + 每块邻田', () => {
     const { world, at } = arena();
+    // 期望值读**真值表**（mill.breadPerRound），不读 config 里那两个同名数：
+    // 读它们的话，改建筑表这条锁不会红，等于没锁（上一版就是这样）。
+    const millBread = buildingDef('mill').breadPerRound!;
+    expect(millBread.base).toBe(BREAD.perRoundPerMill);
+    expect(millBread.perAdjacentField).toBe(BREAD.perRoundPerAdjacentField);
+
     build(world, 'hall', at(0));
     expect(world.breadPerRound()).toBe(BREAD.perRoundFromHall);
 
     build(world, 'mill', pos(10, 10));
-    expect(world.breadPerRound()).toBe(BREAD.perRoundFromHall + BREAD.perRoundPerMill);
+    expect(world.breadPerRound()).toBe(BREAD.perRoundFromHall + millBread.base);
 
     build(world, 'field', pos(12, 10));
     build(world, 'field', pos(11, 12));
     expect(world.breadPerRound()).toBe(
-      BREAD.perRoundFromHall + BREAD.perRoundPerMill + 2 * BREAD.perRoundPerAdjacentField,
+      BREAD.perRoundFromHall + millBread.base + 2 * millBread.perAdjacentField,
     );
   });
 });
@@ -250,7 +256,7 @@ describe('塔的弹药、装填与升级', () => {
     expect(card1).toBeTruthy();
     expect(Number(card1!.value)).toBe(shot1!.damage);
 
-    combat.setTowerLevel(tower.id, 2);
+    combat.setLevel(tower.id, 2);
     let shot2: ReturnType<typeof combat.liveShots>[number] | undefined;
     for (let i = 0; i < 20 && !shot2; i++) {
       combat.update(0.05);
@@ -268,7 +274,7 @@ describe('塔的弹药、装填与升级', () => {
     expect(byIcon.get('sword')).toBe('12');
     expect(byIcon.get('shield')).toBe('5');
     expect(byIcon.get('heart')).toBe('60'); // 兵营这行的心是兵的血；楼的血走头顶那条血格
-    expect(byIcon.get('pop')).toBe('4'); // 兵营要 4 个人手
+    expect(byIcon.get('pop')).toBe('−4'); // 兵营占 4 个人手：带符号，负数就是「从人口里扣」
   });
 
   it('升级只花钱与水晶，不扣许可、不抽卡；Lv3 之后不再收钱', () => {
@@ -278,13 +284,13 @@ describe('塔的弹药、装填与升级', () => {
     const gold = world.resources.gold;
 
     expect(combat.upgrade(tower)).toBe(true);
-    expect(combat.towerState(tower).level).toBe(2);
+    expect(tower.level).toBe(2);
     expect(world.permitCount('magicTower')).toBe(permits);
     expect(world.resources.gold).toBeLessThan(gold);
 
     expect(combat.upgrade(tower)).toBe(true);
     expect(combat.upgrade(tower)).toBe(false);
-    expect(combat.towerState(tower).level).toBe(3);
+    expect(tower.level).toBe(3);
   });
 });
 
@@ -320,7 +326,7 @@ describe('波次', () => {
     expect(unitDef('raider').cooldown).toBe(1.6);
     expect(unitDef('shade').cooldown).toBe(1.25);
     expect(unitDef('golem').cooldown).toBe(2.1);
-    expect(unitDef('raider').attack).toBe(6);
+    expect(unitDef('raider').attack).toBe(4);
     expect(unitDef('raider').hp).toBe(40);
   });
 
@@ -434,8 +440,8 @@ describe('波次', () => {
     };
 
     const normal = run('normal');
-    expect(normal.knightHp).toBe(60); // 正常档：敌人眼里只有楼
-    expect(normal.farmHp).toBeLessThan(200); // 而且它真的在拆（不是"谁都没打"的假绿）
+    expect(normal.knightHp).toBeLessThan(60); // 正常档：有兵优先打兵（不再只拆楼）
+    expect(normal.farmHp).toBe(200); // 有兵时楼不挨打
 
     const hard = run('hard');
     expect(hard.knightHp).toBeLessThan(60); // 困难档：先射奶妈/远程那一套之外，骑士也挨得到

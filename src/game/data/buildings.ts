@@ -6,7 +6,7 @@
  */
 
 import type { FlatSize } from '@engine/math/Grid';
-import type { ResourceId } from '@game/config';
+import { BREAD, type ResourceId } from '@game/config';
 
 /** 派小人去附近晶脉采矿的配置；缺省表示这栋楼不采矿。 */
 export interface VeinWorkSpec {
@@ -86,7 +86,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   hall: {
     id: 'hall',
     name: '议事厅',
-    blurb: '领地的芯。只有它能稳定渗出晶钻，抽卡的源头。',
+    blurb: '领地的核心。',
     model: 'hall',
     footprint: { cols: 2, rows: 2 },
     cost: {},
@@ -101,7 +101,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   house: {
     id: 'house',
     name: '民居',
-    blurb: '一栋住 4 个人口，但要吃掉 1 个面包。没面包就盖不起来 —— 去磨坊那边想办法。',
+    blurb: '人口的地基：盖得越多，能派出去的人越多。',
     model: 'house',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 45, bread: 1 },
@@ -114,20 +114,24 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   mill: {
     id: 'mill',
     name: '磨坊',
-    blurb: '每回合给面包，四周每贴一块田地再多给 1 个。它同时也是面包的仓。',
+    blurb: '产面包，贴田加产。',
     model: 'mill',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 130 },
     buildSeconds: 8,
     population: 2,
-    breadPerRound: { base: 1, perAdjacentField: 1 },
+    // 面包产能只有这一处真值：读 config 的 BREAD，不在这里再写一份
+    breadPerRound: {
+      base: BREAD.perRoundPerMill,
+      perAdjacentField: BREAD.perRoundPerAdjacentField,
+    },
     hp: 200,
   },
 
   field: {
     id: 'field',
     name: '田地',
-    blurb: '自己不产面包，专门贴在磨坊旁边给那座磨坊加产。离开磨坊就没法开工。',
+    blurb: '贴磨坊加产。',
     model: 'field',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 40 },
@@ -140,7 +144,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   farm: {
     id: 'farm',
     name: '田庄',
-    blurb: '金币主食。两块田就够继续抽下一次十连。',
+    blurb: '产金币。',
     model: 'farm',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 70 },
@@ -153,7 +157,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   tower: {
     id: 'tower',
     name: '瞭望塔',
-    blurb: '不要人口，占地小。用来把视野探到晶脉那边。',
+    blurb: '视野还没做，暂时当墙用。',
     model: 'tower',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 90 },
@@ -165,7 +169,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   arrowTower: {
     id: 'arrowTower',
     name: '箭塔',
-    blurb: '一弹夹 4 支箭，打完要装 2.5 秒。射程最远的一档，单发不重。',
+    blurb: '射程最远的塔。',
     model: 'arrowTower',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 120 },
@@ -173,7 +177,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     population: 1,
     tower: {
       damage: 8,
-      rangeTiles: 5.5,
+      rangeTiles: 7,
       shotSeconds: 0.7,
       magazine: 6,
       reloadSeconds: 2.2,
@@ -186,7 +190,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   cannonTower: {
     id: 'cannonTower',
     name: '炮塔',
-    blurb: '黑色铁弹砸下去炸开一片，1.4 格内都挨。弹夹只有 2 发，装填 5 秒，别指望它连射。',
+    blurb: '溅射塔，范围伤。',
     model: 'cannonTower',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 200 },
@@ -208,7 +212,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   magicTower: {
     id: 'magicTower',
     name: '魔法塔',
-    blurb: '快得看不清的一串光弹，单发很轻，胜在不停手。升级最贵的一座。',
+    blurb: '连射塔，单发轻。',
     model: 'magicTower',
     footprint: { cols: 1, rows: 1 },
     cost: { gold: 180, crystal: 40 },
@@ -229,20 +233,20 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   mine: {
     id: 'mine',
     name: '矿井',
-    blurb: '派小人去附近的晶脉采矿。矿越远，路上耗得越多，产量越低；附近没矿就一分钱不产。',
+    blurb: '采矿，靠晶脉。',
     model: 'mine',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 110 },
     buildSeconds: 9,
     population: 2,
-    veinWork: { resource: 'crystal', perTrip: 2, speed: 1.2, capacity: 2 },
+    veinWork: { resource: 'crystal', perTrip: 12, speed: 0.3, capacity: 2 },
     hp: 200,
   },
 
   market: {
     id: 'market',
     name: '市集',
-    blurb: '金币产出最高的民用建筑，代价是要三个人。',
+    blurb: '金币高产，但吃人手。',
     model: 'market',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 150 },
@@ -255,7 +259,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   barracks: {
     id: 'barracks',
     name: '兵营',
-    blurb: '驻一支骑士小队。兵出营后在营外一圈自动布防，敌人进圈就打。',
+    blurb: '驻骑士小队。',
     model: 'barracks',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 200 },
@@ -268,7 +272,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   archery: {
     id: 'archery',
     name: '弓手营',
-    blurb: '四个弓箭手。射程 3.6 格，血薄，别让他们站在兽人前面。',
+    blurb: '驻弓箭手。',
     model: 'archery',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 160 },
@@ -281,7 +285,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   warren: {
     id: 'warren',
     name: '兽穴',
-    blurb: '三个兽人，每 6 秒冲撞一次，把撞到的敌人顶开并定身。用来撕开敌群。',
+    blurb: '驻兽人。',
     model: 'warren',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 240 },
@@ -294,7 +298,7 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   temple: {
     id: 'temple',
     name: '神龛',
-    blurb: '两个牧师，不打人，只奶附近血最少的那个。死了这条线就断了。',
+    blurb: '驻牧师。',
     model: 'temple',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 260 },
@@ -307,13 +311,13 @@ export const BUILDINGS: Record<string, BuildingDef> = {
   refinery: {
     id: 'refinery',
     name: '精炼厂',
-    blurb: '同样靠附近的晶脉吃饭，但小人脚程快、能同时包三个矿点，所以高产。',
+    blurb: '高产采矿，包三矿。',
     model: 'refinery',
     footprint: { cols: 2, rows: 2 },
     cost: { gold: 180 },
     buildSeconds: 12,
     population: 3,
-    veinWork: { resource: 'crystal', perTrip: 2.2, speed: 3.2, capacity: 3 },
+    veinWork: { resource: 'crystal', perTrip: 6, speed: 0.8, capacity: 3 },
     hp: 200,
   },
 };

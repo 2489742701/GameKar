@@ -57,7 +57,7 @@ export interface SavedWorld {
 export function snapshot(world: GameWorld, combat: Combat): SavedWorld {
   const buildings: SavedBuilding[] = [];
   for (const b of world.buildings.values()) {
-    const level = b.def.tower ? combat.towerState(b).level : 1;
+    const level = b.level;
     buildings.push({
       d: b.def.id,
       c: b.origin.col,
@@ -144,7 +144,7 @@ export function applySave(world: GameWorld, combat: Combat, saved: SavedWorld): 
       skipped++;
       continue;
     }
-    if (b.lv > 1) combat.setTowerLevel(adopted.id, b.lv);
+    if (b.lv > 1) combat.setLevel(adopted.id, b.lv);
   }
 
   world.loadRound(saved.round);

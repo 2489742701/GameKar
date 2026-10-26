@@ -58,20 +58,20 @@ const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
 const PAYLOAD = 6;
 
 export const DEFAULT_TUNING: Tuning = {
-  brightness: DEFAULT_WOOD.brightness,
-  steps: DEFAULT_WOOD.steps,
-  grainY: DEFAULT_WOOD.grainY,
-  plankRows: DEFAULT_WOOD.plankRows,
-  seam: DEFAULT_WOOD.seam,
+  brightness: 0.34,
+  steps: 5,
+  grainY: 10,
+  plankRows: 16,
+  seam: 0.1,
   scale: 2,
   seedVariant: 0,
   gilt: DEFAULT_GILT.alpha,
 };
 
-/** 三档预设：淡 / 中（=默认） / 重。参数取自对比页量过的那三组。 */
+/** 三档预设：淡（=默认，最亮） / 中 / 重。参数取自对比页量过的那三组。 */
 export const PRESETS: { name: string; tuning: Tuning }[] = [
-  { name: '淡', tuning: { ...DEFAULT_TUNING, steps: 5, brightness: 0.34, plankRows: 16, seam: 0.1, grainY: 10 } },
-  { name: '中', tuning: { ...DEFAULT_TUNING } },
+  { name: '淡', tuning: { ...DEFAULT_TUNING } },
+  { name: '中', tuning: { ...DEFAULT_TUNING, brightness: 0.44, steps: 6, grainY: 13, plankRows: 12, seam: 0.2 } },
   { name: '重', tuning: { ...DEFAULT_TUNING, steps: 4, brightness: 0.5, plankRows: 8, seam: 0.3, grainY: 20 } },
 ];
 

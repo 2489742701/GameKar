@@ -76,7 +76,7 @@ export const CARDS: Record<string, CardDef> = {
     name: '工棚许可',
     kind: 'building',
     rarity: 'common',
-    blurb: '一张民居建造许可，人口 +3。',
+    blurb: '一张民居建造许可，人口 +4。',
     effects: [{ kind: 'permit', buildingId: 'house', count: 1 }],
   },
   arrowWrit: {
@@ -84,7 +84,7 @@ export const CARDS: Record<string, CardDef> = {
     name: '箭塔批文',
     kind: 'building',
     rarity: 'common',
-    blurb: '箭塔建造许可。一弹夹 4 支，是前期最划算的火力。',
+    blurb: '箭塔建造许可。一弹夹 6 支，是前期最划算的火力。',
     effects: [{ kind: 'permit', buildingId: 'arrowTower', count: 1 }],
   },
   fieldGrant: {
@@ -100,7 +100,7 @@ export const CARDS: Record<string, CardDef> = {
     name: '哨所批文',
     kind: 'building',
     rarity: 'common',
-    blurb: '一张瞭望塔建造许可，不占人口。',
+    blurb: '一张瞭望塔建造许可，占 1 人。',
     effects: [{ kind: 'permit', buildingId: 'tower', count: 1 }],
   },
 
@@ -178,7 +178,8 @@ export const CARDS: Record<string, CardDef> = {
     id: 'recruitDecree',
     name: '征兵令',
     kind: 'building',
-    rarity: 'epic',
+    // 稀有档：成军是核心路径，压在史诗里玩家一局都摸不到兵营（实测 600 抽只出 16 次）
+    rarity: 'rare',
     blurb: '兵营建造许可。三个骑士，营位就是布防点。',
     effects: [{ kind: 'permit', buildingId: 'barracks', count: 1 }],
   },
@@ -202,7 +203,7 @@ export const CARDS: Record<string, CardDef> = {
     id: 'warrenTreaty',
     name: '兽穴盟约',
     kind: 'building',
-    rarity: 'epic',
+    rarity: 'rare',
     blurb: '兽穴建造许可。三个兽人会冲撞，把对面的阵型顶散。',
     effects: [{ kind: 'permit', buildingId: 'warren', count: 1 }],
   },
@@ -316,12 +317,13 @@ export const STARTER_POOL: GachaPool = {
     { cardId: 'bowyerWarrant', weight: 16 },
     { cardId: 'millCharter', weight: 18 },
     { cardId: 'laborCorps', weight: 14 },
+    // 成军两张也放稀有档：这是核心路径，不该靠运气
+    { cardId: 'recruitDecree', weight: 26 },
+    { cardId: 'warrenTreaty', weight: 12 },
 
     { cardId: 'refineryBlueprint', weight: 30 },
-    { cardId: 'recruitDecree', weight: 26 },
     { cardId: 'cannonFoundry', weight: 12 },
     { cardId: 'arcaneLattice', weight: 10 },
-    { cardId: 'warrenTreaty', weight: 14 },
     { cardId: 'templeDecree', weight: 12 },
     { cardId: 'royalRoad', weight: 24 },
     { cardId: 'cityCharter', weight: 20 },

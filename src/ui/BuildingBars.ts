@@ -30,12 +30,15 @@ export function lift(x: number, y: number, extra = BARS_LIFT): string {
 
 interface BarNode {
   el: HTMLElement;
-  cells: HTMLElement[];
+  hpFill: HTMLElement;
   train: HTMLElement;
   trainFill: HTMLElement;
   trainText: HTMLElement;
   ammo: HTMLElement;
-  ammoText: HTMLElement;
+  /** 一排小方块：一发一个 */
+  pips: HTMLElement;
+  /** 当前这排画了几个格；弹夹容量变了才重建 */
+  pipCount: number;
 }
 
 export class BuildingBars implements HudWidget {
@@ -89,28 +92,47 @@ export class BuildingBars implements HudWidget {
     const hit = this.nodes.get(id);
     if (hit) return hit;
 
-    const cells: HTMLElement[] = [];
-    for (let i = 0; i < 6; i++) cells.push(make('i', { class: 'bar__cell' }));
+    const hpFill = make('i', { class: 'bar__hp__fill' });
     const trainFill = make('i', { class: 'bar__fill' });
     const trainText = make('span', { class: 'bar__text num' });
-    const ammoText = make('span', { class: 'bar__text num' });
+    const pips = make('div', { class: 'bar__pips' });
     const train = make('div', { class: 'bar__train' }, [trainFill, trainText]);
-    const ammo = make('div', { class: 'bar__ammo' }, [ammoText]);
-    const el = make('div', { class: 'bar' }, [make('div', { class: 'bar__hp' }, cells), train, ammo]);
+    /**
+     * 弹夹那一格**只有方块**：不写"Lv1 · 弹夹 5/6"。
+     * 等级与余量在选中卡片里有完整一行，头顶这条只需要一眼看出"还几发、在不在装"。
+     */
+    const ammo = make('div', { class: 'bar__ammo' }, [pips]);
+    const el = make('div', { class: 'bar' }, [make('div', { class: 'bar__hp' }, [hpFill]), train, ammo]);
 
-    const node: BarNode = { el, cells, train, trainFill, trainText, ammo, ammoText };
+    const node: BarNode = { el, hpFill, train, trainFill, trainText, ammo, pips, pipCount: 0 };
     this.el.append(el);
     this.nodes.set(id, node);
     return node;
   }
 
+  /**
+   * 弹夹画成**一发一个方块**，装填时逐格点亮。
+   *
+   * 原来是一条连续进度条：6 发只显示成"一条 66% 的条"，看不出还剩几发、也看不出装到第几发。
+   * 方块数跟着 `size` 走（箭塔 6、炮塔 3…），容量变了才重建，不是每帧重建。
+   */
+  private paintPips(node: BarNode, ammo: NonNullable<BuildingReadout['ammo']>): void {
+    if (node.pipCount !== ammo.size) {
+      node.pipCount = ammo.size;
+      node.pips.replaceChildren(
+        ...Array.from({ length: ammo.size }, () => make('i', { class: 'bar__pip' })),
+      );
+    }
+    const kids = node.pips.children;
+    for (let i = 0; i < kids.length; i++) {
+      kids[i]!.setAttribute('data-on', i < ammo.filled ? '1' : '0');
+    }
+  }
+
   private paint(node: BarNode, r: BuildingReadout): void {
-    const lit = r.hp.steps;
-    node.cells.forEach((cell, i) => {
-      cell.dataset['on'] = i < lit ? '1' : '0';
-      // 剩两格以下翻红：黄条读到"还剩一半"和"快塌了"是两件事
-      cell.dataset['low'] = i < lit && lit <= 2 ? '1' : '0';
-    });
+    node.hpFill.style.width = `${Math.round(r.hp.frac * 100)}%`;
+    node.hpFill.dataset['mid'] = r.hp.frac < 0.5 && r.hp.frac >= 0.25 ? '1' : '0';
+    node.hpFill.dataset['low'] = r.hp.frac < 0.25 ? '1' : '0';
 
     const squadBusy = r.squad !== null && r.squad.alive < r.squad.total;
     node.train.hidden = !squadBusy;
@@ -121,6 +143,6 @@ export class BuildingBars implements HudWidget {
 
     const ammoBusy = r.ammo !== null && (r.ammo.reloading > 0 || r.ammo.left < r.ammo.size);
     node.ammo.hidden = !ammoBusy;
-    if (r.ammo && ammoBusy) setText(node.ammoText, r.ammo.line);
+    if (r.ammo && ammoBusy) this.paintPips(node, r.ammo);
   }
 }

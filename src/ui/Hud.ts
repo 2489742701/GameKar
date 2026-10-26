@@ -11,6 +11,7 @@ import { hasRally } from '@game/data/buildings';
 import type { Building } from '@game/world/GameWorld';
 import { ActionDock } from './ActionDock';
 import { BuildingBars } from './BuildingBars';
+import { BuildingFx } from './BuildingFx';
 import { BuildingBubble } from './BuildingBubble';
 import { DefeatPanel, restartUrl } from './DefeatPanel';
 import { BuildingMenu } from './BuildingMenu';
@@ -41,6 +42,7 @@ export class Hud {
   private readonly flag: RallyFlag;
   private readonly theme: ThemePanel;
   private readonly bars: BuildingBars;
+  private readonly bfx: BuildingFx;
   private readonly raid: RaidPreview;
   private readonly defeat: DefeatPanel;
   private readonly menu: BuildingMenu;
@@ -58,14 +60,15 @@ export class Hud {
   ) {
     const world = app.world;
 
-    this.resbar = new ResourceBar(world, () => this.toggleTheme(), () => this.cycleDifficulty(), () => this.difficultyChip());
+    this.resbar = new ResourceBar(world, () => this.toggleTheme());
     this.bars = new BuildingBars(world, app.combat);
+    this.bfx = new BuildingFx(world, app.combat);
     this.raid = new RaidPreview(world, app.combat, app.seed);
     this.defeat = new DefeatPanel(() => {
       app.restart();
       location.href = restartUrl(app.seed, location);
     });
-    this.card = new SelectionCard(world, (id) => app.demolish(id), (id) => app.runnersOf(id), app.combat);
+    this.card = new SelectionCard(world, (id) => app.demolish(id), app.combat);
     this.dock = new ActionDock(world, {
       onPull: (count) => {
         const purchase = app.pull(count);
@@ -74,19 +77,28 @@ export class Hud {
       onBuild: (id) => app.build(id),
       onCancelBuild: () => app.cancelBuild(),
       onFocusHome: () => app.focusHome(),
-      onFlagPocket: () => this.armFlag(),
+      onDemolish: () => app.onDemolishSlot(),
+      onPickFlag: (id) => {
+        if (app.pickFlag(id)) this.dock.closeTray();
+        this.syncDockMode();
+      },
     });
     this.panel = new GachaPanel(() => this.panel.hide());
     this.confirm = new ConfirmDialog();
     this.bubble = new BuildingBubble(world, (id) => app.runnersOf(id), app.combat);
-    this.flag = new RallyFlag((building) => this.app.stowFlag(building));
+    // 头顶那面旗**不是第二个入口**：点它和点旗子袋是同一件事（打开旗架）
+    this.flag = new RallyFlag(() => this.dock.openFlagRack());
     this.menu = new BuildingMenu({
+      onStance: (b, stance) => {
+        this.app.combat.setStance(b, stance);
+        this.menu.levels.set(b.id, b.level);
+      },
       onUpgrade: (b) => {
         this.app.upgrade(b.id);
         this.syncMenu();
       },
       onDemolish: (b) => this.app.demolish(b.id),
-    });
+    }, app.combat);
     this.badges = new StaffBadges(world);
     // 面板自己不算纹理也不存盘：apply 交回 installTheme，落盘交给 Prefs，
     // 这样"改了没生效"只可能出在一处
@@ -94,6 +106,11 @@ export class Hud {
       prefs: app.prefs,
       apply: (t) => installTheme(undefined, woodOf(t), giltOf(t), t.scale),
       say: (text, tone) => this.toasts.push(text, tone ?? 'ok'),
+      difficulty: {
+        options: [{ id: 'easy', label: '简单' }, { id: 'normal', label: '正常' }, { id: 'hard', label: '困难' }],
+        state: () => ({ activeId: this.app.combat.difficulty, pendingId: this.app.pendingDiff ?? undefined }),
+        onSet: (id) => { this.app.setDifficulty(id as Difficulty); },
+      },
     });
 
     this.shell.append(
@@ -113,6 +130,7 @@ export class Hud {
       this.menu.el,
       this.theme.el,
       this.bars.el,
+      this.bfx.el,
       this.raid.el,
       this.defeat.el,
       this.telemetry,
@@ -122,9 +140,14 @@ export class Hud {
       this.card.render(sel);
       this.syncFlag();
       this.syncMenu();
+      this.syncDockMode();
     });
     world.bus.on('placing:changed', (id) => this.dock.setPlacing(id));
-    world.bus.on('flag:changed', () => this.syncFlag());
+    world.bus.on('flag:changed', () => {
+      this.syncFlag();
+      // 落旗之后这一趟就完了：手空了就把旗架收起，别留一排"在手里"的旧卡
+      if (this.app.flags.state === 'empty') this.dock.closeTray();
+    });
     world.bus.on('rally:changed', () => this.syncFlag());
     world.bus.on('toast', ({ text, tone }) => this.toasts.push(text, tone ?? 'ok'));
     world.bus.on('inspect:target', (building) => this.bubble.show(building));
@@ -134,24 +157,29 @@ export class Hud {
       this.badges.forget(b.id);
       this.menu.forget(b.id);
       this.bars.forget(b.id);
+      this.bfx.forget(b.id);
       this.syncFlag();
       this.bars.refresh();
+      this.bfx.refresh();
     });
     // 条上的内容一变就该重画，别等 10Hz 那一拍：挨一发打、封顶、放旗子都是离散事件
     world.bus.on('building:hit', () => this.bars.refresh());
     world.bus.on('building:built', () => {
       this.badges.refresh();
       this.bars.refresh();
+      this.bfx.refresh();
     });
     // 新楼当场就要抢岗位池（understaffed 只数已封顶的，所以封顶那条也挂着）
     world.bus.on('building:placed', () => {
       this.bars.refresh();
+      this.bfx.refresh();
       this.badges.refresh();
     });
     world.bus.on('rally:changed', () => this.bars.refresh());
     world.bus.on('round:changed', () => {
       this.raid.refresh();
       this.bars.refresh();
+      this.bfx.refresh();
       // 难度牌上那句"→某档"要在换档那一刻收掉
       this.resbar.refresh();
     });
@@ -239,10 +267,7 @@ export class Hud {
     const sel = this.app.world.selection;
     const building = sel?.kind === 'building' ? sel.building : null;
     this.menu.show(building);
-    if (building?.def.tower) {
-      const st = this.app.towerState(building.id);
-      if (st) this.menu.levels.set(building.id, st.level);
-    }
+    if (building) this.menu.levels.set(building.id, building.level);
   }
 
   private positionMenu(): void {
@@ -282,27 +307,8 @@ export class Hud {
     this.theme.toggle();
   }
 
-  /** 顶栏那颗难度牌：简 → 正常 → 困难 → 简，一直循环。 */
-  private cycleDifficulty(): void {
-    const order: Difficulty[] = ['easy', 'normal', 'hard'];
-    const next = order[(order.indexOf(this.app.difficulty) + 1) % order.length]!;
-    this.app.setDifficulty(next);
-    this.resbar.refresh();
-  }
-
-  /** 正在打的这波不换节奏，所以牌上要把"排在下一波"的那个也写出来。 */
-  private difficultyChip(): string {
-    const now = DIFFICULTY[this.app.combat.difficulty].label;
-    const picked = this.app.pendingDiff;
-    if (!picked || picked === this.app.combat.difficulty) return `难度·${now}`;
-    return `难度·${now}→${DIFFICULTY[picked].label}`;
-  }
 
   /** 点旗子袋：袋空着也给一句话，别让玩家按了个没反应还不吭声。 */
-  private armFlag(): void {
-    this.app.armFlag();
-  }
-
   private bindKeys(): void {
     window.addEventListener('keydown', this.onKey);
   }
@@ -343,6 +349,10 @@ export class Hud {
       const b = this.app.world.buildings.get(id);
       return b ? this.app.screenOfBuilding(b) : { x: -9999, y: -9999, inFront: false };
     });
+    this.bfx.placeAll((id) => {
+      const b = this.app.world.buildings.get(id);
+      return b ? this.app.screenOfBuilding(b) : { x: -9999, y: -9999, inFront: false };
+    });
   }
 
   private positionRaid(): void {
@@ -366,12 +376,20 @@ export class Hud {
     window.removeEventListener('keydown', this.onKey);
   }
 
+  /** 拆除模式那一格的文案：进入/退出、选中了哪栋楼，都在这里对齐 */
+  private syncDockMode(): void {
+    this.dock.setDemolish(this.app.demolishMode, this.app.demolishTargetName);
+    this.dock.setFlagHeld(this.app.flags.held);
+  }
+
   private refresh(): void {
+    this.syncDockMode();
     this.resbar.refresh();
     this.dock.refresh();
     this.card.refresh();
     this.badges.refresh();
     this.bars.refresh();
+      this.bfx.refresh();
     this.raid.refresh();
     // 气泡里没有按钮，所以可以整块重写；小人数量是 10Hz 才会变的读数
     const target = this.bubble.targetBuilding;
