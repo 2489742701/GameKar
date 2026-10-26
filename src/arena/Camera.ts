@@ -29,7 +29,6 @@ export const VIEW_PRESETS: ViewPreset[] = [
 
 /** 自动模式多久换一次机位、玩家停手多久回来。 */
 const SWITCH_SECONDS = 9;
-const RESUME_SECONDS = 6;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 /** 把角度差折到 [-180, 180]，避免镜头绕远路 */
@@ -41,33 +40,32 @@ export class ArenaDirector {
    * 反向等以后在设置里给个开关）。拨这个开关就能整体翻过来。
    */
   invertOrbit = false;
+  /**
+   * 镜头自动巡视（每 9 秒换机位 + 漂向战场）。**默认关**（用户 2026-10-27：
+   * "自动把他关了，默认不需要，留给未来观战"）。观战模式开这个开关就行，
+   * 手动机位切换不受它影响。
+   */
+  autoOrbit = false;
   index = 0;
-  auto = true;
   /** 玩家自己拖过镜头：锁在手动，直到他按"视角"按钮（不再 6 秒后偷偷抢回去） */
   locked = false;
-  /** 玩家动过之后的静默计时 */
-  private idle = RESUME_SECONDS;
   private switchIn = SWITCH_SECONDS;
 
   get current(): ViewPreset {
     return VIEW_PRESETS[this.index]!;
   }
 
-  /** 手动换下一个机位（这会立刻退出自动，停手后再回来）。 */
+  /** 手动换下一个机位：相机平滑挪过去，但不会接着自己转（自动巡视要另外开）。 */
   next(): ViewPreset {
     this.index = (this.index + 1) % VIEW_PRESETS.length;
     this.locked = false;
-    this.auto = true;
-    this.idle = RESUME_SECONDS;
     this.switchIn = SWITCH_SECONDS;
     return this.current;
   }
 
-  /** 玩家碰了相机。 */
+  /** 玩家碰了相机：锁在手动，直到他再按"视角"。 */
   userTouched(): void {
-    this.auto = false;
     this.locked = true;
-    this.idle = 0;
   }
 
   /**
@@ -77,19 +75,14 @@ export class ArenaDirector {
   update(dt: number, rig: CameraRig, fitZoom: number, center: { x: number; z: number }, focus: { x: number; z: number } | null): void {
     // 玩家锁住手动时**一帧都不碰相机**：不然他刚拖好画面，镜头又自己飘回去
     if (this.locked) return;
-    if (!this.auto) {
-      this.idle += dt;
-      if (this.idle >= RESUME_SECONDS) {
-        this.auto = true;
+
+    // 只有自动巡视开着才轮换机位 / 跟随战场；默认关，镜头停在当前机位上不动
+    if (this.autoOrbit) {
+      this.switchIn -= dt;
+      if (this.switchIn <= 0) {
+        this.index = (this.index + 1) % VIEW_PRESETS.length;
         this.switchIn = SWITCH_SECONDS;
       }
-      return;
-    }
-
-    this.switchIn -= dt;
-    if (this.switchIn <= 0) {
-      this.index = (this.index + 1) % VIEW_PRESETS.length;
-      this.switchIn = SWITCH_SECONDS;
     }
 
     const view = this.current;
@@ -100,12 +93,12 @@ export class ArenaDirector {
     rig.rotateBy(shortAngle(view.yaw - rig.yaw) * Math.min(1, dt * 1.8));
     rig.setPitch(lerp(rig.pitch, view.pitch, Math.min(1, dt * 1.2)));
     // 中心：跟焦点或回场地中心（centerOnWorld 自带阻尼）
-    const target = view.follow && focus ? focus : center;
+    const target = this.autoOrbit && view.follow && focus ? focus : center;
     rig.centerOnWorld(target.x, target.z);
   }
 
   /** 给 HUD 的一行状态。 */
   get status(): string {
-    return this.auto ? `自动 · ${this.current.name}` : this.current.name;
+    return this.autoOrbit ? `自动 · ${this.current.name}` : this.current.name;
   }
 }

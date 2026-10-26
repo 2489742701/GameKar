@@ -67,41 +67,32 @@ export interface Banner {
   update(time: number): void;
 }
 
-const CLOTH_W = 0.95;
-const CLOTH_H = 0.5;
-const SEGS = 7;
-
 /**
- * 会飘的旗：一根杆 + 一条分段的布。
- * 布面用 `PlaneGeometry(…, SEGS, 1)` 的顶点做正弦位移 —— 每帧改 8×2 个顶点，
- * 比上着色器省事，也比"整块平面转一转"像旗子。
+ * 挂在墙上的**竖旗**：一根横杆钉在檐口，布从杆上往下垂。
+ * 顶边钉死（摆幅 = 0），越靠旗尾摆得越大；横向 3 段、纵向 6 段，够看出波浪又不费顶点。
+ *
+ * 用户第二次改口："旗帜是竖的，挂在上面的，挂在墙上面的，从上往下的旗帜" ——
+ * 之前那版是"杆子立在地上、布朝一侧飘"，那是旗杆旗，不是挂在墙上的家族旗。
  */
-export function makeBanner(side: Side, poleHeight = 1.1): Banner {
+export function makeBanner(side: Side, top: number, width = 0.66, height = 1.05): Banner {
   const group = new THREE.Group();
   const tint = sideColor(side);
 
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.042, poleHeight, 6),
+  const rod = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.028, width * 1.25, 6),
     new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 }),
   );
-  pole.position.y = poleHeight / 2;
-  pole.castShadow = true;
+  rod.rotation.z = Math.PI / 2;
+  rod.position.y = top;
 
-  const knob = new THREE.Mesh(
-    new THREE.SphereGeometry(0.055, 6, 4),
-    new THREE.MeshStandardMaterial({
-      color: tint,
-      emissive: tint,
-      emissiveIntensity: 0.6,
-      flatShading: true,
-      roughness: 0.5,
-    }),
-  );
-  knob.position.y = poleHeight + 0.02;
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x4a3a26, flatShading: true, roughness: 0.9 });
+  const capL = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 4), capMat);
+  capL.position.set(-width * 0.62, top, 0);
+  const capR = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 4), capMat);
+  capR.position.set(width * 0.62, top, 0);
 
-  const geo = new THREE.PlaneGeometry(CLOTH_W, CLOTH_H, SEGS, 1);
-  // 旗面从杆顶向一侧展开：把几何体整体右移半个宽
-  geo.translate(CLOTH_W / 2, 0, 0);
+  const geo = new THREE.PlaneGeometry(width, height, 3, 6);
+  geo.translate(0, -height / 2, 0); // 顶边对齐 y=0，布整体往下垂
   const cloth = new THREE.Mesh(
     geo,
     new THREE.MeshStandardMaterial({
@@ -110,17 +101,17 @@ export function makeBanner(side: Side, poleHeight = 1.1): Banner {
       emissiveIntensity: 0.22,
       side: THREE.DoubleSide,
       flatShading: true,
-      roughness: 0.8,
+      roughness: 0.85,
     }),
   );
-  cloth.position.set(0, poleHeight - CLOTH_H * 0.55, 0);
+  cloth.position.y = top;
   cloth.castShadow = true;
 
   const base = Float32Array.from(geo.attributes['position']!.array as Float32Array);
-
-  group.add(pole, knob, cloth);
-
   const pos = geo.attributes['position'] as THREE.BufferAttribute;
+
+  group.add(rod, capL, capR, cloth);
+
   return {
     group,
     update(time: number) {
@@ -128,33 +119,33 @@ export function makeBanner(side: Side, poleHeight = 1.1): Banner {
       for (let i = 0; i < arr.length; i += 3) {
         const x0 = base[i]!;
         const y0 = base[i + 1]!;
-        // 越靠旗尾摆得越大；两个不同频率叠一下，免得像一条规则的正弦
-        const k = x0 / CLOTH_W;
-        const wave = Math.sin(time * 5.2 - k * 4.4) * 0.13 + Math.sin(time * 2.1 - k * 2.0) * 0.06;
-        arr[i + 2] = wave * k;
-        // 布面在风口会略微上下抖，顺手带一点
-        arr[i + 1] = y0 + Math.cos(time * 3.3 - k * 3.1) * 0.02 * k;
+        // k：越靠下摆越大（顶边钉死，一点不动）
+        const k = Math.min(1, Math.max(0, -y0 / height));
+        arr[i + 2] = Math.sin(time * 3.1 + x0 * 2.2 + k * 2.4) * 0.075 * k;
+        arr[i] = x0 + Math.sin(time * 1.6 + k * 2.0) * 0.018 * k;
       }
       pos.needsUpdate = true;
     },
   };
 }
 
-/** 每栋楼挂旗的位置与杆高（相对占地中心，单位=格）。 */
-export function bannerSpot(kind: string, cols: number, rows: number): { x: number; z: number; h: number } {
-  // 杆高必须**高过屋顶**：模型放大 1.75 倍之后屋顶大约 2.8，杆矮了整面旗都会被楼挡住
-  const x = cols * 0.42;
-  const z = rows * 0.42;
+/**
+ * 每栋楼挂旗的位置：贴在前墙（+z 一侧，正对镜头那面）上，旗顶高度按楼高给。
+ * 位置/高度都用**格**，因为调用方会把它放进反向缩放的 ui 组里。
+ */
+export function bannerSpot(kind: string, cols: number, rows: number): { x: number; z: number; top: number } {
+  const z = Math.max(0.9, rows * 0.32);
+  const x = -cols * 0.2;
   switch (kind) {
     case 'core':
-      return { x: -x, z: -z, h: 3.6 };
+      return { x, z: z + 0.1, top: 2.7 };
     case 'mill':
-      return { x, z, h: 3.2 };
+      return { x, z, top: 2.2 };
     case 'barracks':
-      return { x: -x, z, h: 3.0 };
+      return { x, z, top: 2.0 };
     case 'cannonTower':
-      return { x: -x, z, h: 2.7 };
+      return { x, z: z * 0.92, top: 1.7 };
     default:
-      return { x: -x, z: -z, h: 2.9 };
+      return { x, z, top: 2.1 };
   }
 }

@@ -231,7 +231,7 @@ export class ArenaApp {
     const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
     this.fitZoom = fit;
     // 自动模式下由导演每帧把缩放拉回机位；手动模式直接吃这个值
-    if (!this.director.auto) this.rig.zoom = fit * this.director.current.zoomFactor;
+    if (this.director.locked) this.rig.zoom = fit * this.director.current.zoomFactor;
   }
 
   // ---------------------------------------------------------------- 出牌
@@ -360,7 +360,7 @@ export class ArenaApp {
       // （之前贴在脚下那块纯色方板被用户否了：像地毯，不像建筑的一部分）
       ui.add(makePlinth(b.cols, b.rows, b.side).group);
       const spot = bannerSpot(b.kind, b.cols, b.rows);
-      const banner = makeBanner(b.side, spot.h);
+      const banner = makeBanner(b.side, spot.top);
       banner.group.position.set(spot.x, 0.2, spot.z);
       ui.add(banner.group);
       this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), banner });
