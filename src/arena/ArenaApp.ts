@@ -29,6 +29,7 @@ import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } fr
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { makeBanner, shade, bannerSpot, type Banner } from './props';
+import { fracture, spall } from './ruins';
 import { CARD_MODEL, sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -402,6 +403,10 @@ export class ArenaApp {
       group.userData['cracks'] = cracks;
       for (const crack of cracks) crack.visible = false;
 
+      // 掉渣：从同一套碎裂里挑几块摆到墙脚，血量越低露得越多（"塔楼会有破损"）
+      const chips = makeSpallChips(b.cols, b.rows, b.id * 31 + 7, group);
+      group.userData['chips'] = chips;
+
       // 核心的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
       // 用户 2026-10-27："整个建筑的模型本身里面就嵌了一个水晶，为什么还要再画一个水晶"。
       this.buildingMeshes.set(b.id, group);
@@ -422,6 +427,11 @@ export class ArenaApp {
           cracks[0]!.visible = frac <= 0.66;
           cracks[1]!.visible = frac <= 0.4;
           cracks[2]!.visible = frac <= 0.2;
+        }
+        const chips = group.userData['chips'] as THREE.Mesh[] | undefined;
+        if (chips) {
+          const shown = frac <= 0.3 ? chips.length : frac <= 0.6 ? Math.ceil(chips.length / 2) : 0;
+          chips.forEach((c, i) => (c.visible = i < shown));
         }
         continue;
       }
@@ -685,12 +695,18 @@ export class ArenaApp {
       live.add(r.id);
       let group = this.ruinMeshes.get(r.id);
       if (!group) {
-        group = makeRuin(r.cols, r.rows);
+        // 种子取楼号 + 阵营：同一栋楼拆两次长得一样，不同楼一定不一样
+        const seed = r.id * 7919 + (r.side === 'blue' ? 11 : 29);
+        group = makeRuin(r.cols, r.rows, seed, ruinStyleOf(r.kind));
         const center = cellToWorld(pos(r.col + r.cols / 2 - 0.5, r.row + r.rows / 2 - 0.5));
         group.position.set(center.x, this.groundY(center.x, center.z), center.z);
+        group.userData['age'] = 0;
         this.scene.add(group);
         this.ruinMeshes.set(r.id, group);
       }
+      // 炸开动画：按"已经活了多久"推进（ruin.total 减去剩余）
+      group.userData['age'] = (group.userData['age'] as number) + 1 / 60;
+      settleRuin(group, group.userData['age'] as number);
       const fade = r.ttl < RUIN.fadeSeconds ? Math.max(0, r.ttl / RUIN.fadeSeconds) : 1;
       group.traverse((o) => {
         const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
@@ -914,47 +930,66 @@ function makeBall(radius: number): THREE.Mesh {
   return mesh;
 }
 
-/** 废墟：几块歪斜的深色碎石 + 一根断梁，铺满原地块。 */
-function makeRuin(cols: number, rows: number): THREE.Group {
+/**
+ * 废墟：用 `fracture()` 把这栋楼的占地**递归切碎**，每块按来源（屋瓦/墙体/木梁）
+ * 换颜色、随机转向与高度。结果是 (楼号) 决定的 —— 同一堆废墟刷新前后长得一样，
+ * 不同楼一定不一样（用户 2026-10-27："废墟长得不一样啊随机"）。
+ *
+ * 传进来的 group 里每块都带出始速度的方向，`settle()` 用前 0.5 秒把它从中心炸开再落定。
+ */
+function makeRuin(cols: number, rows: number, seed: number, style: 'core' | 'tower' | 'wood' | 'stone'): THREE.Group {
   const group = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x4a443a,
-    roughness: 0.98,
-    flatShading: true,
-    transparent: true,
-    opacity: 1,
+  const parts = fracture(cols, rows, seed, 9);
+  const palette = {
+    roof: 0x7a3a30,
+    wall: 0x8a8175,
+    wood: 0x5a4326,
+  } as const;
+  const tintBase = style === 'core' ? 0x8a7a55 : style === 'wood' ? 0x6b5638 : 0x807a70;
+
+  parts.forEach((p, i) => {
+    const base = p.part === 'roof' ? palette.roof : p.part === 'wall' ? palette.wall : palette.wood;
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(base).lerp(new THREE.Color(tintBase), 0.25).multiplyScalar(0.6 + p.tone * 0.6).getHex(),
+      roughness: 0.98,
+      flatShading: true,
+      transparent: true,
+      opacity: 1,
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(p.w, p.h, p.d), mat);
+    mesh.rotation.y = p.spin;
+    mesh.castShadow = true;
+    mesh.userData['home'] = { x: p.x, z: p.z, y: p.h / 2 };
+    mesh.userData['burst'] = { x: p.x * 0.45, z: p.z * 0.45, i };
+    group.add(mesh);
   });
-  // 碎石比断梁更像"塌了"：四块大小不一的深石 + 一堆浅色碎渣 + 一根短梁
-  const rubble: [number, number, number, number, number][] = [
-    [0.75, 0.26, 0.6, 1.25, 0.12],
-    [0.5, 0.36, 0.45, 4.1, -0.28],
-    [0.38, 0.18, 0.34, 2.6, 0.34],
-    [0.3, 0.14, 0.28, 5.4, -0.05],
-  ];
-  for (const [w, h, d, ang, dz] of rubble) {
-    const block = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    block.position.set(Math.cos(ang) * cols * 0.18, h / 2, dz * rows * 0.2);
-    block.rotation.y = ang;
-    block.castShadow = true;
-    group.add(block);
-  }
-  // 碎渣：一小堆浅色颗粒，压住"这是废墟"的读图
-  const dust = new THREE.Mesh(
-    new THREE.ConeGeometry(cols * 0.42, 0.16, 8),
-    new THREE.MeshStandardMaterial({ color: 0x6b6255, roughness: 1, flatShading: true, transparent: true, opacity: 1 }),
-  );
-  dust.position.y = 0.08;
-  group.add(dust);
-  // 一根断梁，斜搭在碎堆上
-  const beam = new THREE.Mesh(new THREE.BoxGeometry(cols * 0.5, 0.08, 0.12), mat);
-  beam.position.set(-cols * 0.08, 0.22, rows * 0.16);
-  beam.rotation.z = 0.22;
-  group.add(beam);
+
+  group.userData['age'] = 0;
   return group;
 }
 
+/** 前 0.5 秒：从中心炸开、抬高，然后落到地面。之后不再动。 */
+function settleRuin(group: THREE.Group, age: number): void {
+  const k = Math.min(1, age / 0.5);
+  const ease = 1 - (1 - k) * (1 - k);
+  for (const child of group.children) {
+    const home = child.userData['home'] as { x: number; z: number; y: number } | undefined;
+    const burst = child.userData['burst'] as { x: number; z: number; i: number } | undefined;
+    if (!home || !burst) continue;
+    child.position.set(home.x + burst.x * (1 - ease), home.y + (1 - ease) * (0.7 + (burst.i % 3) * 0.2), home.z + burst.z * (1 - ease));
+  }
+}
+
+/** 建筑种类 → 废墟的颜色族。 */
+function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
+  if (kind === 'core') return 'core';
+  if (kind === 'arrowTower' || kind === 'cannonTower') return 'tower';
+  if (kind === 'mill' || kind === 'barracks') return 'wood';
+  return 'stone';
+}
+
 /**
- * 核心（主城）：基座 + 墙 + 四坡屋顶 + **嵌在屋顶里的水晶**（按阵营上色）。
+ * 核心（主城）：基座 + 墙裙 + 门 + 四角石柱 + 四坡屋顶 + **嵌在屋顶里的水晶**（按阵营上色）。
  *
  * 为什么不用模型库里的 hall：那份模型的水晶是固定色的、材质还是全局缓存的，
  * 想按阵营染色会把场上所有实例一起改掉。自建一份最省事，也正好把"水晶是模型的一部分"落实了。
@@ -1006,7 +1041,7 @@ function makeCore(side: Side): { group: THREE.Group; sails?: THREE.Object3D; tur
   crystal.scale.y = 1.35;
   crystal.castShadow = true;
 
-  // 四角立柱，让"主城"看起来比兵营更厚重
+  // 四角立柱，让主城看起来比兵营更厚重
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.5, 6), stone);
@@ -1018,6 +1053,22 @@ function makeCore(side: Side): { group: THREE.Group; sails?: THREE.Object3D; tur
 
   group.add(base, body, roof, crystal);
   return { group };
+}
+
+/** 墙脚的碎渣块：一块块小石头，按血量露出来。 */
+function makeSpallChips(cols: number, rows: number, seed: number, parent: THREE.Object3D): THREE.Mesh[] {
+  const out: THREE.Mesh[] = [];
+  const mat = new THREE.MeshStandardMaterial({ color: 0x7d7468, roughness: 1, flatShading: true });
+  for (const p of spall(cols, rows, seed, 5)) {
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(Math.min(p.w, 0.3), Math.min(p.h, 0.16), Math.min(p.d, 0.3)), mat);
+    chip.position.set(p.x, 0.08, p.z);
+    chip.rotation.y = p.spin;
+    chip.visible = false;
+    chip.castShadow = true;
+    parent.add(chip);
+    out.push(chip);
+  }
+  return out;
 }
 
 function makeFlag(side: Side, selected: boolean): THREE.Group {
