@@ -119,6 +119,8 @@ export interface ArenaUnit {
 export interface ArenaShot {
   id: number;
   ammo: 'arrow' | 'cannon';
+  /** 谁打出来的：视图拿它决定炮口高度（箭塔顶 / 炮塔台 / 移动火炮车头） */
+  source: 'arrowTower' | 'cannonTower' | 'siege';
   fromX: number;
   fromZ: number;
   toX: number;
@@ -446,6 +448,7 @@ export class ArenaWorld {
       this.shots.push({
         id: this.nextId++,
         ammo: b.kind === 'arrowTower' ? 'arrow' : 'cannon',
+        source: b.kind === 'arrowTower' ? 'arrowTower' : 'cannonTower',
         fromX: c.x,
         fromZ: c.z,
         toX: target.x,
@@ -489,6 +492,20 @@ export class ArenaWorld {
       if (foe && foe.dist <= st.range) {
         if (u.cooldown > 0) continue;
         u.cooldown = st.cooldown;
+        // 移动火炮也要有"打出去一发"的视觉：炮弹飞过去 + 车头冒烟
+        if (st.siege) {
+          this.shots.push({
+            id: this.nextId++,
+            ammo: 'cannon',
+            source: 'siege',
+            fromX: u.x,
+            fromZ: u.z,
+            toX: foe.x,
+            toZ: foe.z,
+            t: 0,
+            seconds: 0.5,
+          });
+        }
         if (foe.unit) this.hurtUnit(foe.unit, st.damage);
         else if (foe.building) this.hurtBuilding(foe.building, st.damage);
         continue;

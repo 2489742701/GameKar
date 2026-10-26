@@ -473,3 +473,31 @@ describe('金币节奏（用户点名：每 1.5 秒涨一个）', () => {
     expect(world.gold.blue).toBe(ECONOMY.cap);
   });
 });
+
+describe('弹丸的出处（视图据此决定炮口高度/烟雾位置）', () => {
+  it('塔开火带 source，移动火炮开火也会生成一发炮弹', () => {
+    const world = new ArenaWorld({ seed: 91 });
+    // 炮塔 vs 红方兵营：距离 5 格（炮塔射程 4.4 + 半占地 1.5 = 5.9，够得着）
+    world['place']('blue', 'cannonTower', 22, 4, 640);
+    world['place']('red', 'barracks', 27, 4, 420);
+    run(world, 0.3);
+    const towerShot = world.shots.find((s) => s.source === 'cannonTower');
+    expect(towerShot, '炮塔应当打出 source=cannonTower 的一发').toBeTruthy();
+    expect(towerShot!.ammo).toBe('cannon');
+
+    // 移动火炮：直接塞到红方核心的射程边上。
+    // 炮弹只活 0.5 秒，必须在推进过程里采（跑完再看就飞没了）
+    world['spawnSquad']('blue', [{ unitId: 'mobileCannon', count: 1 }], 30, 10);
+    let siegeSeen = false;
+    let siegeAmmo = '';
+    run(world, 1.2, () => {
+      const hit = world.shots.find((s) => s.source === 'siege');
+      if (hit) {
+        siegeSeen = true;
+        siegeAmmo = hit.ammo;
+      }
+    });
+    expect(siegeSeen, '移动火炮应当打出 source=siege 的一发').toBe(true);
+    expect(siegeAmmo).toBe('cannon');
+  });
+});

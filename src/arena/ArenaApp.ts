@@ -22,6 +22,7 @@ import { loadPack, type DudePack } from '@game/dudes/pack';
 import { faceCandidates, headCandidates, isBlue } from '@game/dudes/roster';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
 import { unitDef } from '@game/data/units';
+import { BattleFx } from '@game/fx/BattleFx';
 import { buildModel, spinnersOf, TURRET } from '@game/models/kit';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
@@ -86,8 +87,10 @@ export class ArenaApp {
   private readonly loop: GameLoop;
   private readonly ground: GroundView;
   private readonly map: TileMap;
-  /** 受伤的渐进碎裂：破洞、裂纹、掉下来的碎块 */
+  /** 受伤的渐进碎裂：面片崩落 + 骨架 */
   private readonly damage: DamageFx;
+  /** 开火/命中的烟雾、火光、火星（和老模式同一套 BattleFx，不另写一份） */
+  private readonly fx: BattleFx;
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
   private readonly opts: ArenaAppOptions;
@@ -100,7 +103,7 @@ export class ArenaApp {
   private readonly ruinMeshes = new Map<number, THREE.Group>();
   private readonly parts = new Map<
     number,
-    { sails?: THREE.Object3D; sailSpeed?: number; turret?: THREE.Object3D; flash?: THREE.Sprite; banner?: Banner }
+    { sails?: THREE.Object3D; sailSpeed?: number; turret?: THREE.Object3D; banner?: Banner }
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Mesh>();
@@ -119,6 +122,8 @@ export class ArenaApp {
     this.map = new TileMap({ cols: this.world.fieldSize.cols, rows: this.world.fieldSize.rows });
     this.ground = new GroundView(this.map);
     this.damage = new DamageFx(this.scene);
+    this.fx = new BattleFx();
+    this.scene.add(this.fx.group);
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
     this.rig = new CameraRig({
@@ -361,6 +366,7 @@ export class ArenaApp {
     this.syncRuins();
     this.syncParts(info.time);
     this.damage.update(info.delta);
+    this.fx.step(info.delta);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
   }
@@ -380,14 +386,6 @@ export class ArenaApp {
       const spinner = spinnersOf(group)[0];
       const turret = group.userData[TURRET] as THREE.Object3D | undefined;
       this.parts.set(b.id, { sails: spinner?.group, sailSpeed: spinner?.speed ?? 0, turret });
-      if (b.kind === 'arrowTower' || b.kind === 'cannonTower') {
-        const flash = makeFlashSprite();
-        // 塔口火光：箭塔在最顶上，炮塔在炮管高度（模型局部坐标，整组还会 ×BUILDING_SCALE）
-        flash.position.y = b.kind === 'arrowTower' ? 2.55 : 1.16;
-        flash.scale.setScalar(0.35);
-        group.add(flash);
-        this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), flash });
-      }
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
@@ -536,24 +534,30 @@ export class ArenaApp {
     const wood = new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 });
     const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
 
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.14, 0.62), wood);
-    bed.position.y = 0.34;
+    // 车架整体放大一档（用户："火炮也可以大一点"）；两个推车小人改成**满身高**，
+    // 之前 0.85 倍身高 + 缩在车尾，看起来像两个跟着跑的矮人
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.18, 0.8), wood);
+    bed.position.y = 0.44;
     bed.castShadow = true;
     group.add(bed);
-    for (const sx of [-0.3, 0.3]) {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.1, 10), iron);
+    for (const sx of [-0.4, 0.4]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.12, 10), iron);
       wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(sx, 0.2, 0);
+      wheel.position.set(sx, 0.26, 0);
       wheel.castShadow = true;
       group.add(wheel);
     }
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.7, 8), iron);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.9, 8), iron);
     barrel.rotation.z = -Math.PI / 2;
-    barrel.position.set(0.12, 0.52, 0);
+    barrel.position.set(0.12, 0.7, 0);
     barrel.castShadow = true;
-    const breech = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.24), iron);
-    breech.position.set(-0.24, 0.5, 0);
-    group.add(barrel, breech);
+    const muzzleRing = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.12, 8), iron);
+    muzzleRing.rotation.z = -Math.PI / 2;
+    muzzleRing.position.set(0.58, 0.7, 0);
+    muzzleRing.castShadow = true;
+    const breech = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.34), iron);
+    breech.position.set(-0.42, 0.68, 0);
+    group.add(barrel, muzzleRing, breech);
     // 阵营色小旗插在车尾：一眼分敌我
     const mark = new THREE.Mesh(
       new THREE.BoxGeometry(0.1, 0.26, 0.1),
@@ -564,7 +568,7 @@ export class ArenaApp {
         flatShading: true,
       }),
     );
-    mark.position.set(-0.42, 0.56, 0);
+    mark.position.set(-0.66, 0.82, 0);
     group.add(mark);
 
     // 两个推车的小人：站在车尾两侧
@@ -572,9 +576,9 @@ export class ArenaApp {
     const pusherDef = unitDef('worker');
     const style = this.styleOf(u.side, pusherDef.id, pusherDef);
     const { atlas, texture } = this.gallery!.acquire(style, pusherDef.anims);
-    for (const dz of [-0.26, 0.26]) {
-      const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT * 0.85 });
-      dude.mesh.position.set(-0.62, UNIT_HEIGHT * 0.85 * 0.5, dz);
+    for (const dz of [-0.34, 0.34]) {
+      const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
+      dude.mesh.position.set(-0.98, UNIT_HEIGHT * 0.5, dz);
       group.add(dude.mesh);
       pushers.push(dude);
     }
@@ -670,13 +674,15 @@ export class ArenaApp {
         const delta = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
         if (Math.abs(delta) > 0.002) part.turret.rotation.y = cur + delta * Math.min(1, 0.25);
       }
-      if (part.flash) part.flash.visible = b.shotsMuzzle > 0;
       part.banner?.update(time);
     }
     void time;
   }
 
-  /** 在飞的弹丸：箭头是细长条，炮弹是小黑球，都朝目标摆正。 */
+  /**
+   * 在飞的弹丸：从**炮口高度**出发（箭塔顶 / 炮塔台 / 移动火炮车头），命中时炸一团烟。
+   * 途中不再是平着贴地飞：起点高、落点低，炮弹再加一点抛物线。
+   */
   private syncShots(time: number): void {
     const live = new Set<number>();
     for (const s of this.world.shots) {
@@ -686,18 +692,37 @@ export class ArenaApp {
         mesh = s.ammo === 'cannon' ? makeBall(0.16) : makeBall(0.09);
         this.scene.add(mesh);
         this.shotMeshes.set(s.id, mesh);
+        const ground = this.map.surfaceY(worldToCell(s.fromX, s.fromZ));
+        const fromY = ground + MUZZLE_Y[s.source];
+        const targetGround = this.map.surfaceY(worldToCell(s.toX, s.toZ));
+        mesh.userData['fromY'] = fromY;
+        mesh.userData['toY'] = targetGround + 0.7;
+        mesh.userData['hit'] = { x: s.toX, z: s.toZ, ground: targetGround, ammo: s.ammo };
+        // 开火那一下：火光 + 烟（BattleFx 和老模式同一套）。
+        // 炮塔的炮管有 1.9 格长、还会转，所以顺着开火方向把烟挪到**炮口**，别落在塔心
+        const dx = s.toX - s.fromX;
+        const dz = s.toZ - s.fromZ;
+        const len = Math.hypot(dx, dz) || 1;
+        const ux = dx / len;
+        const uz = dz / len;
+        const ahead = s.source === 'cannonTower' ? 1.0 : s.source === 'siege' ? 0.55 : 0;
+        this.fx.muzzle(s.fromX + ux * ahead, s.fromZ + uz * ahead, fromY, s.ammo, ux, uz);
       }
       const k = s.t;
       const x = s.fromX + (s.toX - s.fromX) * k;
       const z = s.fromZ + (s.toZ - s.fromZ) * k;
-      // 抛物线：炮弹飞得高一点，箭基本贴平
+      const fromY = mesh.userData['fromY'] as number;
+      const toY = mesh.userData['toY'] as number;
+      // 抛物线：炮弹飞得高一点，箭基本走直线
       const arc = s.ammo === 'cannon' ? Math.sin(k * Math.PI) * 0.9 : Math.sin(k * Math.PI) * 0.12;
-      mesh.position.set(x, this.map.surfaceY(worldToCell(x, z)) + 1.05 + arc, z);
+      mesh.position.set(x, fromY + (toY - fromY) * k + arc, z);
       mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
       mesh.scale.setScalar(s.ammo === 'cannon' ? 1 : 1.6);
     }
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
+      const hit = mesh.userData['hit'] as { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' } | undefined;
+      if (hit) this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
       this.scene.remove(mesh);
       mesh.geometry.dispose();
       this.shotMeshes.delete(id);
@@ -789,30 +814,8 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
   (bar.material as THREE.MeshBasicMaterial).color.setHex(clamped < 0.3 ? 0xff6b6b : base);
 }
 
-/** 塔口火光：一张很小的贴图精灵，刚开火时亮 0.18 秒。 */
-function makeFlashSprite(): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  canvas.width = 16;
-  canvas.height = 16;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    ctx.fillStyle = '#fff2c4';
-    ctx.fillRect(6, 7, 4, 2);
-    ctx.fillRect(7, 6, 2, 4);
-    ctx.fillStyle = '#ffb545';
-    ctx.fillRect(3, 7, 3, 2);
-    ctx.fillRect(10, 7, 3, 2);
-    ctx.fillRect(7, 2, 2, 4);
-    ctx.fillRect(7, 10, 2, 4);
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set(0.7, 0.7, 1);
-  sprite.visible = false;
-  return sprite;
-}
+/** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
+const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.8 } as const;
 
 function makeBall(radius: number): THREE.Mesh {
   const mesh = new THREE.Mesh(

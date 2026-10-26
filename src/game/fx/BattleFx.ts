@@ -206,6 +206,15 @@ export class BattleFx {
     this.arrows(byKind.arrow);
     this.cannons(byKind.cannon);
     this.magics(byKind.magic);
+    this.step(dt);
+  }
+
+  /**
+   * 只推进粒子寿命。
+   * 对战模式的弹丸自己算（不经过 Combat），只要调用 `muzzle()` / `impact()` 再每帧 `step(dt)`，
+   * 不用为了冒烟去造一个假的战斗对象。
+   */
+  step(dt: number): void {
     this.age(dt);
     this.ageHaze(dt);
   }
@@ -282,10 +291,15 @@ export class BattleFx {
   muzzle(x: number, z: number, y: number, ammo: Shot['ammo'] = 'arrow', dirX = 0, dirZ = 1): void {
     const heavy = ammo === 'cannon';
     this.flash(x, z, y, heavy ? 0.55 : ammo === 'magic' ? 0.34 : 0.2);
-    if (!heavy) return;
-    for (let i = 0; i < 3; i++) {
-      const ahead = 0.1 + i * 0.12;
-      this.puff(x + dirX * ahead, z + dirZ * ahead, y + 0.03 * i, 0.26 + i * 0.12, 0.24 + i * 0.08);
+    if (!heavy) {
+      // 轻武器也留一小撮：箭塔开火至少要有一缕，不然玩家看到的就是"什么都没有"
+      this.puff(x + dirX * 0.08, z + dirZ * 0.08, y, 0.2, 0.3);
+      return;
+    }
+    // 炮口的烟要"扑出来"：四团、越靠前越大、活得也久一点（上一版三团太小、太快散）
+    for (let i = 0; i < 4; i++) {
+      const ahead = 0.12 + i * 0.14;
+      this.puff(x + dirX * ahead, z + dirZ * ahead, y + 0.03 * i, 0.3 + i * 0.13, 0.45 + i * 0.1);
     }
   }
 
