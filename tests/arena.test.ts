@@ -113,8 +113,8 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     const before = world.gold.blue;
     run(world, ECONOMY.millInterval + 0.1);
     const gained = world.gold.blue - before;
-    // 基础回充 + 磨坊奖励（没到上限时）
-    expect(gained).toBeGreaterThan(ECONOMY.perSecond * ECONOMY.millInterval);
+    // 5.1 秒里金币按 1.5 秒一格只会跳 3 格（+3），磨坊再补 +2 ⇒ 至少 5
+    expect(gained).toBeGreaterThanOrEqual(ECONOMY.millBonus + 3);
   });
 
   it('建筑没有寿命：放着 60 秒，血量一点不掉', () => {
@@ -451,5 +451,25 @@ describe('兵不穿楼', () => {
       if (u && inside(u.x, u.z)) violations++;
     });
     expect(violations).toBe(0);
+  });
+});
+
+describe('金币节奏（用户点名：每 1.5 秒涨一个）', () => {
+  it('严格按 1.5 秒跳 +1：1.4 秒还是 0，1.6 秒是 1，4.6 秒是 3', () => {
+    const world = new ArenaWorld({ seed: 71 });
+    world.gold.blue = 0;
+    run(world, 1.4);
+    expect(world.gold.blue).toBe(0);
+    run(world, 0.2);
+    expect(world.gold.blue).toBe(ECONOMY.perTick);
+    run(world, 3);
+    expect(world.gold.blue).toBe(ECONOMY.perTick * 3);
+  });
+
+  it('涨到上限 20 就停（不会溢出）', () => {
+    const world = new ArenaWorld({ seed: 72 });
+    world.gold.blue = ECONOMY.cap;
+    run(world, 6);
+    expect(world.gold.blue).toBe(ECONOMY.cap);
   });
 });

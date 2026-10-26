@@ -160,6 +160,8 @@ export class ArenaWorld {
   readonly rng: Random;
 
   gold: Record<Side, number> = { blue: ECONOMY.start, red: ECONOMY.start };
+  /** 距下一格金币还差几秒（每侧各一个计时） */
+  private readonly goldTick: Record<Side, number> = { blue: 0, red: 0 };
   /** 只有蓝方有"手牌"；红方走 AI，直接按卡池挑 */
   readonly hand: (ArenaCard | null)[] = [null, null, null, null];
   readonly handCooldown: number[] = [0, 0, 0, 0];
@@ -373,9 +375,15 @@ export class ArenaWorld {
     if (this.outcome !== 'playing') return;
     this.elapsed += dt;
 
-    // 金：到上限就不涨
+    // 金：每 ECONOMY.tickSeconds 跳 +perTick，到上限就不涨。
+    // 用"攒够一格再加"而不是 perSecond*dt，是为了大 dt（快进/掉帧）时也按整格补，
+    // 不会出现 12.7333 这种读数。
     for (const side of ['blue', 'red'] as Side[]) {
-      this.gold[side] = Math.min(ECONOMY.cap, this.gold[side] + ECONOMY.perSecond * dt);
+      this.goldTick[side] += dt;
+      while (this.goldTick[side] >= ECONOMY.tickSeconds) {
+        this.goldTick[side] -= ECONOMY.tickSeconds;
+        this.gold[side] = Math.min(ECONOMY.cap, this.gold[side] + ECONOMY.perTick);
+      }
     }
 
     // 手牌冷却
