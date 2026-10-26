@@ -568,6 +568,20 @@ export class ArenaApp {
     };
   }
 
+  /** 当前视口的"整幅场地入画"缩放（调试面板用它换算 zoom 倍率）。 */
+  get fitZoomNow(): number {
+    return this.fitZoom;
+  }
+
+  /** 调试面板/机位码用它一次把相机摆到位。 */
+  setCameraShot(shot: { yaw: number; pitch: number; zoom: number }): void {
+    this.director.userTouched();
+    this.rig.zoom = this.fitZoom * shot.zoom;
+    this.rig.setPitch(shot.pitch);
+    const delta = ((((shot.yaw - this.rig.yaw + 180) % 360) + 360) % 360) - 180;
+    this.rig.rotateBy(delta);
+  }
+
   /** 这一点脚下的地表高度（草地 0.5）。所有贴地的件都读它，别各写各的。 */
   private groundY(x: number, z: number): number {
     return this.map.surfaceY(worldToCell(x, z));

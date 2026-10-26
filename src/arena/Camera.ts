@@ -24,8 +24,9 @@ export interface ViewPreset {
  * 为什么要那个东西 —— 镜头自己跑很烦）。以后观战模式再单独加会动的机位。
  */
 export const VIEW_PRESETS: ViewPreset[] = [
-  { name: '全景', zoomFactor: 1, yaw: 0, pitch: 52 },
-  { name: '两侧对峙', zoomFactor: 0.86, yaw: 22, pitch: 46 },
+  // 默认是**斜视**（用户 2026-10-27：更偏向从自己这边斜着看整片战场）
+  { name: '斜视', zoomFactor: 1, yaw: 24, pitch: 50 },
+  { name: '正对', zoomFactor: 0.96, yaw: 0, pitch: 52 },
 ];
 
 /** 自动模式多久换一次机位、玩家停手多久回来。 */

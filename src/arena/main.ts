@@ -11,6 +11,7 @@ import '../styles/arena.css';
 import { installTheme } from '@ui/theme';
 import { ArenaApp } from './ArenaApp';
 import { ArenaHud } from './ArenaHud';
+import { DebugPanel } from './DebugPanel';
 
 const required = <T extends Element>(id: string): T => {
   const node = document.getElementById(id);
@@ -31,6 +32,7 @@ const canvas = required<HTMLCanvasElement>('arena-stage');
 installTheme();
 
 let hud: ArenaHud | null = null;
+let debug: DebugPanel | null = null;
 
 const app = await ArenaApp.boot({
   container,
@@ -40,6 +42,7 @@ const app = await ArenaApp.boot({
   onState: () => {
     hud?.refresh();
     hud?.setViewStatus(app.director.status);
+    debug?.refresh();
   },
 });
 
@@ -60,10 +63,18 @@ hud = new ArenaHud(container, app, {
 
 hud.setViewStatus(app.director.status);
 
+// 调试面板：F2 开关。用户在这里调机位、把喜欢的机位码与"要删的东西"记下来发我。
+debug = new DebugPanel(app);
+container.append(debug.el);
+
 // 键盘：V 换视角（和 HUD 上那颗按钮走同一条路）
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.key === 'v' || e.key === 'V') hud?.setViewStatus(app.nextView());
+  if (e.key === 'F2') {
+    e.preventDefault();
+    debug?.toggle();
+  }
 });
 
 declare global {

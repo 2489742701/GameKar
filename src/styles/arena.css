@@ -277,3 +277,140 @@
   image-rendering: pixelated;
   box-shadow: inset 0 1px 0 rgba(255, 250, 226, 0.75), 0 3px 0 rgba(0, 0, 0, 0.5);
 }
+
+/* ---------- 调试面板（F2） ---------- */
+
+.dbg {
+  position: absolute;
+  left: calc(var(--safe-left) + 8px);
+  top: calc(var(--safe-top) + 64px);
+  width: min(320px, 92vw);
+  max-height: min(76vh, 620px);
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 40;
+  pointer-events: auto;
+  scrollbar-width: thin;
+}
+
+.dbg[hidden] {
+  display: none;
+}
+
+.dbg__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dbg__title {
+  font-family: var(--font-display);
+  color: var(--gold-hi);
+}
+
+.dbg__hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.dbg__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.dbg__range {
+  flex: 1;
+  accent-color: var(--gold);
+}
+
+.dbg__v {
+  width: 44px;
+  text-align: right;
+  color: var(--text);
+}
+
+.dbg__id {
+  font-family: var(--font-num);
+  font-size: var(--fs-sm);
+  color: var(--gold-hi);
+  user-select: all;
+}
+
+.dbg__label {
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
+.dbg__features {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dbg__feature {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.dbg__feature__id {
+  font-family: var(--font-num);
+  color: var(--gold);
+  width: 20px;
+}
+
+.dbg__feature__label {
+  flex: 1;
+}
+
+.dbg__btn {
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--wood-1);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  color: #23180a;
+  background-color: var(--gold);
+  background-image: var(--tex-gilt), linear-gradient(180deg, var(--gold-hi), var(--gold) 55%, #7d5518);
+  background-size: var(--tex-gilt-tile), cover;
+  image-rendering: pixelated;
+}
+
+.dbg__btn--ghost {
+  color: var(--text);
+  background-color: var(--wood-4);
+  background-image: var(--tex-wood), linear-gradient(180deg, var(--wood-6), var(--wood-2));
+}
+
+.dbg__log {
+  min-height: 84px;
+  resize: vertical;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid var(--wood-1);
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.dbg__foot {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
