@@ -118,6 +118,7 @@ export interface ArenaCard {
 /**
  * 卡池。随机发 4 张进手牌（配卡组以后再做）。
  * 建筑贵、军队便宜 —— 这条差价就是"先立建筑"的钩子。
+ * 2026-10-27 用户要求「所有的东西的价格再贵一倍」，下面六个数全部 ×2（写在字面量里，不做运行时乘）。
  */
 export const CARDS: ArenaCard[] = [
   {
@@ -125,7 +126,7 @@ export const CARDS: ArenaCard[] = [
     name: '兵营',
     blurb: '每 6 秒自动出一个守兵，不花金。站稳脚跟的第一步。',
     kind: 'building',
-    cost: 6,
+    cost: 12,
     building: 'barracks',
   },
   {
@@ -133,7 +134,7 @@ export const CARDS: ArenaCard[] = [
     name: '箭塔',
     blurb: '自动打靠近的敌人，射程 5.5 格。便宜的防守。',
     kind: 'building',
-    cost: 5,
+    cost: 10,
     building: 'arrowTower',
   },
   {
@@ -141,7 +142,7 @@ export const CARDS: ArenaCard[] = [
     name: '炮塔',
     blurb: '一发 24 伤、炸一片，但很慢。放在兵营前面当闸门。',
     kind: 'building',
-    cost: 7,
+    cost: 14,
     building: 'cannonTower',
   },
   {
@@ -149,7 +150,7 @@ export const CARDS: ArenaCard[] = [
     name: '磨坊',
     blurb: '每 5 秒多给 2 金。前期投资，回本要一会儿。',
     kind: 'building',
-    cost: 4,
+    cost: 8,
     building: 'mill',
   },
   {
@@ -157,7 +158,7 @@ export const CARDS: ArenaCard[] = [
     name: '弓箭手小队',
     blurb: '一次三个弓箭手。便宜、脆、射得远。',
     kind: 'squad',
-    cost: 3,
+    cost: 6,
     squad: [{ unitId: 'archer', count: 3 }],
   },
   {
@@ -165,7 +166,7 @@ export const CARDS: ArenaCard[] = [
     name: '兽人',
     blurb: '两个兽人，血厚、冲撞会把对面顶开。',
     kind: 'squad',
-    cost: 4,
+    cost: 8,
     squad: [{ unitId: 'orc', count: 2 }],
   },
 ];

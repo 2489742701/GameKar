@@ -18,9 +18,11 @@ function run(world: ArenaWorld, seconds: number, each?: (t: number) => void): vo
 }
 
 /** 直接把一张牌塞进第 0 格，免得测试依赖随机发牌。 */
-function give(world: ArenaWorld, cardId: string): void {
-  (world.hand as unknown as { 0: unknown })[0] = CARDS.find((c) => c.id === cardId)!;
+function give(world: ArenaWorld, cardId: string): { cost: number } {
+  const card = CARDS.find((c) => c.id === cardId)!;
+  (world.hand as unknown as { 0: unknown })[0] = card;
   world.handCooldown[0] = 0;
+  return card;
 }
 
 describe('金币：上限 20、按秒回、开局 5', () => {
@@ -53,10 +55,11 @@ describe('手牌：4 张、扣费、冷却后补位', () => {
     const world = new ArenaWorld({ seed: 7 });
     expect(world.hand.filter(Boolean)).toHaveLength(HAND.size);
 
-    give(world, 'archers'); // 3 费
+    const card = give(world, 'archers');
     const before = world.gold.blue;
     expect(world.playCard('blue', 0, 6, 7).ok).toBe(true);
-    expect(world.gold.blue).toBeCloseTo(before - 3, 5);
+    // 价格翻倍过：读卡面自己的价，别把 3 写死
+    expect(world.gold.blue).toBeCloseTo(before - card.cost, 5);
     expect(world.hand[0]).toBeNull(); // 空槽 = 正在冷却
     expect(world.handCooldown[0]).toBeGreaterThan(0);
 
@@ -89,7 +92,8 @@ describe('手牌：4 张、扣费、冷却后补位', () => {
 describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () => {
   it('兵营每 6 秒出一个兵，且不花金', () => {
     const world = new ArenaWorld({ seed: 5 });
-    run(world, 2); // 先攒够 6 费（开局只有 5）
+    // 价格翻倍后兵营 12 费：开局 8 金攒不满，直接给满
+    world.gold.blue = 20;
     give(world, 'barracks');
     expect(world.playCard('blue', 0, 5, 10).ok).toBe(true);
     const goldAfterBuild = world.gold.blue;
@@ -103,7 +107,7 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
 
   it('磨坊每 5 秒多给 2 金', () => {
     const world = new ArenaWorld({ seed: 5 });
-    run(world, 1);
+    world.gold.blue = 10; // 磨坊 8 费；留点余量，别一开盘就顶到上限 20
     give(world, 'mill');
     world.playCard('blue', 0, 6, 11);
     const before = world.gold.blue;
@@ -115,7 +119,7 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
 
   it('建筑没有寿命：放着 60 秒，血量一点不掉', () => {
     const world = new ArenaWorld({ seed: 5 });
-    run(world, 1);
+    world.gold.blue = 20; // 箭塔 10 费
     give(world, 'arrowTower');
     world.playCard('blue', 0, 6, 11);
     const tower = [...world.buildings.values()].find((b) => b.kind === 'arrowTower')!;
@@ -260,7 +264,8 @@ describe('指挥与射程口径', () => {
 
   it('塔的射程从占地边缘量：站在塔边缘外 3.5 格的弓手会被炮塔打到（不再白嫖）', () => {
     const world = new ArenaWorld({ seed: 22 });
-    // 红方炮塔（3×3）放在右半场
+    // 红方炮塔（3×3）放在右半场；价格翻倍后要 14 金
+    world.gold.red = 20;
     give(world, 'cannonTower');
     expect(world.playCard('red', 0, 26, 9).ok).toBe(true);
     const tower = [...world.buildings.values()].find((b) => b.kind === 'cannonTower')!;
