@@ -70,7 +70,7 @@ describe('手牌：4 张、扣费、冷却后补位', () => {
   it('只能放在自己半场：红方半场丢不出去', () => {
     const world = new ArenaWorld({ seed: 3 });
     give(world, 'archers');
-    const res = world.playCard('blue', 0, 20, 7); // 右侧 = 红方半场
+    const res = world.playCard('blue', 0, 30, 7); // 右侧 = 红方半场（也在黄区之外）
     expect(res.ok).toBe(false);
     expect(res.reason).toContain('半场');
     expect(world.units.filter((u) => u.side === 'blue')).toHaveLength(0);
@@ -262,7 +262,7 @@ describe('指挥与射程口径', () => {
     const world = new ArenaWorld({ seed: 22 });
     // 红方炮塔（3×3）放在右半场
     give(world, 'cannonTower');
-    expect(world.playCard('red', 0, 21, 9).ok).toBe(true);
+    expect(world.playCard('red', 0, 26, 9).ok).toBe(true);
     const tower = [...world.buildings.values()].find((b) => b.kind === 'cannonTower')!;
     const cx = tower.col + tower.cols / 2;
     const cz = tower.row + tower.rows / 2;
@@ -302,11 +302,42 @@ describe('炮塔朝向', () => {
     give(world, 'arrowTower');
     expect(world.playCard('blue', 0, 6, 12).ok).toBe(true);
     give(world, 'arrowTower');
-    expect(world.playCard('red', 0, 24, 12).ok).toBe(true);
+    expect(world.playCard('red', 0, 26, 12).ok).toBe(true);
     const towers = [...world.buildings.values()].filter((b) => b.kind === 'arrowTower');
     const blue = towers.find((b) => b.side === 'blue')!;
     const red = towers.find((b) => b.side === 'red')!;
     expect(blue.aim).toBe(0);
     expect(Math.abs(red.aim)).toBeCloseTo(Math.PI, 6);
+  });
+});
+
+describe('中场黄区（禁建带）', () => {
+  it('带子里盖楼、放兵都被挡；带子外一格就能放', () => {
+    const world = new ArenaWorld({ seed: 41 });
+    world.gold.blue = 20;
+    give(world, 'mill');
+    // midCol 在带子正中：3 列宽的楼一定压进去
+    const inside = world.playCard('blue', 0, FIELD.midCol - 1, 8);
+    expect(inside.ok).toBe(false);
+    expect(inside.reason).toContain('黄区');
+
+    give(world, 'archers');
+    const squadIn = world.playCard('blue', 0, FIELD.midCol - 1, 8);
+    expect(squadIn.ok).toBe(false);
+    expect(squadIn.reason).toContain('黄区');
+
+    // 带子左沿再往外一格 ⇒ 合法
+    give(world, 'mill');
+    const outside = world.playCard('blue', 0, FIELD.midCol - 1 - 3, 8);
+    expect(outside.ok).toBe(true);
+  });
+
+  it('AI 不会把楼盖进带子里', () => {
+    const world = new ArenaWorld({ seed: 42 });
+    run(world, 60);
+    const band = [...world.buildings.values()].filter(
+      (b) => b.col + b.cols > FIELD.midCol - 1 && b.col < FIELD.midCol + 2,
+    );
+    expect(band).toHaveLength(0);
   });
 });

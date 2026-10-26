@@ -19,6 +19,7 @@ import {
   CARDS,
   CORE,
   ECONOMY,
+  NO_BUILD,
   FIELD,
   HAND,
   TOWER,
@@ -138,6 +139,11 @@ export class ArenaWorld {
     return { cols: FIELD.cols, rows: FIELD.rows };
   }
 
+  /** 这一列是不是中间的禁建带（楼和兵都不许放进去）。 */
+  inNoBuild(col: number): boolean {
+    return col >= FIELD.midCol - NO_BUILD.halfWidth && col <= FIELD.midCol + NO_BUILD.halfWidth;
+  }
+
   coreOf(side: Side): ArenaBuilding | undefined {
     for (const b of this.buildings.values()) if (b.side === side && b.kind === 'core') return b;
     return undefined;
@@ -240,6 +246,11 @@ export class ArenaWorld {
 
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
     if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return { ok: false, reason: '出界了' };
+    // 中间那条黄区是禁建带：连边都不许压进去
+    for (let c = col; c < col + spec.cols; c++) {
+      if (!this.inNoBuild(c)) continue;
+      return { ok: false, reason: card.kind === 'building' ? '中间黄区不能盖楼' : '中间黄区不能放兵' };
+    }
     if (card.kind === 'building' && !this.cellFree(col, row, spec.cols, spec.rows)) {
       return { ok: false, reason: '这格被占了' };
     }
@@ -515,10 +526,11 @@ export class ArenaWorld {
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
     for (let tries = 0; tries < 24; tries++) {
       // 横版：红方落在右半边，蓝方（备用）落在左半边
-      const col =
-        side === 'red'
-          ? this.rng.int(FIELD.midCol, FIELD.cols - spec.cols - 1)
-          : this.rng.int(1, FIELD.midCol - spec.cols);
+      // 禁建带要整段避开：起点至少从带子右沿（或左沿）再往外一格
+      const lo = side === 'red' ? FIELD.midCol + NO_BUILD.halfWidth + 1 : 1;
+      const hi = side === 'red' ? FIELD.cols - spec.cols - 1 : FIELD.midCol - NO_BUILD.halfWidth - spec.cols - 1;
+      if (hi < lo) return null;
+      const col = this.rng.int(lo, hi + 1);
       const row = this.rng.int(1, FIELD.rows - spec.rows - 1);
       if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) continue;
       if (!this.cellIsFree(col, row, spec.cols, spec.rows)) continue;

@@ -17,14 +17,15 @@ export interface ViewPreset {
   zoomFactor: number;
   yaw: number;
   pitch: number;
-  /** 镜头跟不跟战场焦点 */
-  follow: boolean;
 }
 
+/**
+ * 机位只有两个，而且**都是静止的**（用户 2026-10-27："跟随战场"那个东西删掉，
+ * 为什么要那个东西 —— 镜头自己跑很烦）。以后观战模式再单独加会动的机位。
+ */
 export const VIEW_PRESETS: ViewPreset[] = [
-  { name: '全景', zoomFactor: 1, yaw: 0, pitch: 52, follow: false },
-  { name: '两侧对峙', zoomFactor: 0.86, yaw: 22, pitch: 46, follow: false },
-  { name: '跟随战场', zoomFactor: 0.62, yaw: 0, pitch: 58, follow: true },
+  { name: '全景', zoomFactor: 1, yaw: 0, pitch: 52 },
+  { name: '两侧对峙', zoomFactor: 0.86, yaw: 22, pitch: 46 },
 ];
 
 /** 自动模式多久换一次机位、玩家停手多久回来。 */
@@ -72,7 +73,7 @@ export class ArenaDirector {
    * 每帧一次。`fitZoom` 是"整幅场地入画"的那个缩放值（随视口现算），
    * `focus` 是战场质心（没有兵就是 null）。
    */
-  update(dt: number, rig: CameraRig, fitZoom: number, center: { x: number; z: number }, focus: { x: number; z: number } | null): void {
+  update(dt: number, rig: CameraRig, fitZoom: number, center: { x: number; z: number }): void {
     // 玩家锁住手动时**一帧都不碰相机**：不然他刚拖好画面，镜头又自己飘回去
     if (this.locked) return;
 
@@ -92,9 +93,8 @@ export class ArenaDirector {
     // 朝向：只补一小步角度
     rig.rotateBy(shortAngle(view.yaw - rig.yaw) * Math.min(1, dt * 1.8));
     rig.setPitch(lerp(rig.pitch, view.pitch, Math.min(1, dt * 1.2)));
-    // 中心：跟焦点或回场地中心（centerOnWorld 自带阻尼）
-    const target = this.autoOrbit && view.follow && focus ? focus : center;
-    rig.centerOnWorld(target.x, target.z);
+    // 中心：永远回场地中心（centerOnWorld 自带阻尼）。跟随战场那套已经删了
+    rig.centerOnWorld(center.x, center.z);
   }
 
   /** 给 HUD 的一行状态。 */

@@ -27,7 +27,7 @@ import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
-import { ARENA_CAMERA, BUILDING_SCALE, FIELD, UNIT_HEIGHT } from './config';
+import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, UNIT_HEIGHT } from './config';
 import { makeBanner, makePlinth, shade, bannerSpot, type Banner } from './props';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
@@ -120,22 +120,35 @@ export class ArenaApp {
     apron.position.set(this.map.size.cols / 2, -0.06, this.map.size.rows / 2);
     apron.receiveShadow = true;
 
-    // 中场土黄色分隔线：一条发亮的薄板贴在草地上，压在两半场之间。
+    // 中场黄区：一条**有宽度**的禁建带（3 列），不是一根线。
     // 抬 0.02 是为了不和地皮共面打架（z-fighting 会闪成锯齿）。
+    const bandW = NO_BUILD.halfWidth * 2 + 1;
     const divider = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.7, this.map.size.rows),
+      new THREE.PlaneGeometry(bandW, this.map.size.rows),
       new THREE.MeshStandardMaterial({
-        color: 0xc8a24c,
+        color: 0xd8b45c,
         emissive: 0xa9762c,
-        emissiveIntensity: 0.28,
-        roughness: 0.75,
+        emissiveIntensity: 0.22,
+        roughness: 0.8,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.62,
       }),
     );
     divider.rotation.x = -Math.PI / 2;
-    divider.position.set(FIELD.midCol, 0.52, this.map.size.rows / 2);
-    this.scene.add(apron, divider, this.ground.group);
+    divider.position.set(FIELD.midCol + 0.0, 0.52, this.map.size.rows / 2);
+    // 两条边线：黄区两侧各一道亮边，边界一眼看得准
+    const edgeMat = new THREE.MeshStandardMaterial({
+      color: 0xf0d08a,
+      emissive: 0xc8a24c,
+      emissiveIntensity: 0.5,
+      roughness: 0.6,
+    });
+    const edgeL = new THREE.Mesh(new THREE.PlaneGeometry(0.12, this.map.size.rows), edgeMat);
+    edgeL.rotation.x = -Math.PI / 2;
+    edgeL.position.set(FIELD.midCol - NO_BUILD.halfWidth - 0.5, 0.53, this.map.size.rows / 2);
+    const edgeR = edgeL.clone();
+    edgeR.position.x = FIELD.midCol + NO_BUILD.halfWidth + 0.5;
+    this.scene.add(apron, divider, edgeL, edgeR, this.ground.group);
     this.gallery = pack ? new DudeGallery(pack) : null;
 
     this.loop = new GameLoop({
@@ -326,7 +339,7 @@ export class ArenaApp {
     this.syncFlags();
     this.syncShots(info.time);
     this.syncParts(info.time);
-    this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter(), this.focusPoint());
+    this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -584,18 +597,6 @@ export class ArenaApp {
   /** 场地中心（导演的"回中"目标）。 */
   private fieldCenter(): { x: number; z: number } {
     return { x: FIELD.cols / 2, z: FIELD.rows / 2 };
-  }
-
-  /** 战场焦点：所有在场兵的质心；没兵就用场地中心。 */
-  private focusPoint(): { x: number; z: number } | null {
-    if (this.world.units.length === 0) return null;
-    let x = 0;
-    let z = 0;
-    for (const u of this.world.units) {
-      x += u.x;
-      z += u.z;
-    }
-    return { x: x / this.world.units.length, z: z / this.world.units.length };
   }
 
   get telemetry() {
