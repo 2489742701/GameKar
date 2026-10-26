@@ -177,7 +177,9 @@ export class ArenaWorld {
       timer: 0,
       fireIn: 0,
       flag: null,
-      aim: side === 'blue' ? Math.PI / 2 : -Math.PI / 2,
+      // 默认朝向就是冲着对面：蓝朝右(+x)、红朝左(-x)。
+      // 之前写的是 ±π/2（上下对峙时代的朝向），横版之后全歪了
+      aim: side === 'blue' ? 0 : Math.PI,
       shotsMuzzle: 0,
     };
     this.buildings.set(b.id, b);

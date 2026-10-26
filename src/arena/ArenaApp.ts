@@ -28,6 +28,7 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, UNIT_HEIGHT } from './config';
+import { makeBanner, makePlinth, shade, bannerSpot, type Banner } from './props';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -78,7 +79,10 @@ export class ArenaApp {
   private readonly flagMarks = new Map<number, THREE.Group>();
   private readonly styles = new Map<string, DudeStyle>();
   /** 会动的零件：磨坊的风车、炮塔的头、塔口的火光 */
-  private readonly parts = new Map<number, { sails?: THREE.Object3D; turret?: THREE.Object3D; flash?: THREE.Sprite }>();
+  private readonly parts = new Map<
+    number,
+    { sails?: THREE.Object3D; turret?: THREE.Object3D; flash?: THREE.Sprite; banner?: Banner }
+  >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Mesh>();
   readonly director = new ArenaDirector();
@@ -159,9 +163,12 @@ export class ArenaApp {
         if (this.gestureFromField) {
           this.rig.panByPixels(dx, dy);
         } else {
-          // 黑色区域（场地之外）：拖动 = 上下左右转视角
-          this.rig.rotateBy(dx * 0.22);
-          this.rig.setPitch(Math.min(78, Math.max(24, this.rig.pitch - dy * 0.18)));
+          // 黑色区域（场地之外）：拖动 = 上下左右转视角。
+          // 默认**正向**：往右拖视线往右、往下拖视线往下（两个轴一起翻，不是只翻一个）。
+          // invertOrbit 留给以后的设置开关，拨一下就整体回到旧方向。
+          const dir = this.director.invertOrbit ? -1 : 1;
+          this.rig.rotateBy(-dx * 0.22 * dir);
+          this.rig.setPitch(Math.min(78, Math.max(24, this.rig.pitch + dy * 0.18 * dir)));
         }
       },
       onZoom: (factor, x, y) => {
@@ -328,7 +335,8 @@ export class ArenaApp {
     for (const b of this.world.buildings.values()) {
       if (this.buildingMeshes.has(b.id)) continue;
       // 磨坊与炮塔用自己的件：模型库里的那两件是静态合并的，帆和炮管转不起来
-      const custom = b.kind === 'mill' ? makeMill() : b.kind === 'cannonTower' ? makeCannon() : null;
+      const custom =
+        b.kind === 'mill' ? makeMill(b.side) : b.kind === 'cannonTower' ? makeCannon(b.side) : null;
       const group = custom ? custom.group : this.library.create(b.kind === 'core' ? 'hall' : CARD_MODEL[b.kind]);
       if (custom) this.parts.set(b.id, { sails: custom.sails, turret: custom.turret });
       if (b.kind === 'arrowTower' || b.kind === 'cannonTower') {
@@ -348,6 +356,14 @@ export class ArenaApp {
       const ui = new THREE.Group();
       ui.scale.setScalar(1 / BUILDING_SCALE);
       group.add(ui);
+      // 石台 + 旗：都放进反向缩放的 ui 组，所以尺寸直接用"格"。
+      // （之前贴在脚下那块纯色方板被用户否了：像地毯，不像建筑的一部分）
+      ui.add(makePlinth(b.cols, b.rows, b.side).group);
+      const spot = bannerSpot(b.kind, b.cols, b.rows);
+      const banner = makeBanner(b.side, spot.h);
+      banner.group.position.set(spot.x, 0.2, spot.z);
+      ui.add(banner.group);
+      this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), banner });
       const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);
       bar.position.y = barHeightOf(b.kind);
       ui.add(bar);
@@ -523,15 +539,15 @@ export class ArenaApp {
       if (!b) continue;
       if (part.sails) part.sails.rotation.z = -time * 1.7;
       if (part.turret) {
-        // 用户明确"不是全自动转向"：只有刚开火那 0.18 秒才摆向目标，平时保持原样
-        if (b.shotsMuzzle > 0) {
-          const want = -b.aim;
-          const cur = part.turret.rotation.y;
-          const delta = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
-          part.turret.rotation.y = cur + delta * Math.min(1, 0.35);
-        }
+        // 炮口常驻对准 aim：aim 平时就是"冲着对面"的默认值，只有开火时才被改成目标方向。
+        // 所以它不会自己到处扫视（用户说过"不是全自动转向"），但一眼就能看出朝哪边。
+        const want = -b.aim;
+        const cur = part.turret.rotation.y;
+        const delta = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
+        if (Math.abs(delta) > 0.002) part.turret.rotation.y = cur + delta * Math.min(1, 0.25);
       }
       if (part.flash) part.flash.visible = b.shotsMuzzle > 0;
+      part.banner?.update(time);
     }
     void time;
   }
@@ -664,7 +680,7 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
  * 磨坊（会转的）：石塔 + 锥顶 + 四片帆。帆单独成组，绕 z 轴转。
  * 这里不走模型库 —— 库里那件是静态合并的，帆转不了（用户点名要风车转）。
  */
-function makeMill(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
+function makeMill(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
   const group = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({ color: 0xd9cbb0, flatShading: true, roughness: 0.9 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.9 });
@@ -673,7 +689,11 @@ function makeMill(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THRE
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.62, 1.25, 8), stone);
   base.position.y = 0.625;
   base.castShadow = true;
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.6, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0xa8483c, flatShading: true, roughness: 0.9 }));
+  // 顶盖按阵营上色（用户：风车顶盖上的颜色应该不同），中间再压一圈亮边
+  const roof = new THREE.Mesh(
+    new THREE.ConeGeometry(0.6, 0.5, 8),
+    new THREE.MeshStandardMaterial({ color: shade(sideColor(side), 0.9), flatShading: true, roughness: 0.85 }),
+  );
   roof.position.y = 1.5;
   roof.castShadow = true;
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 6), dark);
@@ -699,7 +719,7 @@ function makeMill(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THRE
  * 炮塔（会转的）：石座 + 可旋转的炮塔头 + 一根炮管。
  * 同样不用模型库那份静态件 —— 炮管必须跟着目标转。
  */
-function makeCannon(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
+function makeCannon(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
   const group = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({ color: 0x8e93a3, flatShading: true, roughness: 0.95 });
   const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
@@ -707,7 +727,17 @@ function makeCannon(): { group: THREE.Group; sails?: THREE.Object3D; turret?: TH
   const base = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.72, 0.86), stone);
   base.position.y = 0.36;
   base.castShadow = true;
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.14, 0.96), new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true }));
+  // 台面：阵营色（用户要求"模型上的台面上有颜色"，不是在地上贴一块）
+  const deck = new THREE.Mesh(
+    new THREE.BoxGeometry(0.96, 0.14, 0.96),
+    new THREE.MeshStandardMaterial({
+      color: shade(sideColor(side), 0.75),
+      emissive: sideColor(side),
+      emissiveIntensity: 0.25,
+      flatShading: true,
+      roughness: 0.7,
+    }),
+  );
   deck.position.y = 0.79;
 
   const turret = new THREE.Group();

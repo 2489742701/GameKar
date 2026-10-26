@@ -36,6 +36,11 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const shortAngle = (deg: number) => ((((deg + 180) % 360) + 360) % 360) - 180;
 
 export class ArenaDirector {
+  /**
+   * 拖动方向是否反向。默认 **false = 正向**（用户 2026-10-27：他习惯正向，
+   * 反向等以后在设置里给个开关）。拨这个开关就能整体翻过来。
+   */
+  invertOrbit = false;
   index = 0;
   auto = true;
   /** 玩家自己拖过镜头：锁在手动，直到他按"视角"按钮（不再 6 秒后偷偷抢回去） */
