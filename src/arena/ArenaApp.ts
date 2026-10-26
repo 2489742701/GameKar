@@ -327,6 +327,8 @@ export class ArenaApp {
       return;
     }
 
+    const card = this.world.hand[this.selectedSlot];
+    const readyBefore = this.world.supportedBarracks('blue');
     const res = this.world.playCard('blue', this.selectedSlot, cell.col, cell.row);
     if (!res.ok) {
       this.opts.onToast?.(res.reason ?? '放不下', 'warn');
@@ -334,6 +336,13 @@ export class ArenaApp {
     }
     this.selectedSlot = -1;
     this.syncBuildings();
+    // 后勤提示：兵营要 1 磨坊 + 1 民居；放对了后勤就说"开工了"
+    const placed = this.buildingAtCell(cell);
+    if (placed && placed.kind === 'barracks' && !this.world.isBarracksSupported(placed.id)) {
+      this.opts.onToast?.('兵营要先配 1 磨坊 + 1 民居才会出兵', 'warn');
+    } else if (card?.building === 'mill' || card?.building === 'house') {
+      if (this.world.supportedBarracks('blue') > readyBefore) this.opts.onToast?.('兵营开工了');
+    }
     this.opts.onState?.();
   }
 
@@ -415,6 +424,12 @@ export class ArenaApp {
       bar.position.y = modelTop + 0.25;
       ui.add(bar);
       group.userData['hpBar'] = bar;
+      if (b.kind === 'barracks') {
+        const need = makeNeedLabel();
+        need.position.y = modelTop + 0.9;
+        ui.add(need);
+        group.userData['need'] = need;
+      }
       // 受伤碎裂：注册时把实测尺寸交给它，之后每帧只喂血量分数
       this.damage.register(
         b.id,
@@ -431,6 +446,8 @@ export class ArenaApp {
       const b = this.world.buildings.get(id);
       if (b) {
         const frac = b.hp / b.maxHp;
+        const need = group.userData['need'] as THREE.Sprite | undefined;
+        if (need) need.visible = !this.world.isBarracksSupported(id);
         const bar = group.userData['hpBar'] as THREE.Mesh | undefined;
         if (bar) {
           // 满血不挂条；掉血才出现，这样一眼能看出哪栋在挨打
@@ -811,7 +828,15 @@ const isRed = (hex: string): boolean => {
 };
 
 function labelOf(b: ArenaBuilding): string {
-  return b.kind === 'core' ? '核心' : b.kind === 'barracks' ? '兵营' : b.kind === 'mill' ? '磨坊' : '防御塔';
+  return b.kind === 'core'
+    ? '核心'
+    : b.kind === 'barracks'
+      ? '兵营'
+      : b.kind === 'mill'
+        ? '磨坊'
+        : b.kind === 'house'
+          ? '民居'
+          : '防御塔';
 }
 
 function makeHpBar(frac: number, color: number, width = 1.6): THREE.Mesh {
@@ -833,6 +858,33 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
   bar.scale.x = Math.max(0.02, clamped);
   const base = bar.userData['base'] as number;
   (bar.material as THREE.MeshBasicMaterial).color.setHex(clamped < 0.3 ? 0xff6b6b : base);
+}
+
+/** 兵营缺后勤时头顶的提示牌（缺磨坊/民居）。 */
+function makeNeedLabel(): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = 'rgba(28,20,14,0.88)';
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.strokeStyle = '#c8a24c';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, 252, 60);
+    ctx.fillStyle = '#f0d08a';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('缺 磨坊 + 民居', 128, 34);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(2.6, 0.65, 1);
+  sprite.visible = false;
+  return sprite;
 }
 
 /** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
@@ -907,7 +959,7 @@ function settleRuin(group: THREE.Group, age: number): void {
 function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
   if (kind === 'core') return 'core';
   if (kind === 'arrowTower' || kind === 'cannonTower') return 'tower';
-  if (kind === 'mill' || kind === 'barracks') return 'wood';
+  if (kind === 'mill' || kind === 'barracks' || kind === 'house') return 'wood';
   return 'stone';
 }
 

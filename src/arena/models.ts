@@ -422,6 +422,31 @@ export function millModel(accent: number): ArenaModel {
   };
 }
 
+/**
+ * 民居：小一号的方屋 + 双坡顶 + 烟囱 + 一扇窗。
+ * 剪影：**比兵营矮、比兵营方**，屋顶多一根烟囱。不出兵也不产金，给兵营当后勤。
+ */
+export function houseModel(): ArenaModel {
+  return {
+    static: [
+      plinth([1.2, 0.06, 1.02], ARENA_PAL.stoneDark),
+      box([0.28, 0.42, 0.06], ARENA_PAL.wood, [0, mid(0.06, 0.42), 0.46]),
+      box([0.36, 0.05, 0.07], ARENA_PAL.woodLight, [0, 0.5, 0.46]),
+      box([0.22, 0.2, 0.05], ARENA_PAL.stoneDark, [-0.32, 0.38, 0.45]),
+      prism([1.3, 0.44, 1.04], ARENA_PAL.roof, [0, 0.72, 0]),
+      box([1.32, 0.05, 0.09], ARENA_PAL.roofDark, [0, mid(1.14, 0.05), 0]),
+      // 烟囱：和兵营区分开的那一根
+      box([0.16, 0.55, 0.16], ARENA_PAL.stone, [-0.38, mid(0.78, 0.55), -0.28]),
+      // 屋内：内衬 + 两根柱 + 一根横梁
+      box([0.94, 0.66, 0.68], ARENA_PAL.inside, [0, mid(0.06, 0.66), 0]),
+      cyl([0.03, 0.035, 0.66], ARENA_PAL.wood, [-0.3, mid(0.06, 0.66), 0.24], 5),
+      cyl([0.03, 0.035, 0.66], ARENA_PAL.wood, [0.3, mid(0.06, 0.66), 0.24], 5),
+      box([0.96, 0.05, 0.05], ARENA_PAL.woodLight, [0, 0.66, 0.24]),
+    ],
+    shell: boxShell(1.14, 0.88, 0.06, 0.66, ARENA_PAL.wall, 3, 2, 83),
+  };
+}
+
 /** 名字 → 造模型。视图层只读这张表；`accent` 是阵营色。 */
 export const ARENA_MODELS = {
   core: coreModel,
@@ -429,6 +454,7 @@ export const ARENA_MODELS = {
   arrowTower: arrowTowerModel,
   cannonTower: cannonTowerModel,
   mill: millModel,
+  house: houseModel,
 } as const;
 
 export type ArenaModelName = keyof typeof ARENA_MODELS;
@@ -459,4 +485,5 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   arrowTower: { x: 1.1, z: 1.1, base: 4.75, pole: 0.85 },
   cannonTower: { x: 1.45, z: 1.45, base: 0.12, pole: 2.1 },
   mill: { x: 0, z: 0, base: 5.25, pole: 0.9 },
+  house: { x: 1.2, z: 0, base: 2.55, pole: 0.8 },
 };

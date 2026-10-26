@@ -86,6 +86,12 @@ export const TOWER = {
 
 export const MILL = { hp: 300 };
 
+/**
+ * 民居：不出兵也不产金，专门给兵营当"后勤"（用户 2026-10-27：
+ * "一个军营配一个磨坊一个民居，否则无法生产"）。
+ */
+export const HOUSE = { hp: 220 };
+
 /** 手牌：4 张，打出去之后进冷却再补一张新的。 */
 export const HAND = { size: 4, refillSeconds: 2.2 };
 
@@ -114,7 +120,7 @@ export interface ArenaCard {
   /** 花多少金 */
   cost: number;
   /** 建筑卡：模型与规格 */
-  building?: 'barracks' | 'arrowTower' | 'cannonTower' | 'mill';
+  building?: 'barracks' | 'arrowTower' | 'cannonTower' | 'mill' | 'house';
   /** 军队卡：出哪几种、各几个 */
   squad?: { unitId: string; count: number }[];
 }
@@ -174,6 +180,14 @@ export const CARDS: ArenaCard[] = [
     squad: [{ unitId: 'mobileCannon', count: 1 }],
   },
   {
+    id: 'house',
+    name: '民居',
+    blurb: '兵营的后勤：每座兵营要配 1 座磨坊 + 1 座民居才会出兵。',
+    kind: 'building',
+    cost: 6,
+    building: 'house',
+  },
+  {
     id: 'knights',
     name: '骑士小队',
     blurb: '两个骑士：血厚、防高，顶在最前面。',
@@ -223,6 +237,7 @@ export const BUILDING_SPECS = {
   arrowTower: { cols: 3, rows: 3, hp: TOWER.arrow.hp },
   cannonTower: { cols: 3, rows: 3, hp: TOWER.cannon.hp },
   mill: { cols: 3, rows: 3, hp: MILL.hp },
+  house: { cols: 3, rows: 3, hp: HOUSE.hp },
 } as const;
 
 /** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */

@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 313 条回归
+npm run check        # 类型检查 + 318 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -83,7 +83,7 @@ src/
 ├─ arena/             对战模式（只依赖 engine/ 与素材，不碰老模式的 GameWorld/Combat）
 │  ├─ ArenaWorld.ts   纯逻辑：出牌/金币/兵线/炮塔/废墟，不 import three
 │  ├─ ArenaApp.ts     把状态画出来：模型、旗帜、弹道、废墟、镜头手势
-│  ├─ models.ts       五栋楼的模型**数据**：骨架/屋顶/台基 + 可脱落外墙（面片）+ 旗子落点
+│  ├─ models.ts       六栋楼的模型**数据**：骨架/屋顶/台基 + 可脱落外墙（面片）+ 旗子落点
 │  ├─ shell.ts        外墙网格：面片合成一张网格，受伤时整块摘掉（洞口连成一片）
 │  ├─ damage.ts       受伤碎裂：按血量档位崩面片 → 弹道掉落 → 落地躺平
 │  ├─ config.ts       对战数值（价格、血量、射程、金币节奏）
@@ -91,7 +91,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage —— 共 313 条
+                      arena · ruins · cameraId · models · damage —— 共 318 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
@@ -826,8 +826,10 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
   同色水晶**嵌在核心屋顶里**（模型自带的，不再往头顶飘一颗）。
 - **20 点金**：上限 20、开局 8、**每 1.5 秒跳 +1**（不是连续小数；从 0 充满要 30 秒）。
 - **四张手牌**：随机发，打出后该槽进 2.2 秒冷却再补一张。配卡组留到以后。
-- **卡池十张**（价格按用户要求整体翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
-  箭塔 10 · 炮塔 14 · 磨坊 8（每 5 秒 +2 金）· 弓箭手小队 6 · 骑士小队 9 · 法师小队 11 ·
+- **兵营要后勤**：每座兵营要配 **1 座磨坊 + 1 座民居** 才会出兵（1:1:1，按盖的先后配对）；
+  没配齐时兵营头顶挂「缺 磨坊 + 民居」。
+- **卡池十一张**（价格按用户要求整体翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
+  箭塔 10 · 炮塔 14 · 磨坊 8（每 5 秒 +2 金）· 民居 6（兵营的后勤）· 弓箭手小队 6 · 骑士小队 9 · 法师小队 11 ·
   **机器巨人 16**（一台 2.4 格高的铁疙瘩，慢但一拳砸穿墙）· 兽人 8 ·
   **移动火炮 16**（两个小人推着走，射程 7.2 比塔还远，拆塔也打兵）。
 - **建筑没有寿命**：不会自己掉血、不会定时消失（这是和老外的皇室战争刻意不同的地方），

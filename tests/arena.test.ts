@@ -96,6 +96,9 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     world.gold.blue = 20;
     give(world, 'barracks');
     expect(world.playCard('blue', 0, 5, 10).ok).toBe(true);
+    // 2026-10-27 新规则：兵营要配 1 磨坊 + 1 民居才会出兵
+    world['place']('blue', 'mill', 10, 10, 300);
+    world['place']('blue', 'house', 10, 5, 220);
     const goldAfterBuild = world.gold.blue;
 
     run(world, BARRACKS.interval + 0.2);
@@ -599,5 +602,59 @@ describe('新增兵种：法师的法术弹', () => {
       if (world.shots.some((s) => s.source === 'unit' && s.ammo === 'magic')) seen = true;
     });
     expect(seen, '法师应当打出一发 source=unit / ammo=magic 的法术弹').toBe(true);
+  });
+});
+
+
+describe('兵营后勤：1 座磨坊 + 1 座民居（用户 2026-10-27）', () => {
+  it('没有后勤就不出兵', () => {
+    const world = new ArenaWorld({ seed: 11 });
+    world['place']('blue', 'barracks', 5, 10, 420);
+    run(world, BARRACKS.interval * 2);
+    expect(world.units.filter((u) => u.side === 'blue'), '没有磨坊/民居时不应该出兵').toHaveLength(0);
+    expect(world.supportedBarracks('blue')).toBe(0);
+  });
+
+  it('只有磨坊或只有民居都不行', () => {
+    const millOnly = new ArenaWorld({ seed: 12 });
+    millOnly['place']('blue', 'barracks', 5, 10, 420);
+    millOnly['place']('blue', 'mill', 10, 10, 300);
+    run(millOnly, BARRACKS.interval + 0.3);
+    expect(millOnly.units.filter((u) => u.side === 'blue')).toHaveLength(0);
+
+    const houseOnly = new ArenaWorld({ seed: 13 });
+    houseOnly['place']('blue', 'barracks', 5, 10, 420);
+    houseOnly['place']('blue', 'house', 10, 10, 220);
+    run(houseOnly, BARRACKS.interval + 0.3);
+    expect(houseOnly.units.filter((u) => u.side === 'blue')).toHaveLength(0);
+  });
+
+  it('配齐一套后勤：两座兵营只有先盖的那座开工', () => {
+    const world = new ArenaWorld({ seed: 14 });
+    world['place']('blue', 'barracks', 3, 10, 420);
+    world['place']('blue', 'barracks', 8, 10, 420);
+    world['place']('blue', 'mill', 13, 10, 300);
+    world['place']('blue', 'house', 13, 4, 220);
+    const barracks = [...world.buildings.values()]
+      .filter((b) => b.kind === 'barracks')
+      .sort((a, b) => a.id - b.id);
+    expect(world.supportedBarracks('blue')).toBe(1);
+    expect(world.isBarracksSupported(barracks[0]!.id)).toBe(true);
+    expect(world.isBarracksSupported(barracks[1]!.id)).toBe(false);
+
+    run(world, BARRACKS.interval + 0.3);
+    expect(world.units.filter((u) => u.side === 'blue'), '只应该有一座兵营出兵').toHaveLength(1);
+  });
+
+  it('再补一套后勤，第二座兵营也开工', () => {
+    const world = new ArenaWorld({ seed: 15 });
+    world['place']('blue', 'barracks', 3, 10, 420);
+    world['place']('blue', 'barracks', 8, 10, 420);
+    world['place']('blue', 'mill', 13, 10, 300);
+    world['place']('blue', 'house', 13, 4, 220);
+    expect(world.supportedBarracks('blue')).toBe(1);
+    world['place']('blue', 'mill', 17, 10, 300);
+    world['place']('blue', 'house', 17, 4, 220);
+    expect(world.supportedBarracks('blue')).toBe(2);
   });
 });

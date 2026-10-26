@@ -10,7 +10,7 @@ import { BUILDINGS, buildingList } from '@game/data/buildings';
 import { CARDS, RARITY_ORDER, STARTER_POOL, cardList } from '@game/data/cards';
 import { ModelLibrary } from '@game/models/registry';
 import { unitDef } from '@game/data/units';
-import { CARDS as ARENA_CARDS } from '@arena/config';
+import { BUILDING_SPECS, CARDS as ARENA_CARDS } from '@arena/config';
 
 const library = new ModelLibrary();
 
@@ -81,6 +81,12 @@ describe('新增兵种（骑士/法师/机器巨人）', () => {
     expect(unitDef('mage').role).toBe('ranged');
     expect(unitDef('mech').heightTiles).toBeGreaterThan(1.45);
     expect(unitDef('mech').hp).toBeGreaterThan(unitDef('orc').hp);
+  });
+
+  it('民居卡指向真的建筑规格', () => {
+    const card = ARENA_CARDS.find((c) => c.id === 'house');
+    expect(card?.building).toBe('house');
+    expect(BUILDING_SPECS.house.hp).toBeGreaterThan(0);
   });
 
   it('卡池里的骑士/法师/机器人都指向真的兵种', () => {

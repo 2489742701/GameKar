@@ -413,6 +413,12 @@ export class ArenaWorld {
     for (const b of this.buildings.values()) {
       if (b.kind === 'core') continue;
       if (b.kind === 'barracks') {
+        // 用户 2026-10-27：1 座兵营要配 1 座磨坊 + 1 座民居，否则不出兵。
+        // 后勤断了连计时也停：补上之后从 0 开始，不会一配齐就蹦一个兵出来。
+        if (!this.supportedIds(b.side).has(b.id)) {
+          b.timer = 0;
+          continue;
+        }
         b.timer += dt;
         if (b.timer < BARRACKS.interval) continue;
         b.timer = 0;
@@ -663,6 +669,32 @@ export class ArenaWorld {
     if (u.hp < 0) u.hp = 0;
   }
 
+  /**
+   * 同阵营"配齐后勤"的兵营：**1 座磨坊 + 1 座民居 配 1 座兵营**。
+   * 按楼号先到先得 —— 2 座兵营只配了 1 套后勤时，只有先盖的那座开工。
+   */
+  private supportedIds(side: Side): Set<number> {
+    const mine = [...this.buildings.values()].filter((b) => b.side === side && b.hp > 0);
+    const slots = Math.min(
+      mine.filter((b) => b.kind === 'mill').length,
+      mine.filter((b) => b.kind === 'house').length,
+    );
+    const barracks = mine.filter((b) => b.kind === 'barracks').sort((a, b) => a.id - b.id);
+    return new Set(barracks.slice(0, slots).map((b) => b.id));
+  }
+
+  /** 当前有几座兵营在开工（HUD/提示用）。 */
+  supportedBarracks(side: Side): number {
+    return this.supportedIds(side).size;
+  }
+
+  /** 这座兵营是否配齐了后勤（视图用它挂"缺磨坊/民居"的提示）。 */
+  isBarracksSupported(id: number): boolean {
+    const b = this.buildings.get(id);
+    if (!b || b.kind !== 'barracks') return true;
+    return this.supportedIds(b.side).has(id);
+  }
+
   private hurtBuilding(b: ArenaBuilding, attack: number): void {
     b.hp -= damageOf(attack, 0);
     if (b.hp < 0) b.hp = 0;
@@ -699,8 +731,14 @@ export class ArenaWorld {
     const affordable = CARDS.filter((c) => c.cost <= this.gold.red).sort((a, b) => b.cost - a.cost);
     if (affordable.length === 0) return;
 
+    // 有兵营没后勤就先补后勤：不然 AI 会盖一堆不出兵的兵营
+    const barracks = kinds.filter((b) => b.kind === 'barracks').length;
+    const needsSupport = this.supportedIds('red').size < barracks;
+    const supportPool = affordable.filter((c) => c.building === 'mill' || c.building === 'house');
+    const pool = needsSupport && supportPool.length > 0 ? supportPool : affordable;
+
     const wantsBuilding = buildings < AI.buildingsBeforeSquad;
-    const card = affordable.find((c) => (wantsBuilding ? c.kind === 'building' : true)) ?? affordable[0]!;
+    const card = pool.find((c) => (wantsBuilding ? c.kind === 'building' : true)) ?? pool[0]!;
     const cell = this.randomSpot('red', card);
     if (!cell) return;
     this.execute('red', card, cell.col, cell.row);
