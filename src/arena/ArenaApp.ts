@@ -27,6 +27,7 @@ import { buildModel, spinnersOf, TURRET } from '@game/models/kit';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
+import { AmbientDust } from './ambient';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
@@ -59,6 +60,8 @@ interface UnitSprite {
   z: number;
   cooldown: number;
   attackLeft: number;
+  /** 下一团脚底扬尘的倒计时（秒） */
+  dustIn: number;
   /**
    * "还在走"的保留时间（秒）。
    *
@@ -91,6 +94,8 @@ export class ArenaApp {
   private readonly damage: DamageFx;
   /** 开火/命中的烟雾、火光、火星（和老模式同一套 BattleFx，不另写一份） */
   private readonly fx: BattleFx;
+  /** 战场浮尘：几十个点的一次 draw call，用来给静止画面一点"空气" */
+  private readonly dustLayer: AmbientDust;
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
   private readonly opts: ArenaAppOptions;
@@ -126,8 +131,11 @@ export class ArenaApp {
     this.damage = new DamageFx(this.scene);
     this.fx = new BattleFx();
     this.scene.add(this.fx.group);
-    // 外墙崩开时溅火星
+    this.dustLayer = new AmbientDust(this.map.size.cols, this.map.size.rows);
+    this.scene.add(this.dustLayer.points);
+    // 外墙崩开时溅火星；碎块落地时扬一小团土
     this.damage.onBreach = (x, z, y, dirX, dirZ) => this.fx.spark(x, z, y, dirX, dirZ, 14);
+    this.damage.onLand = (x, z, y) => this.fx.dust(x, z, y);
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
     this.rig = new CameraRig({
@@ -370,6 +378,7 @@ export class ArenaApp {
     this.syncParts(info.time);
     this.damage.update(info.delta);
     this.fx.step(info.delta);
+    this.dustLayer.update(info.delta);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
   }
@@ -478,6 +487,12 @@ export class ArenaApp {
       // 迟滞：这一帧动过就续 0.18 秒，否则慢慢放掉 —— 不然 run/idle 每帧切换，屏幕上一闪一闪
       entry.runHold = moved > 0.004 ? 0.18 : Math.max(0, entry.runHold - dt);
       const moving = entry.runHold > 0;
+      // 行军扬尘：每 0.4–0.65 秒在脚下放一小团（不是每帧，别把烟池吃满）
+      entry.dustIn = Math.max(0, entry.dustIn - dt);
+      if (moving && entry.dustIn <= 0) {
+        entry.dustIn = 0.4 + Math.random() * 0.25;
+        this.fx.dust(u.x, u.z, this.groundY(u.x, u.z) + 0.12);
+      }
 
       if (entry.siege) {
         // 车头朝着"这一步往哪走"；停下来就保持最后朝向
@@ -512,6 +527,8 @@ export class ArenaApp {
     }
     for (const [id, entry] of this.unitSprites) {
       if (alive.has(id)) continue;
+      // 倒下的位置留几团烟 + 火星（用最后缓存的位置）
+      this.fx.death(entry.x, entry.z, this.groundY(entry.x, entry.z) + 0.5);
       entry.dude?.dispose();
       entry.obj.removeFromParent();
       this.unitSprites.delete(id);
@@ -527,7 +544,7 @@ export class ArenaApp {
       );
       cone.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       this.scene.add(cone);
-      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
+      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0 };
     }
     if (statsOf(u.defId).siege) return u.defId === 'ballista' ? this.makeBallista(u) : this.makeSiege(u);
     const def = unitDef(u.defId);
@@ -537,7 +554,7 @@ export class ArenaApp {
     const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: bodyH });
     dude.mesh.position.y = this.groundY(u.x, u.z) + bodyH / 2;
     this.scene.add(dude.mesh);
-    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
+    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0 };
   }
 
   /**
@@ -611,6 +628,7 @@ export class ArenaApp {
       cooldown: u.cooldown,
       attackLeft: 0,
       runHold: 0,
+      dustIn: 0,
     };
   }
 
@@ -690,6 +708,7 @@ export class ArenaApp {
       cooldown: u.cooldown,
       attackLeft: 0,
       runHold: 0,
+      dustIn: 0,
     };
   }
 
@@ -844,8 +863,14 @@ export class ArenaApp {
     }
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
-      const hit = mesh.userData['hit'] as { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' } | undefined;
-      if (hit) this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
+      const hit = mesh.userData['hit'] as
+        | { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' | 'magic' }
+        | undefined;
+      if (hit) {
+        this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
+        // 炮弹落地再溅一把火星（烟之外的第二层）
+        if (hit.ammo === 'cannon') this.fx.spark(hit.x, hit.z, hit.ground + 0.4, 0, 1, 8);
+      }
       this.scene.remove(mesh);
       // 箭的几何体/材质是全场共用的（ARROW_GEO/ARROW_MAT），不能 dispose；
       // 炮弹和法术弹是每次新建的，要释放。

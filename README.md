@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 321 条回归
+npm run check        # 类型检查 + 323 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -86,12 +86,13 @@ src/
 │  ├─ models.ts       六栋楼的模型**数据**：骨架/屋顶/台基 + 可脱落外墙（面片）+ 旗子落点
 │  ├─ shell.ts        外墙网格：面片合成一张网格，受伤时整块摘掉（洞口连成一片）
 │  ├─ damage.ts       受伤碎裂：按血量档位崩面片 → 弹道掉落 → 落地躺平
+│  ├─ ambient.ts      战场浮尘：几十个像素点漂在低空（一次 draw call）
 │  ├─ config.ts       对战数值（价格、血量、射程、金币节奏）
 │  └─ …                Camera / cameraId（机位码）· ruins（BSP 碎裂）· props（会摆的旗）· DebugPanel
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage —— 共 321 条
+                      arena · ruins · cameraId · models · damage —— 共 323 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
@@ -841,8 +842,10 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
   只能被兵拆掉或被塔轰掉。**塔会打塔**：进入射程的敌方建筑也会挨打，不再只打兵。
 - **受伤**：血量每掉一档，外墙就崩掉一片 —— 面片整块脱落、掉到地上躺平，露出里面的木骨架，
   洞是连成一片的（不是撒了一墙小洞）。掉下去的就是原来那块墙板。
-- **开火特效**：箭塔/炮塔/移动火炮开火时炮口有火光和一缕烟，炮弹落地再炸一团；弹丸从**炮口高度**
-  出发（塔顶/台面/车头），不再是贴着地面平飞。
+- **开火特效**：箭塔/炮塔/移动火炮/弩车开火时炮口有火光和一缕烟，炮弹落地再炸一团并溅火星；
+  弹丸从**炮口高度**出发（塔顶/台面/车头），箭是箭头模型、法术是青色弹。
+- **小特效**：行军脚底扬尘、单位倒下冒几团烟 + 火星、墙片落地扬土、牧师回血放绿环、
+  战场上还有一层很淡的**浮尘**（一次 draw call，不写深度）。
 - **废墟**：被拆掉的楼在原地留一堆碎石，14 秒后自己塌平（最后 2.5 秒淡出）。
 - **出兵旗**：兵营有一个出兵点（地上插旗）。点自家兵营 → 再点地面，就把旗挪过去。
   每栋楼的**阵营旗按模型落点插**（核心=墙角高杆、兵营=屋脊端、箭塔=垛口、炮塔=座角、磨坊=杆顶），

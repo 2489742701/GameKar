@@ -259,6 +259,35 @@ export class BattleFx {
     this.ageHaze(dt);
   }
 
+  /** 脚底扬尘：小、短、几乎不上升 —— 行军和落地的"土"。 */
+  dust(x: number, z: number, y: number): void {
+    this.puff(
+      x + (Math.random() - 0.5) * 0.25,
+      z + (Math.random() - 0.5) * 0.25,
+      y,
+      0.16 + Math.random() * 0.1,
+      0.35,
+      (Math.random() - 0.5) * 0.35,
+      (Math.random() - 0.5) * 0.35,
+    );
+  }
+
+  /** 单位倒下：几团烟 + 一把火星。 */
+  death(x: number, z: number, y: number): void {
+    for (let i = 0; i < 4; i++) {
+      this.puff(
+        x + (Math.random() - 0.5) * 0.4,
+        z + (Math.random() - 0.5) * 0.4,
+        y + Math.random() * 0.25,
+        0.22 + Math.random() * 0.2,
+        0.5 + Math.random() * 0.3,
+        (Math.random() - 0.5) * 0.4,
+        (Math.random() - 0.5) * 0.4,
+      );
+    }
+    this.spark(x, z, y, 0, 1, 6);
+  }
+
   /** 牧师回血：脚下一圈绿环扩散、淡出（0.55 秒）。 */
   healPulse(x: number, z: number, y: number): void {
     if (this.pulses.length >= CAP.pulse) return;

@@ -62,6 +62,8 @@ const MAX_DEBRIS = 70;
 export class DamageFx {
   /** 外壳崩开时的回调：让视图在破口处溅一把火星 */
   onBreach?: (x: number, z: number, y: number, dirX: number, dirZ: number) => void;
+  /** 碎块落地时的回调：让视图在墙脚扬一小团土 */
+  onLand?: (x: number, z: number, y: number) => void;
   private readonly states = new Map<number, Damaged>();
   private readonly debris: Chunk[] = [];
   private readonly mats = new Map<number, THREE.MeshStandardMaterial>();
@@ -118,6 +120,7 @@ export class DamageFx {
           c.mesh.rotation.set(-Math.PI / 2, c.yaw, 0);
           c.vy = 0;
           c.rest = true;
+          this.onLand?.(c.mesh.position.x, c.mesh.position.z, c.restY);
         }
       }
     }
