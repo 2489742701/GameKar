@@ -148,6 +148,9 @@ interface Puff {
   seconds: number;
   rise: number;
   scale: number;
+  /** 水平漂移（格/秒）：炮口的烟要往炮管方向推出去，不是原地往上飘 */
+  driftX: number;
+  driftZ: number;
 }
 
 /** 一团体积雾：大到能挡住楼、淡到不脏屏，起身快、散得慢。 */
@@ -440,11 +443,19 @@ export class BattleFx {
     }
     sprite.position.set(x, y, z);
     sprite.scale.set(scale, scale, 1);
-    this.puffs.push({ sprite, life: 0, seconds: 0.14, rise: 0, scale });
+    this.puffs.push({ sprite, life: 0, seconds: 0.14, rise: 0, scale, driftX: 0, driftZ: 0 });
     this.release('flash', 1);
   }
 
-  private puff(x: number, z: number, y: number, scale: number, seconds: number): void {
+  private puff(
+    x: number,
+    z: number,
+    y: number,
+    scale: number,
+    seconds: number,
+    driftX = 0,
+    driftZ = 0,
+  ): void {
     if (this.puffs.length >= CAP.smoke) {
       this.dropped++;
       return;
@@ -456,13 +467,15 @@ export class BattleFx {
     sprite.position.set(x, y, z);
     sprite.scale.set(scale, scale, 1);
     this.group.add(sprite);
-    this.puffs.push({ sprite, life: 0, seconds, rise: 0.9, scale });
+    this.puffs.push({ sprite, life: 0, seconds, rise: 0.9, scale, driftX, driftZ });
   }
 
   private age(dt: number): void {
     for (let i = this.puffs.length - 1; i >= 0; i--) {
       const p = this.puffs[i]!;
       p.life += dt;
+      p.sprite.position.x += p.driftX * dt;
+      p.sprite.position.z += p.driftZ * dt;
       const k = p.life / p.seconds;
       if (k >= 1) {
         // 必须真的摘掉：只 visible=false 的话，每团烟都留一份材质和一个场景节点，

@@ -536,29 +536,29 @@ export class ArenaApp {
     const wood = new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 });
     const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
 
-    // 车架整体放大一档（用户："火炮也可以大一点"）；两个推车小人改成**满身高**，
-    // 之前 0.85 倍身高 + 缩在车尾，看起来像两个跟着跑的矮人
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.18, 0.8), wood);
-    bed.position.y = 0.44;
+    // 第三次放大（用户 2026-10-27："移动火炮好小呀，可以稍微大一点；后面推的两个小人也小"）。
+    // 车架整体 ~1.25 倍；推车小人 1.6 格（比普通兵略高一点，推车才看得见）
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.2, 1.0), wood);
+    bed.position.y = 0.52;
     bed.castShadow = true;
     group.add(bed);
-    for (const sx of [-0.4, 0.4]) {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.12, 10), iron);
+    for (const sx of [-0.5, 0.5]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.14, 10), iron);
       wheel.rotation.x = Math.PI / 2;
-      wheel.position.set(sx, 0.26, 0);
+      wheel.position.set(sx, 0.32, 0);
       wheel.castShadow = true;
       group.add(wheel);
     }
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.13, 0.9, 8), iron);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 1.1, 8), iron);
     barrel.rotation.z = -Math.PI / 2;
-    barrel.position.set(0.12, 0.7, 0);
+    barrel.position.set(0.15, 0.86, 0);
     barrel.castShadow = true;
-    const muzzleRing = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.12, 8), iron);
+    const muzzleRing = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.14, 8), iron);
     muzzleRing.rotation.z = -Math.PI / 2;
-    muzzleRing.position.set(0.58, 0.7, 0);
+    muzzleRing.position.set(0.72, 0.86, 0);
     muzzleRing.castShadow = true;
-    const breech = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.34), iron);
-    breech.position.set(-0.42, 0.68, 0);
+    const breech = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.42), iron);
+    breech.position.set(-0.5, 0.84, 0);
     group.add(barrel, muzzleRing, breech);
     // 阵营色小旗插在车尾：一眼分敌我
     const mark = new THREE.Mesh(
@@ -570,7 +570,7 @@ export class ArenaApp {
         flatShading: true,
       }),
     );
-    mark.position.set(-0.66, 0.82, 0);
+    mark.position.set(-0.82, 1.0, 0);
     group.add(mark);
 
     // 两个推车的小人：站在车尾两侧
@@ -578,9 +578,9 @@ export class ArenaApp {
     const pusherDef = unitDef('worker');
     const style = this.styleOf(u.side, pusherDef.id, pusherDef);
     const { atlas, texture } = this.gallery!.acquire(style, pusherDef.anims);
-    for (const dz of [-0.34, 0.34]) {
-      const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
-      dude.mesh.position.set(-0.98, UNIT_HEIGHT * 0.5, dz);
+    for (const dz of [-0.44, 0.44]) {
+      const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: 1.6 });
+      dude.mesh.position.set(-1.24, 0.8, dz);
       group.add(dude.mesh);
       pushers.push(dude);
     }
@@ -817,7 +817,7 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
 }
 
 /** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
-const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.8 } as const;
+const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95 } as const;
 
 function makeBall(radius: number): THREE.Mesh {
   const mesh = new THREE.Mesh(

@@ -162,7 +162,7 @@ describe('兵：会往前走、会互相打', () => {
       maxHp: 26,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     });
     const red = world.units.find((u) => u.id === 9999)!;
     run(world, 2);
@@ -186,7 +186,7 @@ describe('胜负：拆掉对方核心才算', () => {
       maxHp: 80,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     });
     run(win, 3);
     expect(win.outcome).toBe('win');
@@ -204,7 +204,7 @@ describe('胜负：拆掉对方核心才算', () => {
       maxHp: 80,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     });
     run(lose, 3);
     expect(lose.outcome).toBe('lose');
@@ -281,7 +281,7 @@ describe('指挥与射程口径', () => {
       maxHp: 26,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     };
     world.units.push(archer);
     const hp0 = archer.hp;
@@ -386,7 +386,7 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
       maxHp: 90,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     });
     const hp0 = tower.hp;
     run(world, 10, () => {
@@ -435,7 +435,7 @@ describe('兵不穿楼', () => {
       maxHp: 80,
       cooldown: 0,
       stun: 0,
-      order: null,
+      order: null, detour: 1 as const,
     });
     const inside = (x: number, z: number): boolean => {
       const col = Math.floor(x);
@@ -499,5 +499,67 @@ describe('弹丸的出处（视图据此决定炮口高度/烟雾位置）', () 
     });
     expect(siegeSeen, '移动火炮应当打出 source=siege 的一发').toBe(true);
     expect(siegeAmmo).toBe('cannon');
+  });
+});
+
+describe('寻路：撞到楼要绕过去（用户：撞到建筑然后不动了）', () => {
+  it('友军的楼挡在必经之路上时，兵会绕过去继续推进', () => {
+    const world = new ArenaWorld({ seed: 61 });
+    // 友军磨坊挡在 (14..16, 9..11)：不是目标（友军），但正好在蓝兵 → 红方核心的直线上
+    world['place']('blue', 'mill', 14, 9, 300);
+    world.units.push({
+      id: 9600,
+      side: 'blue',
+      defId: 'knight',
+      x: 10.5,
+      z: 10.5,
+      hp: 260,
+      maxHp: 260,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    run(world, 12, () => {
+      // 只留这一个兵，排掉双方自动出的兵/敌方干扰
+      world.units = world.units.filter((u) => u.id === 9600);
+    });
+    const me = world.units.find((u) => u.id === 9600)!;
+    expect(me.x, '应该绕过磨坊走到它右边').toBeGreaterThan(17);
+  });
+
+  it('移动火炮也会打兵（用户：为什么不攻击这个军队）', () => {
+    const world = new ArenaWorld({ seed: 62 });
+    world.units.push({
+      id: 9700,
+      side: 'red',
+      defId: 'orc',
+      x: 21,
+      z: 10.5,
+      hp: 260,
+      maxHp: 260,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    world.units.push({
+      id: 9701,
+      side: 'blue',
+      defId: 'mobileCannon',
+      x: 16,
+      z: 10.5,
+      hp: 90,
+      maxHp: 90,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    const orc = world.units[0]!;
+    run(world, 5, () => {
+      world.units = world.units.filter((u) => u.id === 9700 || u.id === 9701);
+    });
+    expect(orc.hp, '红方兽人应该被移动火炮打过').toBeLessThan(orc.maxHp);
   });
 });

@@ -150,7 +150,8 @@ export class ArenaHud {
     el.dataset['affordable'] = String(gold >= card.cost);
     parts.cost.textContent = String(card.cost);
     parts.name.textContent = card.name;
-    parts.kind.textContent = card.kind === 'building' ? '建筑' : card.kind === 'siege' ? '工程' : '军队';
+    // 移动火炮是**军队**（'siege' 只是模型差异），不再单独标'工程'
+    parts.kind.textContent = card.kind === 'building' ? '建筑' : '军队';
   }
 
   /** 卡池变了（配卡组以后）再重建卡面；现在只需重画。 */

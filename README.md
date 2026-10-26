@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 308 条回归
+npm run check        # 类型检查 + 310 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -91,7 +91,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage —— 共 308 条
+                      arena · ruins · cameraId · models · damage —— 共 310 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
@@ -828,7 +828,7 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
 - **四张手牌**：随机发，打出后该槽进 2.2 秒冷却再补一张。配卡组留到以后。
 - **卡池七张**（价格 2026-10-27 按用户要求全部翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
   箭塔 10 · 炮塔 14 · 磨坊 8（每 5 秒 +2 金）· 弓箭手小队 6 · 兽人 8 ·
-  **移动火炮 16**（两个小人推着走，射程 7.2 比塔还远、只拆建筑不打兵）。
+  **移动火炮 16**（两个小人推着走，射程 7.2 比塔还远，拆塔也打兵）。
 - **建筑没有寿命**：不会自己掉血、不会定时消失（这是和老外的皇室战争刻意不同的地方），
   只能被兵拆掉或被塔轰掉。**塔会打塔**：进入射程的敌方建筑也会挨打，不再只打兵。
 - **受伤**：血量每掉一档，外墙就崩掉一片 —— 面片整块脱落、掉到地上躺平，露出里面的木骨架，

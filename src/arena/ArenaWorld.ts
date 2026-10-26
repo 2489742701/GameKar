@@ -83,7 +83,8 @@ export function statsOf(defId: string): UnitStats {
       cooldown: MOBILE.cooldown,
       sight: MOBILE.sight,
       defense: 0,
-      buildingsOnly: true,
+      // 用户 2026-10-27 修正：它也要能打兵（"移动火炮不攻击军队"）
+      buildingsOnly: false,
       siege: true,
     };
   }
@@ -113,6 +114,8 @@ export interface ArenaUnit {
   stun: number;
   /** 玩家下达的移动目标（世界坐标）。null = 自己朝对面核心推进 */
   order: { x: number; z: number } | null;
+  /** 绕障方向：撞墙时先往这一侧偏（±1）。固定住就不会在墙角左右抖 */
+  detour?: 1 | -1;
 }
 
 /** 一发"看得见的"弹丸。伤害已结算，这里只是让玩家看到"从塔顶飞过去"的那一下。 */
@@ -354,8 +357,9 @@ export class ArenaWorld {
         // 以落点为中心散开：一格塞不下三个，错开成 3×3 的小方阵
         const dc = (i % 3) - 1;
         const dr = Math.floor(i / 3) - 1;
+        const uid = this.nextId++;
         this.units.push({
-          id: this.nextId++,
+          id: uid,
           side,
           defId: part.unitId,
           x: col + 0.5 + dc * 0.32,
@@ -365,6 +369,7 @@ export class ArenaWorld {
           cooldown: 0,
           stun: 0,
           order: null,
+          detour: uid % 2 === 0 ? 1 : -1,
         });
         i++;
       }
@@ -545,7 +550,7 @@ export class ArenaWorld {
     buildingsOnly: boolean,
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
-    // 移动火炮只拆建筑：兵从它旁边走过去它也不理
+    // buildingsOnly 现在对移动火炮是 false（它要能打兵）；字段留着给以后"纯攻城"的兵种
     for (const other of buildingsOnly ? [] : this.units) {
       if (other.side === u.side || other.hp <= 0) continue;
       const d = Math.hypot(other.x - u.x, other.z - u.z);
@@ -595,18 +600,47 @@ export class ArenaWorld {
     return false;
   }
 
-  /** 走一步；撞到楼就沿轴滑一格，两边都堵住就原地不动（以前是直接穿过去）。 */
+  /**
+   * 走一步；撞到楼就**换角度绕过去**（±0.55 / ±0.95 / ±1.4 弧度）。
+   *
+   * 上一版是"沿 x 轴、再沿 z 轴滑一格，两边都堵住就原地不动"——正对着一面墙走过去，
+   * 两个轴都被堵住，兵就永远贴在那儿（用户："撞到建筑然后不动了"）。
+   * 现在先试直走，不行就按 `detour` 那一侧斜着绕；哪边通了就记住那边。
+   */
   private stepUnit(u: ArenaUnit, dx: number, dz: number): void {
-    if (!this.blockedBy(u.x + dx, u.z + dz)) {
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) return;
+    const base = Math.atan2(dz, dx);
+    const side = u.detour ?? 1;
+    // 必须包含 ±90°：贴着墙走时任何带前进分量的方向都会撞墙，只有纯侧移能滑出去
+    const turns = [
+      0,
+      0.55 * side,
+      0.95 * side,
+      1.35 * side,
+      1.57 * side,
+      2.1 * side,
+      0.55 * -side,
+      0.95 * -side,
+      1.35 * -side,
+      1.57 * -side,
+      2.1 * -side,
+    ];
+    for (const turn of turns) {
+      const a = base + turn;
+      const nx = u.x + Math.cos(a) * len;
+      const nz = u.z + Math.sin(a) * len;
+      if (this.blockedBy(nx, nz)) continue;
+      if (turn * side < 0) u.detour = side === 1 ? -1 : 1;
+      u.x = nx;
+      u.z = nz;
+      return;
+    }
+    // 四面都堵死、而且自己已经站在楼里：先挪出去，避免永久卡死
+    if (this.blockedBy(u.x, u.z)) {
       u.x += dx;
       u.z += dz;
-      return;
     }
-    if (!this.blockedBy(u.x + dx, u.z)) {
-      u.x += dx;
-      return;
-    }
-    if (!this.blockedBy(u.x, u.z + dz)) u.z += dz;
   }
 
   private hurtUnit(u: ArenaUnit, attack: number): void {
