@@ -27,8 +27,9 @@ export function makeBanner(side: Side, pole = 0.85, width = 0.74, height = 0.78)
   const tint = sideColor(side);
 
   const mast = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05, 0.055, pole, 6),
-    new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 }),
+    new THREE.CylinderGeometry(0.06, 0.065, pole, 6),
+    // 杆用亮木色：深棕色在深色屋顶/黑底上只有 3px 宽，远看等于没有杆，只剩一块布
+    new THREE.MeshStandardMaterial({ color: 0x9a6b3f, flatShading: true, roughness: 0.9 }),
   );
   mast.position.y = pole / 2;
   mast.castShadow = true;

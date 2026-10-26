@@ -262,7 +262,7 @@ export function millModel(accent: number): Node[] {
     box([0.28, 0.46, 0.06], ARENA_PAL.wood, [0, mid(0.06, 0.46), 0.56]),
     cyl([0.64, 0.64, 0.06], ARENA_PAL.roofDark, [0, mid(1.56, 0.06), 0], 10),
     // 顶盖按阵营上色（用户点名："风车顶盖上的颜色是不同的"），做得陡一点才像帽子不像盘子
-    { ...cone(0.54, 0.95, accent, [0, mid(1.62, 0.95), 0], 10), paint: { rough: 0.85 } },
+    { ...cone(0.58, 0.78, accent, [0, mid(1.62, 0.78), 0], 10), paint: { rough: 0.85 } },
     // 轮毂从正面 (+Z) 伸出来，帆板绕着它转
     {
       part: { kind: 'cyl', rTop: 0.07, rBottom: 0.08, height: 0.22, seg: 8 },
@@ -271,13 +271,14 @@ export function millModel(accent: number): Node[] {
       rot: [Math.PI / 2, 0, 0],
     },
     // 十字骨架 + 四片帆。帆都挂在骨架的**同一侧**，转起来才像一片扫过的帆
-    sail(box([0.06, 1.7, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68])),
-    sail(box([1.7, 0.06, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68])),
-    // 四片帆：宽帆盖住骨架，各挂在同一侧 —— 远看是四片大桨，不是一根十字架
-    sail(box([0.3, 0.78, 0.03], 0xf2ead8, [0.26, 1.89, 0.68])),
-    sail(box([0.78, 0.3, 0.03], 0xf2ead8, [0.39, 1.24, 0.68])),
-    sail(box([0.3, 0.78, 0.03], 0xf2ead8, [-0.26, 1.11, 0.68])),
-    sail(box([0.78, 0.3, 0.03], 0xf2ead8, [-0.39, 1.76, 0.68])),
+    // 十字骨架转 45° = 一个 X（正十字看着像十字架，X 才像风车的轮）
+    sail({ ...box([0.06, 1.2, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68]), rot: [0, 0, Math.PI / 4] }),
+    sail({ ...box([0.06, 1.2, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68]), rot: [0, 0, -Math.PI / 4] }),
+    // 四片帆挂在 X 的四条臂上、各偏同一侧：远看是转起来的桨
+    sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [0.106, 1.846, 0.68]), rot: [0, 0, Math.PI / 4] }),
+    sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [-0.106, 1.154, 0.68]), rot: [0, 0, Math.PI / 4] }),
+    sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [-0.346, 1.606, 0.68]), rot: [0, 0, -Math.PI / 4] }),
+    sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [0.346, 1.394, 0.68]), rot: [0, 0, -Math.PI / 4] }),
   ];
 }
 
@@ -317,5 +318,5 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   barracks: { x: 1.6, z: 0, base: 2.95, pole: 0.9 },
   arrowTower: { x: 1.1, z: 1.1, base: 4.75, pole: 0.85 },
   cannonTower: { x: 1.45, z: 1.45, base: 0.12, pole: 2.1 },
-  mill: { x: 0, z: 0, base: 5.6, pole: 0.9 },
+  mill: { x: 0, z: 0, base: 5.25, pole: 0.9 },
 };
