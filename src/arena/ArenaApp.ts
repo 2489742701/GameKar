@@ -26,7 +26,8 @@ import { ModelLibrary } from '@game/models/registry';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
-import { ARENA_CAMERA, UNIT_HEIGHT } from './config';
+import { ArenaDirector } from './Camera';
+import { ARENA_CAMERA, BUILDING_SCALE, FIELD, UNIT_HEIGHT } from './config';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -76,6 +77,14 @@ export class ArenaApp {
   private readonly unitSprites = new Map<number, UnitSprite>();
   private readonly flagMarks = new Map<number, THREE.Group>();
   private readonly styles = new Map<string, DudeStyle>();
+  /** 会动的零件：磨坊的风车、炮塔的头、塔口的火光 */
+  private readonly parts = new Map<number, { sails?: THREE.Object3D; turret?: THREE.Object3D; flash?: THREE.Sprite }>();
+  /** 在飞的弹丸（视觉件，按 world.shots 同步） */
+  private readonly shotMeshes = new Map<number, THREE.Mesh>();
+  readonly director = new ArenaDirector();
+  private fitZoom = ARENA_CAMERA.tilesAcross;
+  /** 当前这一笔拖动是从场地上开始的吗（真=平移，假=转视角） */
+  private gestureFromField = true;
   private lastFrame: FrameInfo = { delta: 0, time: 0, fps: 60 };
 
   private constructor(opts: ArenaAppOptions, pack: DudePack | null) {
@@ -118,10 +127,35 @@ export class ArenaApp {
       onFrame: (info) => this.draw(info),
     });
 
+    // 手势起点在场地里还是黑区里：决定这次拖动是"平移"还是"转视角"
+    opts.canvas.addEventListener('pointerdown', (e) => {
+      const rect = opts.canvas.getBoundingClientRect();
+      const hit = this.rig.screenToGround(e.clientX - rect.left, e.clientY - rect.top);
+      // 光有"打到地面平面"不够：那条射线在场地外也照样命中（无穷大平面），
+      // 所以还要判格子是否在地图里 —— 否则黑区拖动也会被当成"在田里平移"。
+      const cell = hit ? worldToCell(hit.x, hit.z) : null;
+      this.gestureFromField = cell !== null && inBounds(cell, this.map.size);
+    });
+
     this.input = new PointerInput(opts.canvas, {
-      onPan: (dx, dy) => this.rig.panByPixels(dx, dy),
-      onZoom: (factor, x, y) => this.rig.zoomBy(factor, x, y),
-      onRotate: (deg) => this.rig.rotateBy(deg),
+      onPan: (dx, dy) => {
+        this.director.userTouched();
+        if (this.gestureFromField) {
+          this.rig.panByPixels(dx, dy);
+        } else {
+          // 黑色区域（场地之外）：拖动 = 上下左右转视角
+          this.rig.rotateBy(dx * 0.22);
+          this.rig.setPitch(Math.min(78, Math.max(24, this.rig.pitch - dy * 0.18)));
+        }
+      },
+      onZoom: (factor, x, y) => {
+        this.director.userTouched();
+        this.rig.zoomBy(factor, x, y);
+      },
+      onRotate: (deg) => {
+        this.director.userTouched();
+        this.rig.rotateBy(deg);
+      },
       onTap: (x, y) => this.handleTap(x, y),
       onLongPress: (x, y) => this.handleLongPress(x, y),
       onHover: () => {},
@@ -172,21 +206,30 @@ export class ArenaApp {
     const wantRows = this.map.size.rows + 4;
     const wantCols = this.map.size.cols + 2;
     const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
-    this.rig.zoom = fit;
+    this.fitZoom = fit;
+    // 自动模式下由导演每帧把缩放拉回机位；手动模式直接吃这个值
+    if (!this.director.auto) this.rig.zoom = fit * this.director.current.zoomFactor;
   }
 
   // ---------------------------------------------------------------- 出牌
 
-  /** HUD 点手牌：选中/取消。返回是否真的选中。 */
-  selectCard(slot: number): boolean {
+  /**
+   * HUD 点手牌。返回三态而不是布尔：
+   * "没选中"和"被取消"是两件事，布尔会把"再点一次取消"误报成"选不了"。
+   */
+  selectCard(slot: number): 'selected' | 'deselected' | 'empty' | 'cooldown' | 'poor' {
     const card = this.world.hand[slot];
-    if (!card || this.world.handCooldown[slot]! > 0) {
-      this.opts.onToast?.('这张还在冷却', 'warn');
-      return false;
-    }
+    if (!card) return 'empty';
+    if (this.world.handCooldown[slot]! > 0) return 'cooldown';
+    if (this.world.gold.blue < card.cost) return 'poor';
     this.selectedSlot = this.selectedSlot === slot ? -1 : slot;
     this.selectedBuilding = null;
-    return this.selectedSlot === slot;
+    return this.selectedSlot === slot ? 'selected' : 'deselected';
+  }
+
+  /** 换下一个机位（HUD 按钮/键盘 V 都走这里）。 */
+  nextView(): string {
+    return this.director.next().name;
   }
 
   private handleTap(cssX: number, cssY: number): void {
@@ -254,6 +297,9 @@ export class ArenaApp {
     this.syncBuildings();
     this.syncUnits(info.time, info.delta);
     this.syncFlags();
+    this.syncShots(info.time);
+    this.syncParts(info.time);
+    this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter(), this.focusPoint());
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -261,17 +307,39 @@ export class ArenaApp {
   private syncBuildings(): void {
     for (const b of this.world.buildings.values()) {
       if (this.buildingMeshes.has(b.id)) continue;
-      const model = b.kind === 'core' ? 'hall' : CARD_MODEL[b.kind];
-      const group = this.library.create(model);
+      // 磨坊与炮塔用自己的件：模型库里的那两件是静态合并的，帆和炮管转不起来
+      const custom = b.kind === 'mill' ? makeMill() : b.kind === 'cannonTower' ? makeCannon() : null;
+      const group = custom ? custom.group : this.library.create(b.kind === 'core' ? 'hall' : CARD_MODEL[b.kind]);
+      if (custom) this.parts.set(b.id, { sails: custom.sails, turret: custom.turret });
+      if (b.kind === 'arrowTower' || b.kind === 'cannonTower') {
+        const flash = makeFlashSprite();
+        flash.position.y = b.kind === 'arrowTower' ? 1.6 : 1.05;
+        group.add(flash);
+        this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), flash });
+      }
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
       group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
       this.scene.add(group);
+      group.scale.setScalar(BUILDING_SCALE);
+      // 血条要挂在**抵消缩放**的子组里：直接挂在 group 上会跟着放大 1.75 倍，
+      // 位置被抬到半空、宽度也变成 4.5 格（截图里就是那两条悬空的横线）。
+      const ui = new THREE.Group();
+      ui.scale.setScalar(1 / BUILDING_SCALE);
+      group.add(ui);
+      const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);
+      bar.position.y = barHeightOf(b.kind);
+      ui.add(bar);
+      group.userData['hpBar'] = bar;
+      const cracks = makeCracks(group);
+      group.userData['cracks'] = cracks;
+      for (const crack of cracks) crack.visible = false;
+
       if (b.kind === 'core') {
         // 阵营色环：两颗核心用同一套模型，只靠头顶小水晶分不清，加一圈地环
         const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(Math.max(b.cols, b.rows) * 0.52, 0.09, 6, 24),
+          new THREE.TorusGeometry(Math.max(b.cols, b.rows) * 0.34, 0.06, 6, 24),
           new THREE.MeshStandardMaterial({
             color: sideColor(b.side),
             emissive: sideColor(b.side),
@@ -295,10 +363,6 @@ export class ArenaApp {
         );
         orb.position.y = 3.05;
         group.add(orb);
-        const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side));
-        bar.position.y = 3.85;
-        group.add(bar);
-        group.userData['hpBar'] = bar;
       }
       this.buildingMeshes.set(b.id, group);
       group.userData['side'] = b.side;
@@ -306,8 +370,19 @@ export class ArenaApp {
     for (const [id, group] of this.buildingMeshes) {
       const b = this.world.buildings.get(id);
       if (b) {
+        const frac = b.hp / b.maxHp;
         const bar = group.userData['hpBar'] as THREE.Mesh | undefined;
-        if (bar) updateHpBar(bar, b.hp / b.maxHp);
+        if (bar) {
+          // 满血不挂条；掉血才出现，这样一眼能看出哪栋在挨打
+          bar.visible = frac < 0.999;
+          updateHpBar(bar, frac);
+        }
+        const cracks = group.userData['cracks'] as THREE.Mesh[] | undefined;
+        if (cracks) {
+          cracks[0]!.visible = frac <= 0.66;
+          cracks[1]!.visible = frac <= 0.4;
+          cracks[2]!.visible = frac <= 0.2;
+        }
         continue;
       }
       this.scene.remove(group);
@@ -421,6 +496,72 @@ export class ArenaApp {
     }
   }
 
+  /** 会动的零件：风车一直转；炮塔头朝目标；刚开火的塔口闪一下。 */
+  private syncParts(time: number): void {
+    for (const [id, part] of this.parts) {
+      const b = this.world.buildings.get(id);
+      if (!b) continue;
+      if (part.sails) part.sails.rotation.z = -time * 1.7;
+      if (part.turret) {
+        // 用户明确"不是全自动转向"：只有刚开火那 0.18 秒才摆向目标，平时保持原样
+        if (b.shotsMuzzle > 0) {
+          const want = -b.aim;
+          const cur = part.turret.rotation.y;
+          const delta = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
+          part.turret.rotation.y = cur + delta * Math.min(1, 0.35);
+        }
+      }
+      if (part.flash) part.flash.visible = b.shotsMuzzle > 0;
+    }
+    void time;
+  }
+
+  /** 在飞的弹丸：箭头是细长条，炮弹是小黑球，都朝目标摆正。 */
+  private syncShots(time: number): void {
+    const live = new Set<number>();
+    for (const s of this.world.shots) {
+      live.add(s.id);
+      let mesh = this.shotMeshes.get(s.id);
+      if (!mesh) {
+        mesh = s.ammo === 'cannon' ? makeBall(0.16) : makeBall(0.09);
+        this.scene.add(mesh);
+        this.shotMeshes.set(s.id, mesh);
+      }
+      const k = s.t;
+      const x = s.fromX + (s.toX - s.fromX) * k;
+      const z = s.fromZ + (s.toZ - s.fromZ) * k;
+      // 抛物线：炮弹飞得高一点，箭基本贴平
+      const arc = s.ammo === 'cannon' ? Math.sin(k * Math.PI) * 0.9 : Math.sin(k * Math.PI) * 0.12;
+      mesh.position.set(x, this.map.surfaceY(worldToCell(x, z)) + 1.05 + arc, z);
+      mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
+      mesh.scale.setScalar(s.ammo === 'cannon' ? 1 : 1.6);
+    }
+    for (const [id, mesh] of this.shotMeshes) {
+      if (live.has(id)) continue;
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      this.shotMeshes.delete(id);
+    }
+    void time;
+  }
+
+  /** 场地中心（导演的"回中"目标）。 */
+  private fieldCenter(): { x: number; z: number } {
+    return { x: FIELD.cols / 2, z: FIELD.rows / 2 };
+  }
+
+  /** 战场焦点：所有在场兵的质心；没兵就用场地中心。 */
+  private focusPoint(): { x: number; z: number } | null {
+    if (this.world.units.length === 0) return null;
+    let x = 0;
+    let z = 0;
+    for (const u of this.world.units) {
+      x += u.x;
+      z += u.z;
+    }
+    return { x: x / this.world.units.length, z: z / this.world.units.length };
+  }
+
   get telemetry() {
     return {
       fps: Math.round(this.lastFrame.fps),
@@ -447,8 +588,39 @@ function labelOf(b: ArenaBuilding): string {
   return b.kind === 'core' ? '核心' : b.kind === 'barracks' ? '兵营' : b.kind === 'mill' ? '磨坊' : '防御塔';
 }
 
-function makeHpBar(frac: number, color: number): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(1.6, 0.14);
+/** 血条挂多高：按建筑种类给，别让条埋进屋顶里。 */
+function barHeightOf(kind: string): number {
+  if (kind === 'core') return 3.9;
+  if (kind === 'mill') return 2.5;
+  if (kind === 'arrowTower') return 2.4;
+  if (kind === 'cannonTower') return 1.9;
+  return 2.2; // 兵营
+}
+
+/**
+ * 破损：三道随机角度的深色裂纹，血越少露得越多。
+ * 不用"给模型换材质变暗"那条路 —— 模型库的材质是共享缓存的，改一处会把全场都改暗。
+ */
+function makeCracks(parent: THREE.Object3D): THREE.Mesh[] {
+  const out: THREE.Mesh[] = [];
+  const mat = new THREE.MeshBasicMaterial({ color: 0x1a1410, transparent: true, opacity: 0.85 });
+  const spots: { x: number; y: number; z: number; rot: number; w: number }[] = [
+    { x: -0.22, y: 0.62, z: 0.36, rot: 0.55, w: 0.26 },
+    { x: 0.2, y: 0.9, z: 0.34, rot: -0.85, w: 0.34 },
+    { x: -0.02, y: 1.12, z: 0.32, rot: 1.25, w: 0.22 },
+  ];
+  for (const s of spots) {
+    const crack = new THREE.Mesh(new THREE.PlaneGeometry(s.w, 0.05), mat);
+    crack.position.set(s.x, s.y, s.z);
+    crack.rotation.z = s.rot;
+    parent.add(crack);
+    out.push(crack);
+  }
+  return out;
+}
+
+function makeHpBar(frac: number, color: number, width = 1.6): THREE.Mesh {
+  const geo = new THREE.PlaneGeometry(width, 0.2);
   const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
   const bar = new THREE.Mesh(geo, mat);
   bar.renderOrder = 10;
@@ -466,6 +638,107 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
   bar.scale.x = Math.max(0.02, clamped);
   const base = bar.userData['base'] as number;
   (bar.material as THREE.MeshBasicMaterial).color.setHex(clamped < 0.3 ? 0xff6b6b : base);
+}
+
+/**
+ * 磨坊（会转的）：石塔 + 锥顶 + 四片帆。帆单独成组，绕 z 轴转。
+ * 这里不走模型库 —— 库里那件是静态合并的，帆转不了（用户点名要风车转）。
+ */
+function makeMill(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
+  const group = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({ color: 0xd9cbb0, flatShading: true, roughness: 0.9 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.9 });
+  const wood = new THREE.MeshStandardMaterial({ color: 0xa9762c, flatShading: true, roughness: 0.85 });
+
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.62, 1.25, 8), stone);
+  base.position.y = 0.625;
+  base.castShadow = true;
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.6, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0xa8483c, flatShading: true, roughness: 0.9 }));
+  roof.position.y = 1.5;
+  roof.castShadow = true;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 6), dark);
+  hub.rotation.x = Math.PI / 2;
+  hub.position.set(0, 1.45, 0.5);
+
+  const sails = new THREE.Group();
+  sails.position.set(0, 1.45, 0.62);
+  for (let i = 0; i < 4; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.05, 0.05), wood);
+    blade.position.y = 0.55;
+    blade.castShadow = true;
+    const arm = new THREE.Group();
+    arm.rotation.z = (i * Math.PI) / 2;
+    arm.add(blade);
+    sails.add(arm);
+  }
+  group.add(base, roof, hub, sails);
+  return { group, sails };
+}
+
+/**
+ * 炮塔（会转的）：石座 + 可旋转的炮塔头 + 一根炮管。
+ * 同样不用模型库那份静态件 —— 炮管必须跟着目标转。
+ */
+function makeCannon(): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
+  const group = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({ color: 0x8e93a3, flatShading: true, roughness: 0.95 });
+  const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.72, 0.86), stone);
+  base.position.y = 0.36;
+  base.castShadow = true;
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.14, 0.96), new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true }));
+  deck.position.y = 0.79;
+
+  const turret = new THREE.Group();
+  turret.position.y = 0.92;
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 0.34, 8), iron);
+  head.castShadow = true;
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.72, 8), iron);
+  barrel.rotation.z = -Math.PI / 2; // 炮管朝 +x
+  barrel.position.x = 0.42;
+  barrel.castShadow = true;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.1, 8), stone);
+  collar.rotation.z = -Math.PI / 2;
+  collar.position.x = 0.74;
+  turret.add(head, barrel, collar);
+
+  group.add(base, deck, turret);
+  return { group, turret };
+}
+
+/** 塔口火光：一张很小的贴图精灵，刚开火时亮 0.18 秒。 */
+function makeFlashSprite(): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 16;
+  canvas.height = 16;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#fff2c4';
+    ctx.fillRect(6, 7, 4, 2);
+    ctx.fillRect(7, 6, 2, 4);
+    ctx.fillStyle = '#ffb545';
+    ctx.fillRect(3, 7, 3, 2);
+    ctx.fillRect(10, 7, 3, 2);
+    ctx.fillRect(7, 2, 2, 4);
+    ctx.fillRect(7, 10, 2, 4);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(0.7, 0.7, 1);
+  sprite.visible = false;
+  return sprite;
+}
+
+function makeBall(radius: number): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 6, 4),
+    new THREE.MeshStandardMaterial({ color: 0x1a1d24, flatShading: true, roughness: 0.6 }),
+  );
+  mesh.castShadow = true;
+  return mesh;
 }
 
 function makeFlag(side: Side, selected: boolean): THREE.Group {

@@ -38,7 +38,7 @@ describe('金币：上限 20、按秒回、开局 5', () => {
   it('花出去的钱不会把金库打穿（金不够时出不了牌）', () => {
     const world = new ArenaWorld({ seed: 1 });
     give(world, 'cannonTower'); // 7 费，开局只有 5
-    const res = world.playCard('blue', 0, 7, 20);
+    const res = world.playCard('blue', 0, 6, 12);
     expect(res.ok).toBe(false);
     expect(res.reason).toContain('金币不够');
     expect(world.gold.blue).toBe(ECONOMY.start);
@@ -52,13 +52,13 @@ describe('手牌：4 张、扣费、冷却后补位', () => {
 
     give(world, 'archers'); // 3 费
     const before = world.gold.blue;
-    expect(world.playCard('blue', 0, 7, 20).ok).toBe(true);
+    expect(world.playCard('blue', 0, 6, 7).ok).toBe(true);
     expect(world.gold.blue).toBeCloseTo(before - 3, 5);
     expect(world.hand[0]).toBeNull(); // 空槽 = 正在冷却
     expect(world.handCooldown[0]).toBeGreaterThan(0);
 
     // 冷却期间不许再打这一格
-    expect(world.playCard('blue', 0, 7, 20).ok).toBe(false);
+    expect(world.playCard('blue', 0, 6, 7).ok).toBe(false);
 
     run(world, HAND.refillSeconds + 0.2);
     expect(world.hand[0]).not.toBeNull();
@@ -67,7 +67,7 @@ describe('手牌：4 张、扣费、冷却后补位', () => {
   it('只能放在自己半场：红方半场丢不出去', () => {
     const world = new ArenaWorld({ seed: 3 });
     give(world, 'archers');
-    const res = world.playCard('blue', 0, 7, 2); // 上方 = 红方半场
+    const res = world.playCard('blue', 0, 20, 7); // 右侧 = 红方半场
     expect(res.ok).toBe(false);
     expect(res.reason).toContain('半场');
     expect(world.units.filter((u) => u.side === 'blue')).toHaveLength(0);
@@ -88,7 +88,7 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     const world = new ArenaWorld({ seed: 5 });
     run(world, 2); // 先攒够 6 费（开局只有 5）
     give(world, 'barracks');
-    expect(world.playCard('blue', 0, 5, 18).ok).toBe(true);
+    expect(world.playCard('blue', 0, 5, 10).ok).toBe(true);
     const goldAfterBuild = world.gold.blue;
 
     run(world, BARRACKS.interval + 0.2);
@@ -102,7 +102,7 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     const world = new ArenaWorld({ seed: 5 });
     run(world, 1);
     give(world, 'mill');
-    world.playCard('blue', 0, 2, 22);
+    world.playCard('blue', 0, 6, 11);
     const before = world.gold.blue;
     run(world, ECONOMY.millInterval + 0.1);
     const gained = world.gold.blue - before;
@@ -114,11 +114,16 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     const world = new ArenaWorld({ seed: 5 });
     run(world, 1);
     give(world, 'arrowTower');
-    world.playCard('blue', 0, 2, 22);
+    world.playCard('blue', 0, 6, 11);
     const tower = [...world.buildings.values()].find((b) => b.kind === 'arrowTower')!;
     const hp = tower.hp;
-    run(world, 60);
+    // 这条锁测的是"没有寿命、不会自己掉血"，所以把红方的兵一路清掉：
+    // 被兵拆掉是另一回事（那属于战斗，AI 那边有锁）。不清的话 60 秒里塔会被打没。
+    run(world, 60, () => {
+      world.units = world.units.filter((u) => u.side !== 'red');
+    });
     const still = [...world.buildings.values()].find((b) => b.id === tower.id)!;
+    expect(still).toBeTruthy();
     expect(still.hp).toBe(hp);
   });
 });
@@ -127,17 +132,17 @@ describe('兵：会往前走、会互相打', () => {
   it('场上只有对面核心时，兵会朝它移动', () => {
     const world = new ArenaWorld({ seed: 9 });
     give(world, 'orcs'); // 4 费
-    world.playCard('blue', 0, 7, 20);
+    world.playCard('blue', 0, 6, 7);
     const unit = world.units.find((u) => u.side === 'blue')!;
-    const z0 = unit.z;
+    const x0 = unit.x;
     run(world, 2);
-    expect(unit.z).toBeLessThan(z0); // 蓝方朝上（row 变小）
+    expect(unit.x).toBeGreaterThan(x0); // 横版：蓝方在左，朝右（col 变大）推进
   });
 
   it('两个敌对兵贴在一起会互相掉血', () => {
     const world = new ArenaWorld({ seed: 9 });
     give(world, 'archers');
-    world.playCard('blue', 0, 7, 20);
+    world.playCard('blue', 0, 6, 7);
     const blue = world.units.find((u) => u.side === 'blue')!;
     // 手工摆一个红兵在它旁边（AI 的行为另有测试）
     world.units.push({
@@ -198,7 +203,7 @@ describe('胜负：拆掉对方核心才算', () => {
   it('兵死光不算输：核心还在就继续打', () => {
     const world = new ArenaWorld({ seed: 12 });
     give(world, 'archers');
-    world.playCard('blue', 0, 7, 20);
+    world.playCard('blue', 0, 6, 7);
     run(world, 4);
     expect(world.outcome).toBe('playing');
   });
@@ -224,8 +229,8 @@ describe('场地口径', () => {
     const world = new ArenaWorld({ seed: 15 });
     const blue = world.coreOf('blue')!;
     const red = world.coreOf('red')!;
-    expect(blue.row).toBeGreaterThanOrEqual(FIELD.midRow);
-    expect(red.row).toBeLessThan(FIELD.midRow);
+    expect(blue.col).toBeLessThan(FIELD.midCol);
+    expect(red.col).toBeGreaterThanOrEqual(FIELD.midCol);
     expect(world.cellFree(blue.col, blue.row, blue.cols, blue.rows)).toBe(false); // 自己占着
     expect(blue.hp).toBe(CORE.hp);
   });

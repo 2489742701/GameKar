@@ -15,10 +15,11 @@ export type Side = 'blue' | 'red';
 
 /** 战场：竖屏为主，蓝在南（下方），红在北（上方）。 */
 export const FIELD = {
-  cols: 16,
-  rows: 26,
-  /** 中间这条线两侧各归一方，兵只能放在自己这半场 */
-  midRow: 13,
+  /** 横版：26 列宽、16 行高。左边（小 col）是蓝方，右边是红方 */
+  cols: 26,
+  rows: 16,
+  /** 中间这条线左右各归一方，兵只能放在自己这半场 */
+  midCol: 13,
 };
 
 export const ECONOMY = {
@@ -48,9 +49,9 @@ export const ARENA_CAMERA = {
 };
 
 export const CORE = {
-  /** 双方主城（核心）的格子尺寸与血量 */
-  cols: 2,
-  rows: 2,
+  /** 双方主城（核心）：3×3 占地（用户定的"建筑物默认占 3×3"） */
+  cols: 3,
+  rows: 3,
   hp: 1200,
 };
 
@@ -166,12 +167,19 @@ export const cardById = (id: string): ArenaCard => {
 };
 
 /** 建筑卡 → 占地/血量/行为。表在这里，逻辑层只读。 */
+/**
+ * 占地：**所有建筑一律 3×3**（用户 2026-10-27 定的）。
+ * 视觉上模型只有 1 格大，所以视图层会按 3 格再放大一次（见 ArenaApp 的 BUILDING_SCALE）。
+ */
 export const BUILDING_SPECS = {
-  barracks: { cols: 2, rows: 2, hp: BARRACKS.hp },
-  arrowTower: { cols: 1, rows: 1, hp: TOWER.arrow.hp },
-  cannonTower: { cols: 1, rows: 1, hp: TOWER.cannon.hp },
-  mill: { cols: 1, rows: 1, hp: MILL.hp },
+  barracks: { cols: 3, rows: 3, hp: BARRACKS.hp },
+  arrowTower: { cols: 3, rows: 3, hp: TOWER.arrow.hp },
+  cannonTower: { cols: 3, rows: 3, hp: TOWER.cannon.hp },
+  mill: { cols: 3, rows: 3, hp: MILL.hp },
 } as const;
+
+/** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */
+export const BUILDING_SCALE = 1.75;
 
 export type BuildingKind = keyof typeof BUILDING_SPECS;
 

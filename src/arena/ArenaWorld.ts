@@ -47,6 +47,12 @@ export interface ArenaBuilding {
   fireIn: number;
   /** 兵营的出兵点（旗）。null = 用默认位置 */
   flag: { col: number; row: number } | null;
+  /**
+   * 塔口朝向（弧度，绕 y 轴）与最近一次开火的方向。
+   * 这两个字段**只给视图用**：伤害在开火那一刻就结算了，弹丸纯属装饰。
+   */
+  aim: number;
+  shotsMuzzle: number;
 }
 
 export interface ArenaUnit {
@@ -59,6 +65,19 @@ export interface ArenaUnit {
   maxHp: number;
   cooldown: number;
   stun: number;
+}
+
+/** 一发"看得见的"弹丸。伤害已结算，这里只是让玩家看到"从塔顶飞过去"的那一下。 */
+export interface ArenaShot {
+  id: number;
+  ammo: 'arrow' | 'cannon';
+  fromX: number;
+  fromZ: number;
+  toX: number;
+  toZ: number;
+  /** 0..1 飞行进度 */
+  t: number;
+  seconds: number;
 }
 
 export type Outcome = 'playing' | 'win' | 'lose';
@@ -86,6 +105,8 @@ export class ArenaWorld {
 
   readonly buildings = new Map<number, ArenaBuilding>();
   units: ArenaUnit[] = [];
+  /** 在飞的弹丸（纯视觉，不参与结算） */
+  shots: ArenaShot[] = [];
 
   outcome: Outcome = 'playing';
   elapsed = 0;
@@ -97,8 +118,10 @@ export class ArenaWorld {
     this.seed = options.seed ?? 1;
     this.rng = new Random(this.seed);
 
-    this.place('blue', 'core', Math.floor((FIELD.cols - CORE.cols) / 2), FIELD.rows - CORE.rows - 1, CORE.hp);
-    this.place('red', 'core', Math.floor((FIELD.cols - CORE.cols) / 2), 1, CORE.hp);
+    const midRow = Math.floor((FIELD.rows - CORE.rows) / 2);
+    // 横版：蓝在左端、红在右端，各留一格边
+    this.place('blue', 'core', 1, midRow, CORE.hp);
+    this.place('red', 'core', FIELD.cols - CORE.cols - 1, midRow, CORE.hp);
 
     const fixed = options.hand ?? [];
     for (let i = 0; i < HAND.size; i++) {
@@ -126,9 +149,9 @@ export class ArenaWorld {
     return true;
   }
 
-  /** 己方半场：蓝在下方（row ≥ midRow），红在上方。 */
-  inOwnHalf(side: Side, row: number): boolean {
-    return side === 'blue' ? row >= FIELD.midRow : row < FIELD.midRow;
+  /** 己方半场：蓝在左（col < midCol），红在右。 */
+  inOwnHalf(side: Side, col: number): boolean {
+    return side === 'blue' ? col < FIELD.midCol : col >= FIELD.midCol;
   }
 
   buildingCenter(b: ArenaBuilding): { x: number; z: number } {
@@ -152,6 +175,8 @@ export class ArenaWorld {
       timer: 0,
       fireIn: 0,
       flag: null,
+      aim: side === 'blue' ? Math.PI / 2 : -Math.PI / 2,
+      shotsMuzzle: 0,
     };
     this.buildings.set(b.id, b);
     return b;
@@ -160,9 +185,9 @@ export class ArenaWorld {
   /** 兵营的出兵点：没挪过就用"朝对手那一面"的第一格空地。 */
   spawnCellOf(b: ArenaBuilding): { col: number; row: number } {
     if (b.flag) return b.flag;
-    // 蓝方朝上打，出兵点在自己上沿外侧；红方反过来
-    const row = b.side === 'blue' ? b.row - 1 : b.row + b.rows;
-    const col = b.col + Math.floor(b.cols / 2);
+    // 横版：蓝方朝右打，出兵点在自己右沿外侧；红方反过来
+    const col = b.side === 'blue' ? b.col + b.cols : b.col - 1;
+    const row = b.row + Math.floor(b.rows / 2);
     return {
       col: Math.min(FIELD.cols - 1, Math.max(0, col)),
       row: Math.min(FIELD.rows - 1, Math.max(0, row)),
@@ -191,12 +216,12 @@ export class ArenaWorld {
     if (!card) return { ok: false, reason: '这格是空的' };
     if (this.handCooldown[slot]! > 0) return { ok: false, reason: '这张还在冷却' };
     if (this.gold[side] < card.cost) return { ok: false, reason: `金币不够（要 ${card.cost}）` };
-    if (!this.inOwnHalf(side, row)) return { ok: false, reason: '只能放在自己半场' };
+    if (!this.inOwnHalf(side, col)) return { ok: false, reason: '只能放在自己半场' };
 
-    if (card.kind === 'building') {
-      const spec = BUILDING_SPECS[card.building!];
-      if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return { ok: false, reason: '出界了' };
-      if (!this.cellFree(col, row, spec.cols, spec.rows)) return { ok: false, reason: '这格被占了' };
+    const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
+    if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return { ok: false, reason: '出界了' };
+    if (card.kind === 'building' && !this.cellFree(col, row, spec.cols, spec.rows)) {
+      return { ok: false, reason: '这格被占了' };
     }
 
     this.execute(side, card, col, row);
@@ -269,6 +294,7 @@ export class ArenaWorld {
     }
 
     this.tickBuildings(dt);
+    this.tickShots(dt);
     this.tickUnits(dt);
     this.tickAi(dt);
     this.checkOutcome();
@@ -302,6 +328,18 @@ export class ArenaWorld {
       const target = this.nearestEnemyUnit(b.side, c.x, c.z, spec.range);
       if (!target) continue;
       b.fireIn = spec.interval;
+      b.aim = Math.atan2(target.z - c.z, target.x - c.x);
+      b.shotsMuzzle = 0.18;
+      this.shots.push({
+        id: this.nextId++,
+        ammo: b.kind === 'arrowTower' ? 'arrow' : 'cannon',
+        fromX: c.x,
+        fromZ: c.z,
+        toX: target.x,
+        toZ: target.z,
+        t: 0,
+        seconds: b.kind === 'arrowTower' ? 0.22 : 0.45,
+      });
       const dmg = spec.damage;
       if ('splash' in spec && spec.splash) {
         for (const u of this.units) {
@@ -313,6 +351,15 @@ export class ArenaWorld {
       }
     }
     this.units = this.units.filter((u) => u.hp > 0);
+  }
+
+  /** 弹丸只是视觉：到点就删，不影响任何判据。 */
+  private tickShots(dt: number): void {
+    for (const s of this.shots) s.t = Math.min(1, s.t + dt / s.seconds);
+    this.shots = this.shots.filter((s) => s.t < 1);
+    for (const b of this.buildings.values()) {
+      if (b.shotsMuzzle > 0) b.shotsMuzzle = Math.max(0, b.shotsMuzzle - dt);
+    }
   }
 
   private tickUnits(dt: number): void {
@@ -426,8 +473,12 @@ export class ArenaWorld {
   private randomSpot(side: Side, card: ArenaCard): { col: number; row: number } | null {
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
     for (let tries = 0; tries < 24; tries++) {
-      const row = side === 'red' ? this.rng.int(FIELD.midRow - 6, FIELD.midRow) : this.rng.int(FIELD.midRow, FIELD.rows - 2);
-      const col = this.rng.int(0, FIELD.cols - spec.cols);
+      // 横版：红方落在右半边，蓝方（备用）落在左半边
+      const col =
+        side === 'red'
+          ? this.rng.int(FIELD.midCol, FIELD.cols - spec.cols - 1)
+          : this.rng.int(1, FIELD.midCol - spec.cols);
+      const row = this.rng.int(1, FIELD.rows - spec.rows - 1);
       if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) continue;
       if (!this.cellIsFree(col, row, spec.cols, spec.rows)) continue;
       return { col, row };

@@ -37,16 +37,33 @@ const app = await ArenaApp.boot({
   canvas,
   seed: seedFromUrl(20261027),
   onToast: (text, tone) => hud?.say(text, tone ?? 'ok'),
-  onState: () => hud?.refresh(),
+  onState: () => {
+    hud?.refresh();
+    hud?.setViewStatus(app.director.status);
+  },
 });
 
 hud = new ArenaHud(container, app, {
   onSelectCard: (slot) => {
-    const picked = app.selectCard(slot);
-    if (!picked) hud?.say('先攒点金，或者换一张', 'warn');
+    const result = app.selectCard(slot);
+    if (result === 'empty') hud?.say('这一格在补牌，等一下', 'warn');
+    else if (result === 'cooldown') hud?.say('这张还在冷却', 'warn');
+    else if (result === 'poor') {
+      const card = app.world.hand[slot];
+      hud?.say(`金币不够（要 ${card?.cost ?? 0}）`, 'warn');
+    }
     hud?.setHand();
   },
+  onCycleView: () => hud?.setViewStatus(app.nextView()),
   onRestart: () => location.reload(),
+});
+
+hud.setViewStatus(app.director.status);
+
+// 键盘：V 换视角（和 HUD 上那颗按钮走同一条路）
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.key === 'v' || e.key === 'V') hud?.setViewStatus(app.nextView());
 });
 
 declare global {

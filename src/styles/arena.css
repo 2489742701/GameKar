@@ -187,14 +187,26 @@
   color: var(--text-dim);
 }
 
-.ahud__hint {
-  align-self: center;
-  margin-top: 6px;
-  padding: 4px 8px;
-  border-radius: 7px;
+.ahud__view {
+  align-self: flex-end;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--wood-1);
+  font: inherit;
   font-size: var(--fs-xs);
-  color: var(--text-dim);
-  background: rgba(0, 0, 0, 0.35);
+  letter-spacing: 0.06em;
+  color: var(--text);
+  cursor: pointer;
+  background-color: var(--wood-4);
+  background-image: var(--tex-wood), linear-gradient(180deg, var(--wood-6), var(--wood-2));
+  background-size: var(--tex-wood-tile), cover;
+  image-rendering: pixelated;
+  box-shadow: inset 0 1px 0 var(--panel-edge), 0 2px 0 rgba(0, 0, 0, 0.45);
+}
+
+.ahud__view:active {
+  transform: translateY(1px);
 }
 
 .ahud__toast {

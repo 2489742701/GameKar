@@ -22,6 +22,7 @@ const make = <K extends keyof HTMLElementTagNameMap>(
 export interface ArenaHudOptions {
   onSelectCard: (slot: number) => void;
   onRestart: () => void;
+  onCycleView: () => void;
 }
 
 export class ArenaHud {
@@ -32,8 +33,10 @@ export class ArenaHud {
   private readonly blueText = make('span', 'ahud__hp__num', '');
   private readonly redText = make('span', 'ahud__hp__num', '');
   private readonly cards: HTMLButtonElement[] = [];
+  private readonly cardParts: { cost: HTMLElement; name: HTMLElement; kind: HTMLElement }[] = [];
   private readonly toast = make('div', 'ahud__toast');
   private readonly end = make('div', 'ahud__end');
+  private viewBtn!: HTMLButtonElement;
   private toastTimer: number | null = null;
 
   constructor(
@@ -56,16 +59,24 @@ export class ArenaHud {
     const hand = make('div', 'ahud__hand');
     for (let i = 0; i < HAND.size; i++) {
       const card = make('button', 'ahud__card');
+      // 三块子节点**只建一次**：以前在 20Hz 的刷新里 replaceChildren，
+      // 手指按下去的那一帧正好被换掉，点击就丢了 —— 这就是"有时候点不到"。
+      const cost = make('span', 'ahud__card__cost', '');
+      const name = make('span', 'ahud__card__name', '');
+      const kind = make('span', 'ahud__card__kind', '');
+      card.append(cost, name, kind);
       card.addEventListener('click', () => this.opts.onSelectCard(i));
       this.cards.push(card);
+      this.cardParts.push({ cost, name, kind });
       hand.append(card);
     }
 
-    const hint = make('div', 'ahud__hint', '点一张牌 → 点自己半场放下去。点自家兵营 → 再点地面挪出兵旗。');
-    // 手牌与提示必须**成组贴在底部**：之前三块直接摊在 flex 列里，space-between 把它们
-    // 分别顶到上/中/下，手牌就飘到屏幕正中间了（截图里一眼能看出来）
+    // 手牌成组贴底（之前三块直接摊在 flex 列里，space-between 把手牌顶到了屏幕正中）
     const bottom = make('div', 'ahud__bottom');
-    bottom.append(hand, hint);
+    const view = make('button', 'ahud__view', '视角 · 全景');
+    this.viewBtn = view;
+    view.addEventListener('click', () => this.opts.onCycleView());
+    bottom.append(view, hand);
     this.el.append(top, bottom, this.toast, this.end);
     host.append(this.el);
     this.end.hidden = true;
@@ -115,34 +126,42 @@ export class ArenaHud {
     }
   }
 
+  /**
+   * 只改文字与 data 属性 —— 不重建节点、也不 disabled。
+   * disabled 会让点击彻底没反应，玩家只会觉得"点不到"；
+   * 这里让点击永远有回应（打不了就说明原因）。
+   */
   private paintCard(slot: number): void {
     const el = this.cards[slot]!;
+    const parts = this.cardParts[slot]!;
     const card = this.app.world.hand[slot];
     const cd = this.app.world.handCooldown[slot]!;
     const gold = this.app.world.gold.blue;
     el.dataset['selected'] = String(this.app.selectedSlot === slot);
     if (!card) {
       el.dataset['empty'] = '1';
-      el.replaceChildren(
-        make('span', 'ahud__card__name', '补牌中'),
-        make('span', 'ahud__card__cd', `${cd.toFixed(1)}s`),
-      );
-      el.disabled = true;
+      el.dataset['affordable'] = 'false';
+      parts.cost.textContent = '—';
+      parts.name.textContent = '补牌中';
+      parts.kind.textContent = `${cd.toFixed(1)}s`;
       return;
     }
     el.dataset['empty'] = '0';
     el.dataset['affordable'] = String(gold >= card.cost);
-    el.disabled = cd > 0 || gold < card.cost;
-    el.replaceChildren(
-      make('span', 'ahud__card__cost', String(card.cost)),
-      make('span', 'ahud__card__name', card.name),
-      make('span', 'ahud__card__kind', card.kind === 'building' ? '建筑' : '军队'),
-    );
+    parts.cost.textContent = String(card.cost);
+    parts.name.textContent = card.name;
+    parts.kind.textContent = card.kind === 'building' ? '建筑' : '军队';
   }
 
   /** 卡池变了（配卡组以后）再重建卡面；现在只需重画。 */
   setHand(): void {
     this.refresh();
+  }
+
+  /** 视角按钮上的那行字（自动/手动 + 机位名）。 */
+  setViewStatus(status: string): void {
+    const text = `视角 · ${status}`;
+    if (this.viewBtn && this.viewBtn.textContent !== text) this.viewBtn.textContent = text;
   }
 
   /** 给外部（比如实机探针）读一眼当前卡面文案。 */
