@@ -106,7 +106,7 @@ export class ArenaApp {
     { sails?: { group: THREE.Object3D; speed: number }[]; turret?: THREE.Object3D; banner?: Banner }
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
-  private readonly shotMeshes = new Map<number, THREE.Mesh>();
+  private readonly shotMeshes = new Map<number, THREE.Object3D>();
   readonly director = new ArenaDirector();
   private fitZoom = ARENA_CAMERA.tilesAcross;
   /** 当前这一笔拖动是从场地上开始的吗（真=平移，假=转视角） */
@@ -147,23 +147,12 @@ export class ArenaApp {
     apron.position.set(this.map.size.cols / 2, -0.06, this.map.size.rows / 2);
     apron.receiveShadow = true;
 
-    // 中场黄区：一条**有宽度**的禁建带（3 列），不是一根线。
-    // 抬 0.02 是为了不和地皮共面打架（z-fighting 会闪成锯齿）。
-    const bandW = NO_BUILD.halfWidth * 2 + 1;
-    const divider = new THREE.Mesh(
-      new THREE.PlaneGeometry(bandW, this.map.size.rows),
-      new THREE.MeshStandardMaterial({
-        color: 0xd8b45c,
-        emissive: 0xa9762c,
-        emissiveIntensity: 0.22,
-        roughness: 0.8,
-        transparent: true,
-        opacity: 0.62,
-      }),
-    );
-    divider.rotation.x = -Math.PI / 2;
-    divider.position.set(FIELD.midCol + 0.0, 0.52, this.map.size.rows / 2);
-    // 两条边线：黄区两侧各一道亮边，边界一眼看得准
+    // 中场禁建带：**地块本身**染成黄沙（不再盖一层半透明贴纸），两侧各一道亮边。
+    const bandCells: { col: number; row: number }[] = [];
+    for (let col = FIELD.midCol - NO_BUILD.halfWidth; col <= FIELD.midCol + NO_BUILD.halfWidth; col++) {
+      for (let row = 0; row < this.map.size.rows; row++) bandCells.push({ col, row });
+    }
+    this.ground.tintCells(bandCells, NO_BUILD.color);
     const edgeMat = new THREE.MeshStandardMaterial({
       color: 0xf0d08a,
       emissive: 0xc8a24c,
@@ -175,7 +164,7 @@ export class ArenaApp {
     edgeL.position.set(FIELD.midCol - NO_BUILD.halfWidth - 0.5, 0.53, this.map.size.rows / 2);
     const edgeR = edgeL.clone();
     edgeR.position.x = FIELD.midCol + NO_BUILD.halfWidth + 0.5;
-    this.scene.add(apron, divider, edgeL, edgeR, this.ground.group);
+    this.scene.add(apron, edgeL, edgeR, this.ground.group);
     this.gallery = pack ? new DudeGallery(pack) : null;
 
     this.loop = new GameLoop({
@@ -537,7 +526,7 @@ export class ArenaApp {
       this.scene.add(cone);
       return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
     }
-    if (statsOf(u.defId).siege) return this.makeSiege(u);
+    if (statsOf(u.defId).siege) return u.defId === 'ballista' ? this.makeBallista(u) : this.makeSiege(u);
     const def = unitDef(u.defId);
     const style = this.styleOf(u.side, def.id, def);
     const { atlas, texture } = this.gallery.acquire(style, def.anims);
@@ -605,6 +594,85 @@ export class ArenaApp {
       group.add(dude.mesh);
       pushers.push(dude);
     }
+
+    group.position.set(u.x, this.groundY(u.x, u.z), u.z);
+    this.scene.add(group);
+    return {
+      obj: group,
+      dude: null,
+      pushers,
+      siege: true,
+      face: u.side === 'blue' ? 0 : Math.PI,
+      x: u.x,
+      z: u.z,
+      cooldown: u.cooldown,
+      attackLeft: 0,
+      runHold: 0,
+    };
+  }
+
+  /**
+   * 移动弩箭：一辆轻车 + 一张横着的大弩 + 一个推车的人。
+   * 剪影要和移动火炮分开：火炮是粗管子朝前，弩是**两片斜着的弩臂 + 一根细弩箭**。
+   */
+  private makeBallista(u: ArenaUnit): UnitSprite {
+    const group = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 });
+    const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
+    const cord = new THREE.MeshStandardMaterial({ color: 0xd9cbb0, flatShading: true, roughness: 0.8 });
+
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.16, 0.7), wood);
+    bed.position.y = 0.4;
+    bed.castShadow = true;
+    group.add(bed);
+    for (const sx of [-0.36, 0.36]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.12, 10), iron);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(sx, 0.24, 0);
+      wheel.castShadow = true;
+      group.add(wheel);
+    }
+    // 弩身（沿 +x 指向前方）
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.1, 0.13), wood);
+    stock.position.set(0.1, 0.64, 0);
+    stock.castShadow = true;
+    group.add(stock);
+    // 两片弩臂：从弩头往两侧斜后方张开
+    for (const sz of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.07), wood);
+      arm.position.set(0.32, 0.66, sz * 0.24);
+      arm.rotation.y = sz * 0.7;
+      arm.castShadow = true;
+      group.add(arm);
+    }
+    // 弦 + 待发的弩箭
+    const string = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.62), cord);
+    string.position.set(0.05, 0.66, 0);
+    const bolt = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.03, 0.03), iron);
+    bolt.position.set(0.3, 0.7, 0);
+    group.add(string, bolt);
+    // 阵营色小旗
+    const mark = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.26, 0.1),
+      new THREE.MeshStandardMaterial({
+        color: sideColor(u.side),
+        emissive: sideColor(u.side),
+        emissiveIntensity: 0.5,
+        flatShading: true,
+      }),
+    );
+    mark.position.set(-0.55, 0.78, 0);
+    group.add(mark);
+
+    // 一个推车的人（弩车比火炮轻）
+    const pushers: DudeSprite[] = [];
+    const pusherDef = unitDef('worker');
+    const style = this.styleOf(u.side, pusherDef.id, pusherDef);
+    const { atlas, texture } = this.gallery!.acquire(style, pusherDef.anims);
+    const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: 1.5 });
+    dude.mesh.position.set(-0.92, 0.75, 0);
+    group.add(dude.mesh);
+    pushers.push(dude);
 
     group.position.set(u.x, this.groundY(u.x, u.z), u.z);
     this.scene.add(group);
@@ -726,7 +794,7 @@ export class ArenaApp {
             ? makeBall(0.16)
             : s.ammo === 'magic'
               ? makeBall(0.11, 0x74e0ff, 0x74e0ff)
-              : makeBall(0.09);
+              : makeArrow();
         this.scene.add(mesh);
         this.shotMeshes.set(s.id, mesh);
         const ground = this.map.surfaceY(worldToCell(s.fromX, s.fromZ));
@@ -743,7 +811,15 @@ export class ArenaApp {
         const ux = dx / len;
         const uz = dz / len;
         const ahead =
-          s.source === 'cannonTower' ? 1.0 : s.source === 'siege' ? 0.55 : s.source === 'unit' ? 0.15 : 0;
+          s.source === 'cannonTower'
+            ? 1.0
+            : s.source === 'siege'
+              ? 0.55
+              : s.source === 'ballista'
+                ? 0.5
+                : s.source === 'unit'
+                  ? 0.15
+                  : 0;
         this.fx.muzzle(s.fromX + ux * ahead, s.fromZ + uz * ahead, fromY, s.ammo, ux, uz);
       }
       const k = s.t;
@@ -754,15 +830,25 @@ export class ArenaApp {
       // 抛物线：炮弹飞得高一点，法术弹居中，箭基本走直线
       const arc = Math.sin(k * Math.PI) * (s.ammo === 'cannon' ? 0.9 : s.ammo === 'magic' ? 0.35 : 0.12);
       mesh.position.set(x, fromY + (toY - fromY) * k + arc, z);
-      mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
-      mesh.scale.setScalar(s.ammo === 'arrow' ? 1.6 : 1);
+      if (s.ammo === 'arrow') {
+        // 箭头模型沿 +Z 造：转到"从哪来 → 往哪去"
+        mesh.rotation.y = Math.atan2(s.toX - s.fromX, s.toZ - s.fromZ);
+        mesh.scale.setScalar(s.source === 'ballista' ? 2.2 : 1.6);
+      } else {
+        mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
+        mesh.scale.setScalar(1);
+      }
     }
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
       const hit = mesh.userData['hit'] as { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' } | undefined;
       if (hit) this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
       this.scene.remove(mesh);
-      mesh.geometry.dispose();
+      // 弹丸可能是 Group（箭）：逐个几何体释放
+      mesh.traverse((o) => {
+        const part = o as THREE.Mesh;
+        if (part.geometry) part.geometry.dispose();
+      });
       this.shotMeshes.delete(id);
     }
     void time;
@@ -888,7 +974,23 @@ function makeNeedLabel(): THREE.Sprite {
 }
 
 /** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
-const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95, unit: 1.1 } as const;
+const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95, ballista: 1.15, unit: 1.1 } as const;
+
+/** 一支箭：杆 + 三角箭头 + 两片尾羽，沿 +Z 指向前方。 */
+function makeArrow(): THREE.Group {
+  const group = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5f2c, flatShading: true, roughness: 0.9 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0xd9d9e3, flatShading: true, roughness: 0.4 });
+  const fletch = new THREE.MeshStandardMaterial({ color: 0xe6d8b4, flatShading: true, roughness: 0.9 });
+  const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.5), wood);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.14, 4), steel);
+  head.rotation.x = Math.PI / 2;
+  head.position.z = 0.31;
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.14), fletch);
+  tail.position.z = -0.22;
+  group.add(shaft, head, tail);
+  return group;
+}
 
 function makeBall(radius: number, color = 0x1a1d24, emissive = 0x000000): THREE.Mesh {
   const mesh = new THREE.Mesh(

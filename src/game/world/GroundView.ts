@@ -117,6 +117,29 @@ export class GroundView {
     return new THREE.Color(BASE_COLOR.get(type)!).offsetHSL(0, jitter * 0.06, jitter * 0.09);
   }
 
+  /**
+   * 把一组格子直接染成某个颜色（中场禁建带的地块用）。
+   * 抖动公式和 `terrainColor` 同一份，否则相邻两种地纹会明显分成两层。
+   */
+  tintCells(cells: { col: number; row: number }[], hex: number): void {
+    const stride = this.map.size.cols;
+    const base = new THREE.Color(hex);
+    const touched = new Set<THREE.InstancedMesh>();
+    for (const cell of cells) {
+      const key = cell.row * stride + cell.col;
+      const entry = this.index.get(key);
+      if (!entry) continue;
+      const jitter = fbm(cell.col * 3.1, cell.row * 2.7, { seed: 4242, frequency: 1, octaves: 1 }) - 0.5;
+      const color = base.clone().offsetHSL(0, jitter * 0.05, jitter * 0.08);
+      this.baseColor.set(key, color);
+      entry.mesh.setColorAt(entry.slot, color);
+      touched.add(entry.mesh);
+    }
+    for (const mesh of touched) {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
   /** 地形变了（晶脉被压成裸土）之后重涂这几格，并更新还原基色。 */
   recolor(cells: { col: number; row: number }[]): void {
     const stride = this.map.size.cols;

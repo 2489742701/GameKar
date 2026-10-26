@@ -81,6 +81,7 @@ describe('新增兵种（骑士/法师/机器巨人）', () => {
     expect(unitDef('mage').role).toBe('ranged');
     expect(unitDef('mech').heightTiles).toBeGreaterThan(1.45);
     expect(unitDef('mech').hp).toBeGreaterThan(unitDef('orc').hp);
+    expect(unitDef('ballista').projectile).toBe('arrow');
   });
 
   it('民居卡指向真的建筑规格', () => {
@@ -90,7 +91,7 @@ describe('新增兵种（骑士/法师/机器巨人）', () => {
   });
 
   it('卡池里的骑士/法师/机器人都指向真的兵种', () => {
-    const arenaCards = ['knights', 'mages', 'mech'];
+    const arenaCards = ['knights', 'mages', 'mech', 'ballista'];
     for (const id of arenaCards) {
       const card = ARENA_CARDS.find((c) => c.id === id);
       expect(card, `卡 ${id}`).toBeTruthy();

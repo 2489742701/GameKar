@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld } from '@arena/ArenaWorld';
-import { BARRACKS, CARDS, CORE, ECONOMY, FIELD, HAND, RUIN } from '@arena/config';
+import { BARRACKS, CARDS, CORE, ECONOMY, FIELD, HAND, NO_BUILD, RUIN } from '@arena/config';
 
 function run(world: ArenaWorld, seconds: number, each?: (t: number) => void): void {
   const steps = Math.round(seconds / 0.05);
@@ -324,19 +324,19 @@ describe('中场黄区（禁建带）', () => {
     const world = new ArenaWorld({ seed: 41 });
     world.gold.blue = 20;
     give(world, 'mill');
-    // midCol 在带子正中：3 列宽的楼一定压进去
-    const inside = world.playCard('blue', 0, FIELD.midCol - 1, 8);
+    // midCol 在带子正中：3 列宽的楼放在带子最左一列，一定压进去
+    const inside = world.playCard('blue', 0, FIELD.midCol - NO_BUILD.halfWidth, 8);
     expect(inside.ok).toBe(false);
     expect(inside.reason).toContain('黄区');
 
     give(world, 'archers');
-    const squadIn = world.playCard('blue', 0, FIELD.midCol - 1, 8);
+    const squadIn = world.playCard('blue', 0, FIELD.midCol - NO_BUILD.halfWidth, 8);
     expect(squadIn.ok).toBe(false);
     expect(squadIn.reason).toContain('黄区');
 
     // 带子左沿再往外一格 ⇒ 合法
     give(world, 'mill');
-    const outside = world.playCard('blue', 0, FIELD.midCol - 1 - 3, 8);
+    const outside = world.playCard('blue', 0, FIELD.midCol - NO_BUILD.halfWidth - 3, 8);
     expect(outside.ok).toBe(true);
   });
 
@@ -344,7 +344,7 @@ describe('中场黄区（禁建带）', () => {
     const world = new ArenaWorld({ seed: 42 });
     run(world, 60);
     const band = [...world.buildings.values()].filter(
-      (b) => b.col + b.cols > FIELD.midCol - 1 && b.col < FIELD.midCol + 2,
+      (b) => b.col + b.cols > FIELD.midCol - NO_BUILD.halfWidth && b.col < FIELD.midCol + NO_BUILD.halfWidth + 1,
     );
     expect(band).toHaveLength(0);
   });
@@ -356,9 +356,9 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
     world.gold.blue = 20;
     world.gold.red = 20;
     give(world, 'arrowTower');
-    expect(world.playCard('blue', 0, 17, 10).ok).toBe(true);
+    expect(world.playCard('blue', 0, 16, 10).ok).toBe(true);
     give(world, 'arrowTower');
-    expect(world.playCard('red', 0, 23, 10).ok).toBe(true);
+    expect(world.playCard('red', 0, 24, 10).ok).toBe(true);
     const [blue, red] = [...world.buildings.values()].filter((b) => b.kind === 'arrowTower');
     const hpB = blue!.hp;
     const hpR = red!.hp;
@@ -656,5 +656,89 @@ describe('兵营后勤：1 座磨坊 + 1 座民居（用户 2026-10-27）', () =
     world['place']('blue', 'mill', 17, 10, 300);
     world['place']('blue', 'house', 17, 4, 220);
     expect(world.supportedBarracks('blue')).toBe(2);
+  });
+});
+
+
+describe('移动弩箭：只打兵，不拆楼（用户 2026-10-27）', () => {
+  it('敌楼在射程内也不打；敌兵进射程就挨打', () => {
+    const world = new ArenaWorld({ seed: 64 });
+    // 红方核心在 (38..40)；弩箭站到它射程边上：只打兵 ⇒ 核心一滴血不掉
+    world.units.push({
+      id: 9900,
+      side: 'blue',
+      defId: 'ballista',
+      x: 35,
+      z: 10.5,
+      hp: 70,
+      maxHp: 70,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    const core = [...world.buildings.values()].find((b) => b.kind === 'core' && b.side === 'red')!;
+    const hp0 = core.hp;
+    run(world, 2.5, () => {
+      world.units = world.units.filter((u) => u.id === 9900);
+    });
+    expect(core.hp, '弩箭不应该拆楼').toBe(hp0);
+
+    // 放一个红兵到弩箭前方：它应该掉血
+    world.units.push({
+      id: 9901,
+      side: 'red',
+      defId: 'orc',
+      x: 36,
+      z: 14.5,
+      hp: 80,
+      maxHp: 80,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    let hurt = false;
+    run(world, 3, () => {
+      const orc = world.units.find((u) => u.id === 9901);
+      if (orc && orc.hp < orc.maxHp) hurt = true;
+    });
+    expect(hurt, '弩箭应该点掉步兵').toBe(true);
+  });
+
+  it('弩箭的弹道是 source=ballista、ammo=arrow', () => {
+    const world = new ArenaWorld({ seed: 65 });
+    world.units.push({
+      id: 9910,
+      side: 'blue',
+      defId: 'ballista',
+      x: 20,
+      z: 10.5,
+      hp: 70,
+      maxHp: 70,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    world.units.push({
+      id: 9911,
+      side: 'red',
+      defId: 'orc',
+      x: 24,
+      z: 10.5,
+      hp: 80,
+      maxHp: 80,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    let seen = false;
+    run(world, 1.2, () => {
+      world.units = world.units.filter((u) => u.id === 9910 || u.id === 9911);
+      if (world.shots.some((s) => s.source === 'ballista' && s.ammo === 'arrow')) seen = true;
+    });
+    expect(seen).toBe(true);
   });
 });

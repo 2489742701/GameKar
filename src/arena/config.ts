@@ -26,11 +26,11 @@ export const FIELD = {
 };
 
 /**
- * 中间的**禁建带**（用户 2026-10-27：中间那条黄区要有宽度、再长一点）。
- * 以 midCol 为中心左右各半宽 1 格 ⇒ 3 列宽的一条"无人区"：楼和兵都放不进去，
- * 两边的射程够不着对面，谁先越过谁挨打。
+ * 中间的**禁建带**（用户 2026-10-27 第二次要求加长：从 3 列加到 5 列）。
+ * 以 midCol 为中心左右各 2 格 ⇒ 5 列宽的"无人区"：楼和兵都放不进去，
+ * 两边的射程够不着对面，谁先越过谁挨打。地块本身染成黄沙色（见 ArenaApp）。
  */
-export const NO_BUILD = { halfWidth: 1 };
+export const NO_BUILD = { halfWidth: 2, color: 0xd8b45c };
 
 export const ECONOMY = {
   /** 金币上限：用户点名 20 点 */
@@ -79,9 +79,9 @@ export const BARRACKS = {
 
 export const TOWER = {
   /** 箭塔 */
-  arrow: { hp: 520, damage: 9, range: 5.5, interval: 0.75, ammo: 'arrow' as const },
+  arrow: { hp: 520, damage: 9, range: 6.8, interval: 0.75, ammo: 'arrow' as const },
   /** 炮塔：慢、重、带溅射 */
-  cannon: { hp: 640, damage: 24, range: 4.4, interval: 1.7, ammo: 'cannon' as const, splash: 1.3 },
+  cannon: { hp: 640, damage: 24, range: 5.6, interval: 1.7, ammo: 'cannon' as const, splash: 1.3 },
 };
 
 export const MILL = { hp: 300 };
@@ -142,7 +142,7 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'arrowTower',
     name: '箭塔',
-    blurb: '自动打靠近的敌人，射程 5.5 格。便宜的防守。',
+    blurb: '自动打靠近的敌人，射程 6.8 格。便宜的防守。',
     kind: 'building',
     cost: 10,
     building: 'arrowTower',
@@ -178,6 +178,14 @@ export const CARDS: ArenaCard[] = [
     kind: 'siege',
     cost: 16,
     squad: [{ unitId: 'mobileCannon', count: 1 }],
+  },
+  {
+    id: 'ballista',
+    name: '移动弩箭',
+    blurb: '一台大弩车，专点步兵：射程 6 格、一发重伤，但拆不了楼。',
+    kind: 'siege',
+    cost: 12,
+    squad: [{ unitId: 'ballista', count: 1 }],
   },
   {
     id: 'house',
@@ -273,10 +281,24 @@ export const MOBILE = {
   range: 7.2,
   damage: 26,
   cooldown: 2.8,
-  /** 索敌半径 = 射程（它只关心看得见的建筑） */
+  /** 索敌半径（兵和楼都看） */
   sight: 8,
   /** 两个推车的人：位置相对车尾，纯视觉 */
   pushers: 2,
+};
+
+/**
+ * 移动弩箭（用户 2026-10-27）：和移动火炮**反过来**的攻城/反步兵单位 ——
+ * 射程 6 格、一发 26 伤，专门点步兵；但它**只打兵不拆楼**。
+ */
+export const BALLISTA = {
+  hp: 70,
+  speed: 0.55,
+  range: 6,
+  damage: 26,
+  cooldown: 2.2,
+  sight: 6.5,
+  pushers: 1,
 };
 
 /** 废墟：被拆掉的建筑在原地留一堆碎石，过这么久自己塌平。 */

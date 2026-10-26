@@ -14,6 +14,7 @@ import { Random } from '@engine/math/Random';
 import { damageOf, unitDef } from '@game/data/units';
 import {
   AI,
+  BALLISTA,
   BARRACKS,
   BUILDING_SPECS,
   CARDS,
@@ -68,7 +69,9 @@ export interface UnitStats {
   defense: number;
   /** 只打建筑（移动火炮就是这么白嫖塔的） */
   buildingsOnly: boolean;
-  /** 画成"推车 + 两个小人" */
+  /** 只打兵（移动弩箭：专克步兵，拆不了楼） */
+  unitsOnly: boolean;
+  /** 画成"推车 + 小人" */
   siege: boolean;
 }
 
@@ -85,6 +88,21 @@ export function statsOf(defId: string): UnitStats {
       defense: 0,
       // 用户 2026-10-27 修正：它也要能打兵（"移动火炮不攻击军队"）
       buildingsOnly: false,
+      unitsOnly: false,
+      siege: true,
+    };
+  }
+  if (defId === 'ballista') {
+    return {
+      hp: BALLISTA.hp,
+      speed: BALLISTA.speed,
+      range: BALLISTA.range,
+      damage: BALLISTA.damage,
+      cooldown: BALLISTA.cooldown,
+      sight: BALLISTA.sight,
+      defense: 0,
+      buildingsOnly: false,
+      unitsOnly: true,
       siege: true,
     };
   }
@@ -98,6 +116,7 @@ export function statsOf(defId: string): UnitStats {
     sight: d.sight,
     defense: d.defense,
     buildingsOnly: false,
+    unitsOnly: false,
     siege: false,
   };
 }
@@ -122,8 +141,8 @@ export interface ArenaUnit {
 export interface ArenaShot {
   id: number;
   ammo: 'arrow' | 'cannon' | 'magic';
-  /** 谁打出来的：视图拿它决定炮口高度（箭塔顶 / 炮塔台 / 车头 / 兵的手上） */
-  source: 'arrowTower' | 'cannonTower' | 'siege' | 'unit';
+  /** 谁打出来的：视图拿它决定炮口高度与弹丸样子（箭塔顶 / 炮塔台 / 车头 / 兵的手上） */
+  source: 'arrowTower' | 'cannonTower' | 'siege' | 'ballista' | 'unit';
   fromX: number;
   fromZ: number;
   toX: number;
@@ -499,22 +518,23 @@ export class ArenaWorld {
       u.stun = Math.max(0, u.stun - dt);
       if (u.stun > 0) continue;
 
-      const foe = this.nearestHostile(u, st.sight, st.buildingsOnly);
+      const foe = this.nearestHostile(u, st.sight, st.buildingsOnly, st.unitsOnly);
       if (foe && foe.dist <= st.range) {
         if (u.cooldown > 0) continue;
         u.cooldown = st.cooldown;
         // 远程单位/移动火炮都要有"打出去一发"的视觉：弹道飞过去 + 枪口冒烟
         if (st.siege) {
+          const isBolt = u.defId === 'ballista';
           this.shots.push({
             id: this.nextId++,
-            ammo: 'cannon',
-            source: 'siege',
+            ammo: isBolt ? 'arrow' : 'cannon',
+            source: isBolt ? 'ballista' : 'siege',
             fromX: u.x,
             fromZ: u.z,
             toX: foe.x,
             toZ: foe.z,
             t: 0,
-            seconds: 0.5,
+            seconds: isBolt ? 0.3 : 0.5,
           });
         } else {
           const def = unitDef(u.defId);
@@ -569,6 +589,7 @@ export class ArenaWorld {
     u: ArenaUnit,
     sight: number,
     buildingsOnly: boolean,
+    unitsOnly = false,
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
     // buildingsOnly 现在对移动火炮是 false（它要能打兵）；字段留着给以后"纯攻城"的兵种
@@ -577,7 +598,7 @@ export class ArenaWorld {
       const d = Math.hypot(other.x - u.x, other.z - u.z);
       if (d <= sight && (!best || d < best.dist)) best = { dist: d, x: other.x, z: other.z, unit: other };
     }
-    if (best) return best;
+    if (best || unitsOnly) return best;
     for (const b of this.buildings.values()) {
       if (b.side === u.side) continue;
       const c = this.buildingCenter(b);
