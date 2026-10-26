@@ -22,15 +22,16 @@ import { loadPack, type DudePack } from '@game/dudes/pack';
 import { faceCandidates, headCandidates, isBlue } from '@game/dudes/roster';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
 import { unitDef } from '@game/data/units';
-import { ModelLibrary } from '@game/models/registry';
+import { buildModel, spinnersOf, TURRET } from '@game/models/kit';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
-import { makeBanner, shade, bannerSpot, type Banner } from './props';
+import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
+import { makeBanner, type Banner } from './props';
 import { fracture, spall } from './ruins';
-import { CARD_MODEL, sideColor } from './theme';
+import { sideColor } from './theme';
 
 export interface ArenaAppOptions {
   container: HTMLElement;
@@ -73,7 +74,6 @@ export class ArenaApp {
   private readonly viewport: Viewport;
   private readonly input: PointerInput;
   private readonly loop: GameLoop;
-  private readonly library = new ModelLibrary();
   private readonly ground: GroundView;
   private readonly map: TileMap;
   private readonly pack: DudePack | null;
@@ -88,7 +88,7 @@ export class ArenaApp {
   private readonly ruinMeshes = new Map<number, THREE.Group>();
   private readonly parts = new Map<
     number,
-    { sails?: THREE.Object3D; turret?: THREE.Object3D; flash?: THREE.Sprite; banner?: Banner }
+    { sails?: THREE.Object3D; sailSpeed?: number; turret?: THREE.Object3D; flash?: THREE.Sprite; banner?: Banner }
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Mesh>();
@@ -351,27 +351,22 @@ export class ArenaApp {
     this.renderer.render(this.scene, this.rig.camera);
   }
 
-  /** 建筑：新增/删掉都在这补齐；核心头顶挂一颗蓝/红水晶。 */
+  /** 建筑：新增/删掉都在这补齐。模型来自 `models.ts`，五栋楼一套设计语言。 */
   private syncBuildings(): void {
     for (const b of this.world.buildings.values()) {
       if (this.buildingMeshes.has(b.id)) continue;
-      // 磨坊与炮塔用自己的件：模型库里的那两件是静态合并的，帆和炮管转不起来
-      const custom =
-        b.kind === 'core'
-          ? makeCore(b.side)
-          : b.kind === 'mill'
-            ? makeMill(b.side)
-            : b.kind === 'cannonTower'
-              ? makeCannon(b.side)
-              : null;
-      // 核心/磨坊/炮塔是自建件；剩下会走到这里的只有兵营和箭塔
-      const group = custom
-        ? custom.group
-        : this.library.create(b.kind === 'barracks' ? CARD_MODEL.barracks : CARD_MODEL.arrowTower);
-      if (custom) this.parts.set(b.id, { sails: custom.sails, turret: custom.turret });
+      const name = b.kind as ArenaModelName;
+      // 阵营色只落在小件上：核心水晶、炮塔四角、磨坊顶盖
+      const accent = name === 'core' || name === 'cannonTower' || name === 'mill' ? sideColor(b.side) : 0;
+      const group = buildModel(ARENA_MODELS[name](accent));
+      const spinner = spinnersOf(group)[0];
+      const turret = group.userData[TURRET] as THREE.Object3D | undefined;
+      this.parts.set(b.id, { sails: spinner?.group, sailSpeed: spinner?.speed ?? 0, turret });
       if (b.kind === 'arrowTower' || b.kind === 'cannonTower') {
         const flash = makeFlashSprite();
-        flash.position.y = b.kind === 'arrowTower' ? 1.6 : 1.05;
+        // 塔口火光：箭塔在最顶上，炮塔在炮管高度（模型局部坐标，整组还会 ×BUILDING_SCALE）
+        flash.position.y = b.kind === 'arrowTower' ? 2.55 : 1.16;
+        flash.scale.setScalar(0.35);
         group.add(flash);
         this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), flash });
       }
@@ -379,32 +374,36 @@ export class ArenaApp {
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
       group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
-      this.scene.add(group);
       group.scale.setScalar(BUILDING_SCALE);
-      // 血条要挂在**抵消缩放**的子组里：直接挂在 group 上会跟着放大 1.75 倍，
-      // 位置被抬到半空、宽度也变成 4.5 格（截图里就是那两条悬空的横线）。
+      // 量一次模型自身的高度/半宽（格）：血条挂多高、裂纹贴哪、掉渣撒多远，全从这里来，
+      // 不再按建筑种类写死一串数 —— 模型改了这些自动跟着走。
+      group.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(group);
+      // 相对组自身量：组已经抬到了地块表面，直接用世界坐标会把那 0.5 格算进去
+      const modelTop = bounds.max.y - group.position.y;
+      const modelHalf = bounds.max.x - group.position.x;
+      this.scene.add(group);
+      // 血条要挂在**抵消缩放**的子组里：直接挂在 group 上会跟着放大，位置被抬到半空
       const ui = new THREE.Group();
       ui.scale.setScalar(1 / BUILDING_SCALE);
       group.add(ui);
-      // 旗：放进反向缩放的 ui 组，所以尺寸直接用"格"。
-      // 石台整个拿掉了（用户：不要那个地基，在地皮上变颜色丑死了）——
-      // 现在阵营色只出现在"建筑自己的零件"上：炮塔四角、磨坊顶盖、旗面。
-      const spot = bannerSpot(b.kind, b.cols, b.rows);
+      // 旗：放进反向缩放的 ui 组，所以尺寸直接用"格"（落点表在 models.ts 的 ARENA_FLAGS）
+      const spot = ARENA_FLAGS[name];
       const banner = makeBanner(b.side, spot.pole);
-      // 插在**屋顶上**（base 是屋顶高度），不再挂墙 —— 挂墙那份会穿进模型里
       banner.group.position.set(spot.x, spot.base, spot.z);
       ui.add(banner.group);
       this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), banner });
       const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);
-      bar.position.y = barHeightOf(b.kind);
+      bar.position.y = modelTop + 0.25;
       ui.add(bar);
       group.userData['hpBar'] = bar;
-      const cracks = makeCracks(group);
+      const cracks = makeCracks(group, modelHalf / BUILDING_SCALE, modelTop / BUILDING_SCALE);
       group.userData['cracks'] = cracks;
       for (const crack of cracks) crack.visible = false;
 
-      // 掉渣：从同一套碎裂里挑几块摆到墙脚，血量越低露得越多（"塔楼会有破损"）
-      const chips = makeSpallChips(b.cols, b.rows, b.id * 31 + 7, group);
+      // 掉渣：从同一套碎裂里挑几块摆到墙脚，血量越低露得越多（"塔楼会有破损"）。
+      // 挂在 ui 组里 = 坐标是格，和 spall() 的口径一致。
+      const chips = makeSpallChips(b.cols, b.rows, b.id * 31 + 7, ui);
       group.userData['chips'] = chips;
 
       // 核心的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
@@ -644,7 +643,7 @@ export class ArenaApp {
     for (const [id, part] of this.parts) {
       const b = this.world.buildings.get(id);
       if (!b) continue;
-      if (part.sails) part.sails.rotation.z = -time * 1.7;
+      if (part.sails) part.sails.rotation.z = -time * (part.sailSpeed ?? 1.7);
       if (part.turret) {
         // 炮口常驻对准 aim：aim 平时就是"冲着对面"的默认值，只有开火时才被改成目标方向。
         // 所以它不会自己到处扫视（用户说过"不是全自动转向"），但一眼就能看出朝哪边。
@@ -751,30 +750,25 @@ function labelOf(b: ArenaBuilding): string {
   return b.kind === 'core' ? '核心' : b.kind === 'barracks' ? '兵营' : b.kind === 'mill' ? '磨坊' : '防御塔';
 }
 
-/** 血条挂多高：按建筑种类给，别让条埋进屋顶里。 */
-function barHeightOf(kind: string): number {
-  if (kind === 'core') return 3.9;
-  if (kind === 'mill') return 2.5;
-  if (kind === 'arrowTower') return 2.4;
-  if (kind === 'cannonTower') return 1.9;
-  return 2.2; // 兵营
-}
-
 /**
  * 破损：三道随机角度的深色裂纹，血越少露得越多。
- * 不用"给模型换材质变暗"那条路 —— 模型库的材质是共享缓存的，改一处会把全场都改暗。
+ * 不用"给模型换材质变暗"那条路 —— 材质是共享缓存的，改一处会把全场都改暗。
+ *
+ * 位置按**模型实测尺寸**推（`half`/`height` 是模型局部单位），不是按种类写死：
+ * 换模型之后裂纹自动贴在新墙上，不会悬在半空或者缩在楼里。
  */
-function makeCracks(parent: THREE.Object3D): THREE.Mesh[] {
+function makeCracks(parent: THREE.Object3D, half: number, height: number): THREE.Mesh[] {
   const out: THREE.Mesh[] = [];
   const mat = new THREE.MeshBasicMaterial({ color: 0x1a1410, transparent: true, opacity: 0.85 });
-  const spots: { x: number; y: number; z: number; rot: number; w: number }[] = [
-    { x: -0.22, y: 0.62, z: 0.36, rot: 0.55, w: 0.26 },
-    { x: 0.2, y: 0.9, z: 0.34, rot: -0.85, w: 0.34 },
-    { x: -0.02, y: 1.12, z: 0.32, rot: 1.25, w: 0.22 },
+  const spots: { x: number; y: number; rot: number; w: number }[] = [
+    { x: -0.28, y: 0.34, rot: 0.55, w: 0.2 },
+    { x: 0.18, y: 0.52, rot: -0.85, w: 0.26 },
+    { x: -0.06, y: 0.68, rot: 1.25, w: 0.18 },
   ];
   for (const s of spots) {
-    const crack = new THREE.Mesh(new THREE.PlaneGeometry(s.w, 0.05), mat);
-    crack.position.set(s.x, s.y, s.z);
+    const crack = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.14, s.w * half), Math.max(0.03, half * 0.04)), mat);
+    // 贴在正面外皮附近（0.82 是量了几栋楼的均值：多数落在墙面上，不会飘在半空）
+    crack.position.set(s.x * half, s.y * height, half * 0.82);
     crack.rotation.z = s.rot;
     parent.add(crack);
     out.push(crack);
@@ -801,99 +795,6 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
   bar.scale.x = Math.max(0.02, clamped);
   const base = bar.userData['base'] as number;
   (bar.material as THREE.MeshBasicMaterial).color.setHex(clamped < 0.3 ? 0xff6b6b : base);
-}
-
-/**
- * 磨坊（会转的）：石塔 + 锥顶 + 四片帆。帆单独成组，绕 z 轴转。
- * 这里不走模型库 —— 库里那件是静态合并的，帆转不了（用户点名要风车转）。
- */
-function makeMill(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
-  const group = new THREE.Group();
-  const stone = new THREE.MeshStandardMaterial({ color: 0xd9cbb0, flatShading: true, roughness: 0.9 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.9 });
-  const wood = new THREE.MeshStandardMaterial({ color: 0xa9762c, flatShading: true, roughness: 0.85 });
-
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.62, 1.25, 8), stone);
-  base.position.y = 0.625;
-  base.castShadow = true;
-  // 顶盖按阵营上色（用户：风车顶盖上的颜色应该不同），中间再压一圈亮边
-  const roof = new THREE.Mesh(
-    new THREE.ConeGeometry(0.6, 0.5, 8),
-    new THREE.MeshStandardMaterial({ color: shade(sideColor(side), 0.9), flatShading: true, roughness: 0.85 }),
-  );
-  roof.position.y = 1.5;
-  roof.castShadow = true;
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.3, 6), dark);
-  hub.rotation.x = Math.PI / 2;
-  hub.position.set(0, 1.45, 0.5);
-
-  const sails = new THREE.Group();
-  sails.position.set(0, 1.45, 0.62);
-  for (let i = 0; i < 4; i++) {
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.05, 0.05), wood);
-    blade.position.y = 0.55;
-    blade.castShadow = true;
-    const arm = new THREE.Group();
-    arm.rotation.z = (i * Math.PI) / 2;
-    arm.add(blade);
-    sails.add(arm);
-  }
-  group.add(base, roof, hub, sails);
-  return { group, sails };
-}
-
-/**
- * 炮塔（会转的）：石座 + 可旋转的炮塔头 + 一根炮管。
- * 同样不用模型库那份静态件 —— 炮管必须跟着目标转。
- */
-function makeCannon(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
-  const group = new THREE.Group();
-  const stone = new THREE.MeshStandardMaterial({ color: 0x8e93a3, flatShading: true, roughness: 0.95 });
-  const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
-
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.72, 0.86), stone);
-  base.position.y = 0.36;
-  base.castShadow = true;
-  // 台面：阵营色（用户要求"模型上的台面上有颜色"，不是在地上贴一块）
-  const deck = new THREE.Mesh(
-    new THREE.BoxGeometry(0.96, 0.14, 0.96),
-    new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.85 }),
-  );
-  deck.position.y = 0.79;
-
-  // 四个**防撞角**：阵营色只落在这四个小方块上（用户："4 个角变颜色就行了"）。
-  // 比给整个底座上色低调得多，但远远看过去仍然一眼能分出是谁的炮塔。
-  const bumperMat = new THREE.MeshStandardMaterial({
-    color: sideColor(side),
-    emissive: sideColor(side),
-    emissiveIntensity: 0.5,
-    flatShading: true,
-    roughness: 0.55,
-  });
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const bumper = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.3, 0.16), bumperMat);
-      bumper.position.set(sx * 0.4, 0.86, sz * 0.4);
-      bumper.castShadow = true;
-      group.add(bumper);
-    }
-  }
-
-  const turret = new THREE.Group();
-  turret.position.y = 0.92;
-  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 0.34, 8), iron);
-  head.castShadow = true;
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.72, 8), iron);
-  barrel.rotation.z = -Math.PI / 2; // 炮管朝 +x
-  barrel.position.x = 0.42;
-  barrel.castShadow = true;
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.1, 8), stone);
-  collar.rotation.z = -Math.PI / 2;
-  collar.position.x = 0.74;
-  turret.add(head, barrel, collar);
-
-  group.add(base, deck, turret);
-  return { group, turret };
 }
 
 /** 塔口火光：一张很小的贴图精灵，刚开火时亮 0.18 秒。 */
@@ -988,74 +889,7 @@ function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
   return 'stone';
 }
 
-/**
- * 核心（主城）：基座 + 墙裙 + 门 + 四角石柱 + 四坡屋顶 + **嵌在屋顶里的水晶**（按阵营上色）。
- *
- * 为什么不用模型库里的 hall：那份模型的水晶是固定色的、材质还是全局缓存的，
- * 想按阵营染色会把场上所有实例一起改掉。自建一份最省事，也正好把"水晶是模型的一部分"落实了。
- */
-function makeCore(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
-  const group = new THREE.Group();
-  const stone = new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.95 });
-  const wall = new THREE.MeshStandardMaterial({ color: 0xc9b795, flatShading: true, roughness: 0.9 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0xa8483c, flatShading: true, roughness: 0.9 });
-  const tint = sideColor(side);
-
-  const base = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.28, 2.3), stone);
-  base.position.y = 0.14;
-  base.receiveShadow = true;
-
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.15, 1.85), wall);
-  body.position.y = 0.86;
-  body.castShadow = true;
-  body.receiveShadow = true;
-
-  // 一道深色墙裙 + 一扇门：不然从高处看，正面就是一整片浅色，像开了个洞
-  const skirt = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.3, 1.92), stone);
-  skirt.position.y = 0.44;
-  skirt.receiveShadow = true;
-  const door = new THREE.Mesh(
-    new THREE.BoxGeometry(0.5, 0.62, 0.1),
-    new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 }),
-  );
-  door.position.set(0, 0.62, 0.94);
-  group.add(skirt, door);
-
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(1.28, 0.72, 4), roofMat);
-  roof.position.y = 1.78;
-  roof.rotation.y = Math.PI / 4;
-  roof.castShadow = true;
-
-  // 水晶：半嵌在屋顶顶端的凹槽里（不是飘在上面）
-  const crystal = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.42, 0),
-    new THREE.MeshStandardMaterial({
-      color: tint,
-      emissive: tint,
-      emissiveIntensity: 0.95,
-      roughness: 0.25,
-      flatShading: true,
-    }),
-  );
-  crystal.position.y = 2.2;
-  crystal.scale.y = 1.35;
-  crystal.castShadow = true;
-
-  // 四角立柱，让主城看起来比兵营更厚重
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.5, 6), stone);
-      post.position.set(sx * 0.95, 0.86, sz * 0.95);
-      post.castShadow = true;
-      group.add(post);
-    }
-  }
-
-  group.add(base, body, roof, crystal);
-  return { group };
-}
-
-/** 墙脚的碎渣块：一块块小石头，按血量露出来。 */
+/** 墙脚的碎渣块：一块块小石头，按血量露出来（挂在 ui 组里，坐标直接用格）。 */
 function makeSpallChips(cols: number, rows: number, seed: number, parent: THREE.Object3D): THREE.Mesh[] {
   const out: THREE.Mesh[] = [];
   const mat = new THREE.MeshStandardMaterial({ color: 0x7d7468, roughness: 1, flatShading: true });

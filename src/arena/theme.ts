@@ -14,19 +14,5 @@ export const SIDE_COLOR = {
 
 export const sideColor = (side: Side): number => SIDE_COLOR[side];
 
-/** 核心头顶那颗水晶：更亮一点，远远就能认出这是要守的东西。 */
-export const CORE_COLOR = {
-  blue: 0x7cc4ff,
-  red: 0xff8f7a,
-} as const;
-
-/** 建筑种类 → 模型库里的名字（全部复用老模式已经建好的模型）。 */
-export const CARD_MODEL = {
-  barracks: 'barracks',
-  arrowTower: 'arrowTower',
-  cannonTower: 'cannonTower',
-  mill: 'mill',
-} as const;
-
 /** 卡面底色：建筑偏木、军队偏阵营色。 */
 export const cardAccent = (kind: 'building' | 'squad'): number => (kind === 'building' ? 0xd9b25c : 0x8f6de0);

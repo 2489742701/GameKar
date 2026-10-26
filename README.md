@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 258 条回归
+npm run check        # 类型检查 + 300 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -80,9 +80,17 @@ src/
 ├─ ui/                dom.ts · facts.ts · theme.ts(噪声材质) · themePrefs.ts(参数↔ID)
 │                     + 十五个部件（资源栏 / 操作坞 / 信息卡 / 开包 / 气泡 / 旗子 / 菜单 / 缺员徽章 /
 │                       头顶条 / 来犯预告 / 判负 / 吐司 / 确认框 / 材质面板）+ Hud.ts（组装）
-└─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· components.css
+├─ arena/             对战模式（只依赖 engine/ 与素材，不碰老模式的 GameWorld/Combat）
+│  ├─ ArenaWorld.ts   纯逻辑：出牌/金币/兵线/炮塔/废墟，不 import three
+│  ├─ ArenaApp.ts     把状态画出来：模型、旗帜、弹道、废墟、镜头手势
+│  ├─ models.ts       五栋楼的模型**数据**（核心/兵营/箭塔/炮塔/磨坊）+ 旗子落点表
+│  ├─ config.ts       对战数值（价格、血量、射程、金币节奏）
+│  └─ …                Camera / cameraId（机位码）· ruins（BSP 碎裂）· props（会摆的旗）· DebugPanel
+└─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
-                      roster · rally · combat · rounds · theme · readouts · repair · walk · icons —— 共 258 条
+                      roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
+                      arena · ruins · cameraId · models —— 共 300 条
+tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
 分层只有一条规矩：**`engine/` 不许 import `game/`，`game/` 不许 import `ui/`。**
@@ -812,9 +820,9 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
 用户 2026-10-27 的判断是"抽卡那套不好玩"，于是另起一套：素材共用、逻辑全新。
 设计路线是**以建筑为主、军队为辅** —— 建筑贵但能一直产出，军队便宜但会死。
 
-- **双方核心**：蓝（你，下方）/ 红（电脑，上方），各 1200 血，**拆掉对方核心才赢**。
-  核心头顶挂一颗同色水晶，远远就能认出要守的是哪座。
-- **20 点金**：上限 20、开局 5、每秒 +1.2（满金约 12.5 秒）。
+- **双方核心**：蓝（你，左）/ 红（电脑，右），各 1200 血，**拆掉对方核心才赢**。
+  同色水晶**嵌在核心屋顶里**（模型自带的，不再往头顶飘一颗）。
+- **20 点金**：上限 20、开局 8、**每 1.5 秒跳 +1**（不是连续小数；从 0 充满要 30 秒）。
 - **四张手牌**：随机发，打出后该槽进 2.2 秒冷却再补一张。配卡组留到以后。
 - **卡池七张**（价格 2026-10-27 按用户要求全部翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
   箭塔 10 · 炮塔 14 · 磨坊 8（每 5 秒 +2 金）· 弓箭手小队 6 · 兽人 8 ·
@@ -823,11 +831,14 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
   只能被兵拆掉或被塔轰掉。**塔会打塔**：进入射程的敌方建筑也会挨打，不再只打兵。
 - **废墟**：被拆掉的楼在原地留一堆碎石，14 秒后自己塌平（最后 2.5 秒淡出）。
 - **出兵旗**：兵营有一个出兵点（地上插旗）。点自家兵营 → 再点地面，就把旗挪过去。
-  每栋楼的**阵营旗插在屋顶上**（蓝/红），地上的兵不会穿过建筑，会贴着墙绕。
+  每栋楼的**阵营旗按模型落点插**（核心=墙角高杆、兵营=屋脊端、箭塔=垛口、炮塔=座角、磨坊=杆顶），
+  地上的兵不会穿过建筑，会贴着墙绕。
 - **敌方 AI**：先建筑、后军队 —— 和玩家走同一套出牌规则（`execute`），只是没有手牌。
 
-实机读数（Chromium 里跑真页面）：核心水晶颜色 `#7cc4ff / #ff8f7a`；
+实机读数（Chromium 里跑真页面）：五栋楼的实测尺寸（格）—— 核心 4.0×4.3、高 6.4；兵营 3.6×2.7、高 3.0；
+箭塔 3.0×2.8、高 6.2；炮塔 3.6×3.1、高 2.9；磨坊 3.7×2.9、高 5.7（都落在 3×3 占地附近）。
 一座兵营 7 秒内出第一个兵；AI 前 40 秒会先立起箭塔/磨坊；
-金币从 5 涨到 20 停住；手牌四张、打出扣费并进冷却补牌。
+金币从 8 涨到 20 停住；手牌四张、打出扣费并进冷却补牌。
 逻辑全在 `src/arena/ArenaWorld.ts`（不 import three、不碰 DOM），
-`tests/arena.test.ts` 15 条锁在 node 里把一局跑完。
+`tests/arena.test.ts` 26 条锁在 node 里把一局跑完；
+模型另有 `tests/models.test.ts` 5 条（体型/件数/旗位 + 预览器两次出图一致、换俯角会变）。
