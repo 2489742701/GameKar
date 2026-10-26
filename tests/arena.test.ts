@@ -416,3 +416,40 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
     expect(world.ruins).toHaveLength(0); // 塌平了
   });
 });
+
+describe('兵不穿楼', () => {
+  it('同阵营的楼挡在直线上时会绕开，任何一帧都不会站在楼的占地里', () => {
+    const world = new ArenaWorld({ seed: 61 });
+    world.gold.blue = 20;
+    give(world, 'mill');
+    expect(world.playCard('blue', 0, 12, 9).ok).toBe(true);
+    // 蓝兵从磨坊西边出发往东打红方核心：那栋磨坊是**自己人**的，不是目标，
+    // 但直线正好从它中间穿过 —— 走得进去就说明会穿模（变异打红的就是这一条）
+    world.units.push({
+      id: 9500,
+      side: 'blue',
+      defId: 'orc',
+      x: 10.2,
+      z: 10.5,
+      hp: 80,
+      maxHp: 80,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+    });
+    const inside = (x: number, z: number): boolean => {
+      const col = Math.floor(x);
+      const row = Math.floor(z);
+      for (const b of world.buildings.values()) {
+        if (col >= b.col && col < b.col + b.cols && row >= b.row && row < b.row + b.rows) return true;
+      }
+      return false;
+    };
+    let violations = 0;
+    run(world, 8, () => {
+      const u = world.units.find((x) => x.id === 9500);
+      if (u && inside(u.x, u.z)) violations++;
+    });
+    expect(violations).toBe(0);
+  });
+});

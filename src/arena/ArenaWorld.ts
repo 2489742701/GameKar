@@ -306,6 +306,7 @@ export class ArenaWorld {
 
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
     if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return { ok: false, reason: '出界了' };
+    if (card.kind !== 'building' && !this.cellFree(col, row, 1, 1)) return { ok: false, reason: '这格被占了' };
     // 中间那条黄区是禁建带：连边都不许压进去
     for (let c = col; c < col + spec.cols; c++) {
       if (!this.inNoBuild(c)) continue;
@@ -493,8 +494,7 @@ export class ArenaWorld {
         if (d <= 0.35) u.order = null;
         else {
           const step = Math.min(d, st.speed * dt);
-          u.x += (dx / d) * step;
-          u.z += (dz / d) * step;
+          this.stepUnit(u, (dx / d) * step, (dz / d) * step);
           continue;
         }
       }
@@ -508,8 +508,7 @@ export class ArenaWorld {
       const dist = Math.hypot(tx - u.x, tz - u.z);
       if (dist < 0.001) continue;
       const step = Math.min(dist, st.speed * dt);
-      u.x += ((tx - u.x) / dist) * step;
-      u.z += ((tz - u.z) / dist) * step;
+      this.stepUnit(u, ((tx - u.x) / dist) * step, ((tz - u.z) / dist) * step);
     }
     this.units = this.units.filter((u) => u.hp > 0);
   }
@@ -559,6 +558,30 @@ export class ArenaWorld {
       if (edge <= range && (!best || edge < best.dist)) best = { dist: edge, x: c.x, z: c.z, building: other };
     }
     return best;
+  }
+
+  /** 这一格被楼占着吗（兵不许走进去，但可以贴着站）。 */
+  private blockedBy(x: number, z: number): boolean {
+    const col = Math.floor(x);
+    const row = Math.floor(z);
+    for (const b of this.buildings.values()) {
+      if (col >= b.col && col < b.col + b.cols && row >= b.row && row < b.row + b.rows) return true;
+    }
+    return false;
+  }
+
+  /** 走一步；撞到楼就沿轴滑一格，两边都堵住就原地不动（以前是直接穿过去）。 */
+  private stepUnit(u: ArenaUnit, dx: number, dz: number): void {
+    if (!this.blockedBy(u.x + dx, u.z + dz)) {
+      u.x += dx;
+      u.z += dz;
+      return;
+    }
+    if (!this.blockedBy(u.x + dx, u.z)) {
+      u.x += dx;
+      return;
+    }
+    if (!this.blockedBy(u.x, u.z + dz)) u.z += dz;
   }
 
   private hurtUnit(u: ArenaUnit, attack: number): void {

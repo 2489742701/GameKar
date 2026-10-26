@@ -389,8 +389,9 @@ export class ArenaApp {
       // 石台整个拿掉了（用户：不要那个地基，在地皮上变颜色丑死了）——
       // 现在阵营色只出现在"建筑自己的零件"上：炮塔四角、磨坊顶盖、旗面。
       const spot = bannerSpot(b.kind, b.cols, b.rows);
-      const banner = makeBanner(b.side, spot.top);
-      banner.group.position.set(spot.x, 0.2, spot.z);
+      const banner = makeBanner(b.side, spot.pole);
+      // 插在**屋顶上**（base 是屋顶高度），不再挂墙 —— 挂墙那份会穿进模型里
+      banner.group.position.set(spot.x, spot.base, spot.z);
       ui.add(banner.group);
       this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), banner });
       const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);

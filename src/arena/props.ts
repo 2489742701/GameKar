@@ -37,43 +37,44 @@ export interface Banner {
  * 用户第二次改口："旗帜是竖的，挂在上面的，挂在墙上面的，从上往下的旗帜" ——
  * 之前那版是"杆子立在地上、布朝一侧飘"，那是旗杆旗，不是挂在墙上的家族旗。
  */
-export function makeBanner(side: Side, top: number, width = 0.66, height = 1.05): Banner {
+export function makeBanner(side: Side, pole = 0.85, width = 0.6, height = 0.62): Banner {
   const group = new THREE.Group();
   const tint = sideColor(side);
 
-  const rod = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.028, 0.028, width * 1.25, 6),
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.032, pole, 6),
     new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 }),
   );
-  rod.rotation.z = Math.PI / 2;
-  rod.position.y = top;
+  mast.position.y = pole / 2;
+  mast.castShadow = true;
 
-  const capMat = new THREE.MeshStandardMaterial({ color: 0x4a3a26, flatShading: true, roughness: 0.9 });
-  const capL = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 4), capMat);
-  capL.position.set(-width * 0.62, top, 0);
-  const capR = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 4), capMat);
-  capR.position.set(width * 0.62, top, 0);
+  const bar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.024, 0.024, width * 1.15, 6),
+    new THREE.MeshStandardMaterial({ color: 0x4a3a26, flatShading: true, roughness: 0.9 }),
+  );
+  bar.rotation.z = Math.PI / 2;
+  bar.position.y = pole;
 
-  const geo = new THREE.PlaneGeometry(width, height, 3, 6);
-  geo.translate(0, -height / 2, 0); // 顶边对齐 y=0，布整体往下垂
+  const geo = new THREE.PlaneGeometry(width, height, 3, 4);
+  geo.translate(0, -height / 2, 0);
   const cloth = new THREE.Mesh(
     geo,
     new THREE.MeshStandardMaterial({
       color: tint,
       emissive: tint,
-      emissiveIntensity: 0.22,
+      emissiveIntensity: 0.24,
       side: THREE.DoubleSide,
       flatShading: true,
       roughness: 0.85,
     }),
   );
-  cloth.position.y = top;
+  cloth.position.y = pole;
   cloth.castShadow = true;
 
   const base = Float32Array.from(geo.attributes['position']!.array as Float32Array);
   const pos = geo.attributes['position'] as THREE.BufferAttribute;
 
-  group.add(rod, capL, capR, cloth);
+  group.add(mast, bar, cloth);
 
   return {
     group,
@@ -82,10 +83,9 @@ export function makeBanner(side: Side, top: number, width = 0.66, height = 1.05)
       for (let i = 0; i < arr.length; i += 3) {
         const x0 = base[i]!;
         const y0 = base[i + 1]!;
-        // k：越靠下摆越大（顶边钉死，一点不动）
         const k = Math.min(1, Math.max(0, -y0 / height));
-        arr[i + 2] = Math.sin(time * 3.1 + x0 * 2.2 + k * 2.4) * 0.075 * k;
-        arr[i] = x0 + Math.sin(time * 1.6 + k * 2.0) * 0.018 * k;
+        arr[i + 2] = Math.sin(time * 3.1 + x0 * 2.4 + k * 2.6) * 0.08 * k;
+        arr[i] = x0 + Math.sin(time * 1.6 + k * 2.0) * 0.02 * k;
       }
       pos.needsUpdate = true;
     },
@@ -96,20 +96,19 @@ export function makeBanner(side: Side, top: number, width = 0.66, height = 1.05)
  * 每栋楼挂旗的位置：贴在前墙（+z 一侧，正对镜头那面）上，旗顶高度按楼高给。
  * 位置/高度都用**格**，因为调用方会把它放进反向缩放的 ui 组里。
  */
-export function bannerSpot(kind: string, cols: number, rows: number): { x: number; z: number; top: number } {
-  // 模型放大 2.2 倍之后半深约 1.1 格，旗子要挂在墙**外面**，否则整面被楼吞掉
-  const z = Math.max(1.2, rows * 0.4);
-  const x = -cols * 0.26;
+export function bannerSpot(kind: string, cols: number, rows: number): { x: number; z: number; base: number; pole: number } {
+  const x = cols * 0.26;
+  const z = -rows * 0.22;
   switch (kind) {
     case 'core':
-      return { x, z: z + 0.1, top: 2.7 };
+      return { x: -x, z, base: 4.2, pole: 0.95 };
     case 'mill':
-      return { x, z, top: 2.2 };
+      return { x, z, base: 3.5, pole: 0.9 };
     case 'barracks':
-      return { x, z, top: 2.0 };
+      return { x, z, base: 2.7, pole: 0.85 };
     case 'cannonTower':
-      return { x, z: z * 0.92, top: 1.7 };
+      return { x: -x, z, base: 2.05, pole: 0.8 };
     default:
-      return { x, z, top: 2.1 };
+      return { x: -x, z, base: 4.2, pole: 0.9 };
   }
 }
