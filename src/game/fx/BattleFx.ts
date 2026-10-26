@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import type { Combat, Shot } from '@game/systems/Combat';
 
-const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16, haze: 72 };
+const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16, haze: 72, spark: 48 };
 
 /** 单栋楼同时最多几团雾（global cap 之上的第二道闸，防止一栋楼吃满全场） */
 const PER_SITE_HAZE = 26;
@@ -154,6 +154,16 @@ interface Puff {
 }
 
 /** 一团体积雾：大到能挡住楼、淡到不脏屏，起身快、散得慢。 */
+/** 火星：一小块亮片，带重力。用在建筑碎片的崩口上。 */
+interface Spark {
+  sprite: THREE.Sprite;
+  vx: number;
+  vy: number;
+  vz: number;
+  life: number;
+  seconds: number;
+}
+
 interface Haze {
   sprite: THREE.Sprite;
   /** 哪栋楼的雾（按楼限额用；同一栋楼的雾才有资格抢同一个配额） */
@@ -191,6 +201,7 @@ export class BattleFx {
   private readonly cubes: THREE.Mesh[] = [];
   private readonly quads = new Map<string, THREE.Sprite[]>();
   private readonly puffs: Puff[] = [];
+  private readonly sparks: Spark[] = [];
   private readonly hazes: Haze[] = [];
   /** 散掉的雾不销毁，留着下一团复用 —— 否则每团一次材质分配，跑十分钟就是几千份 */
   private readonly hazeFree: THREE.Sprite[] = [];
@@ -219,7 +230,58 @@ export class BattleFx {
    */
   step(dt: number): void {
     this.age(dt);
+    this.ageSparks(dt);
     this.ageHaze(dt);
+  }
+
+  /**
+   * 火星：外壳崩开时从破口往外溅的一把亮片（重力 14 格/秒²，0.3–0.65 秒熄灭）。
+   * 和烟雾分开是因为它要"往下掉"、要亮，混在烟里两颗都不像。
+   */
+  spark(x: number, z: number, y: number, dirX: number, dirZ: number, count = 8): void {
+    for (let i = 0; i < count; i++) {
+      if (this.sparks.length >= CAP.spark) return;
+      const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: this.tex.flash, transparent: true, opacity: 1, depthWrite: false }),
+      );
+      const spread = (Math.random() - 0.5) * 1.8;
+      const power = 1.1 + Math.random() * 2.2;
+      const size = 0.1 + Math.random() * 0.14;
+      sprite.position.set(
+        x + (Math.random() - 0.5) * 0.35,
+        y + (Math.random() - 0.5) * 0.35,
+        z + (Math.random() - 0.5) * 0.35,
+      );
+      sprite.scale.set(size, size, 1);
+      this.group.add(sprite);
+      this.sparks.push({
+        sprite,
+        vx: dirX * power + dirZ * spread,
+        vy: 1.2 + Math.random() * 1.8,
+        vz: dirZ * power - dirX * spread,
+        life: 0,
+        seconds: 0.3 + Math.random() * 0.35,
+      });
+    }
+  }
+
+  private ageSparks(dt: number): void {
+    for (let i = this.sparks.length - 1; i >= 0; i--) {
+      const s = this.sparks[i]!;
+      s.life += dt;
+      const k = s.life / s.seconds;
+      if (k >= 1) {
+        this.group.remove(s.sprite);
+        (s.sprite.material as THREE.SpriteMaterial).dispose();
+        this.sparks.splice(i, 1);
+        continue;
+      }
+      s.vy -= 14 * dt;
+      s.sprite.position.x += s.vx * dt;
+      s.sprite.position.y += s.vy * dt;
+      s.sprite.position.z += s.vz * dt;
+      (s.sprite.material as THREE.SpriteMaterial).opacity = 1 - k;
+    }
   }
 
   private arrows(list: Shot[]): void {

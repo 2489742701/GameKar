@@ -124,6 +124,8 @@ export class ArenaApp {
     this.damage = new DamageFx(this.scene);
     this.fx = new BattleFx();
     this.scene.add(this.fx.group);
+    // 外墙崩开时溅火星
+    this.damage.onBreach = (x, z, y, dirX, dirZ) => this.fx.spark(x, z, y, dirX, dirZ, 14);
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
     this.rig = new CameraRig({
@@ -483,19 +485,20 @@ export class ArenaApp {
         continue;
       }
       const def = unitDef(u.defId);
+      const bodyH = def.heightTiles ?? UNIT_HEIGHT;
       const anim = entry.attackLeft > 0 ? def.attackAnim : moving ? 'run' : def.idleAnim;
       if (entry.dude) {
         entry.dude.moveTo(u.x, u.z);
         // 脚必须踩在**地块表面**上：草地表面在 y=0.5，而 DudeSprite 自带的身高偏移是从 y=0 起算的。
         // 老模式的 UnitView 一直有这一句，我这一版漏了 —— 表现就是整个小人埋掉半个身子。
-        entry.obj.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
+        entry.obj.position.y = this.groundY(u.x, u.z) + bodyH / 2;
         entry.dude.faceCamera(this.rig.yaw);
         // 左右朝向看**屏幕**：把世界位移投到相机的右向量上，镜头转到哪边都不会反着走
         entry.dude.setFlipX(facingFlip(dx, dz, this.rig.yaw, entry.dude.flipped));
         entry.dude.play(anim, time);
       } else {
         // 没有素材包：锥体直接跟着走，玩法读数照常
-        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
+        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + bodyH / 2, u.z);
       }
     }
     for (const [id, entry] of this.unitSprites) {
@@ -521,8 +524,9 @@ export class ArenaApp {
     const def = unitDef(u.defId);
     const style = this.styleOf(u.side, def.id, def);
     const { atlas, texture } = this.gallery.acquire(style, def.anims);
-    const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
-    dude.mesh.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
+    const bodyH = def.heightTiles ?? UNIT_HEIGHT;
+    const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: bodyH });
+    dude.mesh.position.y = this.groundY(u.x, u.z) + bodyH / 2;
     this.scene.add(dude.mesh);
     return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
   }
@@ -635,6 +639,15 @@ export class ArenaApp {
       face: rng.pick(faceCandidates(def, this.pack)),
       hex: { ...base.hex, suit: suits.length > 0 ? rng.pick(suits) : base.hex.suit },
     };
+    // 机器巨人换成灰铁色：别的兵种靠阵营色，它靠"一看就是铁疙瘩"
+    if (unitId === 'mech') {
+      // 机壳、装甲、蓝眼：连"皮肤"一起换，不然还是一个穿了铁甲的橘色小人
+      style.hex.body = '#bfb8b4';
+      style.hex.suit = '#918d8d';
+      style.hex.eyes = '#74e0ff';
+      style.hex.item = '#604b3d';
+      style.hex.more = '#918d8d';
+    }
     this.styles.set(key, style);
     return style;
   }
@@ -691,7 +704,12 @@ export class ArenaApp {
       live.add(s.id);
       let mesh = this.shotMeshes.get(s.id);
       if (!mesh) {
-        mesh = s.ammo === 'cannon' ? makeBall(0.16) : makeBall(0.09);
+        mesh =
+          s.ammo === 'cannon'
+            ? makeBall(0.16)
+            : s.ammo === 'magic'
+              ? makeBall(0.11, 0x74e0ff, 0x74e0ff)
+              : makeBall(0.09);
         this.scene.add(mesh);
         this.shotMeshes.set(s.id, mesh);
         const ground = this.map.surfaceY(worldToCell(s.fromX, s.fromZ));
@@ -707,7 +725,8 @@ export class ArenaApp {
         const len = Math.hypot(dx, dz) || 1;
         const ux = dx / len;
         const uz = dz / len;
-        const ahead = s.source === 'cannonTower' ? 1.0 : s.source === 'siege' ? 0.55 : 0;
+        const ahead =
+          s.source === 'cannonTower' ? 1.0 : s.source === 'siege' ? 0.55 : s.source === 'unit' ? 0.15 : 0;
         this.fx.muzzle(s.fromX + ux * ahead, s.fromZ + uz * ahead, fromY, s.ammo, ux, uz);
       }
       const k = s.t;
@@ -715,11 +734,11 @@ export class ArenaApp {
       const z = s.fromZ + (s.toZ - s.fromZ) * k;
       const fromY = mesh.userData['fromY'] as number;
       const toY = mesh.userData['toY'] as number;
-      // 抛物线：炮弹飞得高一点，箭基本走直线
-      const arc = s.ammo === 'cannon' ? Math.sin(k * Math.PI) * 0.9 : Math.sin(k * Math.PI) * 0.12;
+      // 抛物线：炮弹飞得高一点，法术弹居中，箭基本走直线
+      const arc = Math.sin(k * Math.PI) * (s.ammo === 'cannon' ? 0.9 : s.ammo === 'magic' ? 0.35 : 0.12);
       mesh.position.set(x, fromY + (toY - fromY) * k + arc, z);
       mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
-      mesh.scale.setScalar(s.ammo === 'cannon' ? 1 : 1.6);
+      mesh.scale.setScalar(s.ammo === 'arrow' ? 1.6 : 1);
     }
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
@@ -817,14 +836,20 @@ function updateHpBar(bar: THREE.Mesh, frac: number): void {
 }
 
 /** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
-const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95 } as const;
+const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95, unit: 1.1 } as const;
 
-function makeBall(radius: number): THREE.Mesh {
+function makeBall(radius: number, color = 0x1a1d24, emissive = 0x000000): THREE.Mesh {
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(radius, 6, 4),
-    new THREE.MeshStandardMaterial({ color: 0x1a1d24, flatShading: true, roughness: 0.6 }),
+    new THREE.MeshStandardMaterial({
+      color,
+      emissive,
+      emissiveIntensity: emissive ? 1.4 : 0,
+      flatShading: true,
+      roughness: 0.6,
+    }),
   );
-  mesh.castShadow = true;
+  mesh.castShadow = emissive === 0;
   return mesh;
 }
 

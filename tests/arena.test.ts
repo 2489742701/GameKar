@@ -563,3 +563,41 @@ describe('寻路：撞到楼要绕过去（用户：撞到建筑然后不动了�
     expect(orc.hp, '红方兽人应该被移动火炮打过').toBeLessThan(orc.maxHp);
   });
 });
+
+describe('新增兵种：法师的法术弹', () => {
+  it('法师打人时会飞一发法术弹（source=unit, ammo=magic）', () => {
+    const world = new ArenaWorld({ seed: 63 });
+    world.units.push({
+      id: 9800,
+      side: 'red',
+      defId: 'orc',
+      x: 22,
+      z: 10.5,
+      hp: 80,
+      maxHp: 80,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    world.units.push({
+      id: 9801,
+      side: 'blue',
+      defId: 'mage',
+      x: 19.5,
+      z: 10.5,
+      hp: 32,
+      maxHp: 32,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: 1 as const,
+    });
+    let seen = false;
+    run(world, 1.2, () => {
+      world.units = world.units.filter((u) => u.id === 9800 || u.id === 9801);
+      if (world.shots.some((s) => s.source === 'unit' && s.ammo === 'magic')) seen = true;
+    });
+    expect(seen, '法师应当打出一发 source=unit / ammo=magic 的法术弹').toBe(true);
+  });
+});

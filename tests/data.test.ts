@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { BUILDINGS, buildingList } from '@game/data/buildings';
 import { CARDS, RARITY_ORDER, STARTER_POOL, cardList } from '@game/data/cards';
 import { ModelLibrary } from '@game/models/registry';
+import { unitDef } from '@game/data/units';
+import { CARDS as ARENA_CARDS } from '@arena/config';
 
 const library = new ModelLibrary();
 
@@ -69,5 +71,24 @@ describe('卡表与卡池', () => {
     const ten = STARTER_POOL.bundle.find((b) => b.count === 10)!.cost.crystal!;
     expect(ten).toBe(single * 9);
     expect(ten).toBeLessThan(single * 10);
+  });
+});
+
+
+describe('新增兵种（骑士/法师/机器巨人）', () => {
+  it('法师有法术弹，机器巨人比普通兵高', () => {
+    expect(unitDef('mage').projectile).toBe('magic');
+    expect(unitDef('mage').role).toBe('ranged');
+    expect(unitDef('mech').heightTiles).toBeGreaterThan(1.45);
+    expect(unitDef('mech').hp).toBeGreaterThan(unitDef('orc').hp);
+  });
+
+  it('卡池里的骑士/法师/机器人都指向真的兵种', () => {
+    const arenaCards = ['knights', 'mages', 'mech'];
+    for (const id of arenaCards) {
+      const card = ARENA_CARDS.find((c) => c.id === id);
+      expect(card, `卡 ${id}`).toBeTruthy();
+      for (const part of card!.squad ?? []) expect(() => unitDef(part.unitId)).not.toThrow();
+    }
   });
 });

@@ -60,6 +60,8 @@ const BOUNCE = 0.3;
 const MAX_DEBRIS = 70;
 
 export class DamageFx {
+  /** 外壳崩开时的回调：让视图在破口处溅一把火星 */
+  onBreach?: (x: number, z: number, y: number, dirX: number, dirZ: number) => void;
   private readonly states = new Map<number, Damaged>();
   private readonly debris: Chunk[] = [];
   private readonly mats = new Map<number, THREE.MeshStandardMaterial>();
@@ -136,6 +138,28 @@ export class DamageFx {
     const n = Math.min(6, Math.max(2, Math.round(st.shell.count * 0.12)));
     const removed = st.shell.breach(n, rnd);
     for (const panel of removed) this.dropPanel(st, panel, rnd);
+    // 破口中心 + 外法线：火星从这里往外溅
+    if (removed.length > 0 && this.onBreach) {
+      let ax = 0;
+      let ay = 0;
+      let az = 0;
+      for (const p of removed) {
+        ax += p.x;
+        ay += p.y;
+        az += p.z;
+      }
+      ax /= removed.length;
+      ay /= removed.length;
+      az /= removed.length;
+      const face = removed[0]!;
+      this.onBreach(
+        st.center.x + ax * st.scale,
+        st.center.z + az * st.scale,
+        st.groundY + ay * st.scale,
+        Math.sin(face.yaw),
+        Math.cos(face.yaw),
+      );
+    }
   }
 
   /** 把一块墙板变成落体：位置/尺寸/颜色都从模型来。 */

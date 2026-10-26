@@ -52,6 +52,10 @@ export interface UnitDef {
   headBands: readonly (readonly [number, number])[];
   /** 脸型候选区间；不给就是"多半不叠脸" */
   faceBand?: readonly [number, number];
+  /** 远程投射物：有值才在对战里画出一条飞行的弹道（弓=箭，法师=法术弹） */
+  projectile?: 'arrow' | 'magic';
+  /** 显示身高（格）。不给就是普通兵；机器巨人这种要显大 */
+  heightTiles?: number;
   special?: UnitSpecial;
   /**
    * 岗位。`repair` = 议事厅派出来的工匠：谁掉血就去补谁，路上遇敌就抡一锤。
@@ -112,6 +116,7 @@ export const UNITS: Record<string, UnitDef> = {
     attackAnim: 'bowTall',
     idleAnim: 'idleBow',
     anims: COMBAT_ANIMS('bowTall', 'idleBow'),
+    projectile: 'arrow',
     // 弓手带：实测 51–62 是作者的 archers 段
     headBands: [[51, 62]],
     faceBand: [1, 40],
@@ -140,6 +145,54 @@ export const UNITS: Record<string, UnitDef> = {
     faceBand: [1, 40],
     trainSeconds: 14,
     stockInitial: 2,
+  }),
+
+  mage: U({
+    id: 'mage',
+    name: '法师',
+    blurb: '远程法术，伤害高、血薄。',
+    role: 'ranged',
+    faction: 'own',
+    hp: 32,
+    attack: 13,
+    defense: 1,
+    range: 3.3,
+    speed: 1.2,
+    cooldown: 1.8,
+    sight: 4.6,
+    attackAnim: 'cast',
+    idleAnim: 'idleStaff',
+    anims: ['idleStaff', 'run', 'cast', 'hurt', 'die'],
+    // 法师段：实测 35–50 有画（34 那列是空的）
+    headBands: [[35, 50]],
+    faceBand: [1, 40],
+    projectile: 'magic',
+    trainSeconds: 15,
+    stockInitial: 1,
+  }),
+
+  mech: U({
+    id: 'mech',
+    name: '机器巨人',
+    blurb: '慢、笨重，但一拳能砸穿墙。',
+    role: 'tank',
+    faction: 'own',
+    hp: 300,
+    attack: 30,
+    defense: 8,
+    range: 1.5,
+    speed: 0.65,
+    cooldown: 2.4,
+    sight: 4.8,
+    attackAnim: 'staff',
+    idleAnim: 'idle',
+    anims: ['idle', 'run', 'staff', 'hurt', 'die'],
+    // 机甲段：实测 310–332 有画（318 是空格）
+    headBands: [[310, 332]],
+    faceBand: [1, 40],
+    heightTiles: 2.4,
+    trainSeconds: 26,
+    stockInitial: 1,
   }),
 
   orc: U({
@@ -252,6 +305,7 @@ export const UNITS: Record<string, UnitDef> = {
     attackAnim: 'bowShort',
     idleAnim: 'idle',
     anims: ['idle', 'run', 'bowShort', 'hurt', 'die'],
+    projectile: 'arrow',
     headBands: [[211, 239], [306, 317]],
     faceBand: [40, 102],
     trainSeconds: 0,

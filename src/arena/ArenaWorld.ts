@@ -121,9 +121,9 @@ export interface ArenaUnit {
 /** 一发"看得见的"弹丸。伤害已结算，这里只是让玩家看到"从塔顶飞过去"的那一下。 */
 export interface ArenaShot {
   id: number;
-  ammo: 'arrow' | 'cannon';
-  /** 谁打出来的：视图拿它决定炮口高度（箭塔顶 / 炮塔台 / 移动火炮车头） */
-  source: 'arrowTower' | 'cannonTower' | 'siege';
+  ammo: 'arrow' | 'cannon' | 'magic';
+  /** 谁打出来的：视图拿它决定炮口高度（箭塔顶 / 炮塔台 / 车头 / 兵的手上） */
+  source: 'arrowTower' | 'cannonTower' | 'siege' | 'unit';
   fromX: number;
   fromZ: number;
   toX: number;
@@ -497,7 +497,7 @@ export class ArenaWorld {
       if (foe && foe.dist <= st.range) {
         if (u.cooldown > 0) continue;
         u.cooldown = st.cooldown;
-        // 移动火炮也要有"打出去一发"的视觉：炮弹飞过去 + 车头冒烟
+        // 远程单位/移动火炮都要有"打出去一发"的视觉：弹道飞过去 + 枪口冒烟
         if (st.siege) {
           this.shots.push({
             id: this.nextId++,
@@ -510,6 +510,21 @@ export class ArenaWorld {
             t: 0,
             seconds: 0.5,
           });
+        } else {
+          const def = unitDef(u.defId);
+          if (def.projectile) {
+            this.shots.push({
+              id: this.nextId++,
+              ammo: def.projectile,
+              source: 'unit',
+              fromX: u.x,
+              fromZ: u.z,
+              toX: foe.x,
+              toZ: foe.z,
+              t: 0,
+              seconds: def.projectile === 'magic' ? 0.4 : 0.28,
+            });
+          }
         }
         if (foe.unit) this.hurtUnit(foe.unit, st.damage);
         else if (foe.building) this.hurtBuilding(foe.building, st.damage);
