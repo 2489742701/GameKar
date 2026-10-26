@@ -62,7 +62,11 @@ export class ArenaHud {
     }
 
     const hint = make('div', 'ahud__hint', '点一张牌 → 点自己半场放下去。点自家兵营 → 再点地面挪出兵旗。');
-    this.el.append(top, hand, hint, this.toast, this.end);
+    // 手牌与提示必须**成组贴在底部**：之前三块直接摊在 flex 列里，space-between 把它们
+    // 分别顶到上/中/下，手牌就飘到屏幕正中间了（截图里一眼能看出来）
+    const bottom = make('div', 'ahud__bottom');
+    bottom.append(hand, hint);
+    this.el.append(top, bottom, this.toast, this.end);
     host.append(this.el);
     this.end.hidden = true;
     this.end.append(

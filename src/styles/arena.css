@@ -5,8 +5,7 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px) calc(var(--safe-bottom) + 10px)
+  padding: calc(var(--safe-top) + 8px) calc(var(--safe-right) + 8px) calc(var(--safe-bottom) + 14px)
     calc(var(--safe-left) + 8px);
   pointer-events: none;
   z-index: 20;
@@ -111,6 +110,16 @@
   color: var(--text-faint);
 }
 
+.ahud__bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
+}
+
 .ahud__hand {
   display: flex;
   gap: 8px;
@@ -119,7 +128,7 @@
 
 .ahud__card {
   flex: 1;
-  min-height: 72px;
+  min-height: 62px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -161,6 +170,9 @@
   font-family: var(--font-display);
   font-size: var(--fs-sm);
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ahud__card__kind {

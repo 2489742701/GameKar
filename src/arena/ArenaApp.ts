@@ -17,7 +17,6 @@ import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { Viewport } from '@engine/viewport/Viewport';
-import { CAMERA, DUDE } from '@game/config';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
 import { faceCandidates, headCandidates, isBlue } from '@game/dudes/roster';
@@ -27,6 +26,7 @@ import { ModelLibrary } from '@game/models/registry';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
+import { ARENA_CAMERA, UNIT_HEIGHT } from './config';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -89,16 +89,24 @@ export class ArenaApp {
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
     this.rig = new CameraRig({
-      pitchDeg: CAMERA.pitchDeg,
-      yawDeg: CAMERA.yawDeg,
-      tilesAcross: CAMERA.tilesAcross,
-      minTilesAcross: CAMERA.minTilesAcross,
-      maxTilesAcross: CAMERA.maxTilesAcross,
+      pitchDeg: ARENA_CAMERA.pitchDeg,
+      yawDeg: ARENA_CAMERA.yawDeg,
+      tilesAcross: ARENA_CAMERA.tilesAcross,
+      minTilesAcross: ARENA_CAMERA.minTilesAcross,
+      maxTilesAcross: ARENA_CAMERA.maxTilesAcross,
     });
     this.rig.setBounds({ minX: 0, maxX: this.map.size.cols, minZ: 0, maxZ: this.map.size.rows });
     this.lighting = new LightingRig(this.scene, { shadowMapSize: 1024 });
 
-    this.scene.add(this.ground.group);
+    // 场地底盘：不然 16×26 之外全是黑洞，看着像地图没加载完
+    const apron = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.map.size.cols + 14, this.map.size.rows + 14),
+      new THREE.MeshStandardMaterial({ color: 0x1b2a1b, roughness: 1, flatShading: true }),
+    );
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.set(this.map.size.cols / 2, -0.06, this.map.size.rows / 2);
+    apron.receiveShadow = true;
+    this.scene.add(apron, this.ground.group);
     this.gallery = pack ? new DudeGallery(pack) : null;
 
     this.loop = new GameLoop({
@@ -119,7 +127,7 @@ export class ArenaApp {
       onHover: () => {},
     });
 
-    const mid = cellToWorld(pos(this.map.size.cols / 2, this.map.size.rows / 2));
+    const mid = cellToWorld(pos(this.map.size.cols / 2, this.map.size.rows / 2 - 1.4));
     this.rig.centerOnWorld(mid.x, mid.z, true);
   }
 
@@ -143,13 +151,28 @@ export class ArenaApp {
       const quality = pickQuality(v.cssWidth * v.cssHeight, v.dpr);
       this.renderer.resize(v.cssWidth, v.cssHeight, v.dpr, quality);
       this.rig.resize(v.cssWidth, v.cssHeight);
+      this.fitCamera(v.cssWidth, v.cssHeight);
       this.lighting.follow(this.rig);
     });
     const s = this.viewport.snapshot;
     this.renderer.resize(s.cssWidth, s.cssHeight, s.dpr, pickQuality(s.cssWidth * s.cssHeight, s.dpr));
     this.rig.resize(s.cssWidth, s.cssHeight);
+    this.fitCamera(s.cssWidth, s.cssHeight);
     this.lighting.follow(this.rig);
     this.loop.start();
+  }
+
+  /**
+   * 让整幅场地进画面。相机按短边看几格来定视野，所以换朝向要重算：
+   * 横屏短边是高、竖屏短边是宽 —— 两个方向分别求至少要看多少格，取大者。
+   * 竖直方向多留 4 格，底下那几格是给手牌让位的（不然蓝方核心被卡牌压住）。
+   */
+  private fitCamera(cssWidth: number, cssHeight: number): void {
+    const a = cssWidth / Math.max(1, cssHeight);
+    const wantRows = this.map.size.rows + 4;
+    const wantCols = this.map.size.cols + 2;
+    const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
+    this.rig.zoom = fit;
   }
 
   // ---------------------------------------------------------------- 出牌
@@ -241,11 +264,27 @@ export class ArenaApp {
       const model = b.kind === 'core' ? 'hall' : CARD_MODEL[b.kind];
       const group = this.library.create(model);
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
-      group.position.set(center.x, 0, center.z);
+      // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
+      // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
+      group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
       this.scene.add(group);
       if (b.kind === 'core') {
+        // 阵营色环：两颗核心用同一套模型，只靠头顶小水晶分不清，加一圈地环
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(Math.max(b.cols, b.rows) * 0.52, 0.09, 6, 24),
+          new THREE.MeshStandardMaterial({
+            color: sideColor(b.side),
+            emissive: sideColor(b.side),
+            emissiveIntensity: 0.6,
+            roughness: 0.5,
+            flatShading: true,
+          }),
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.06;
+        group.add(ring);
         const orb = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.34, 0),
+          new THREE.OctahedronGeometry(0.46, 0),
           new THREE.MeshStandardMaterial({
             color: CORE_COLOR[b.side],
             emissive: CORE_COLOR[b.side],
@@ -254,10 +293,10 @@ export class ArenaApp {
             flatShading: true,
           }),
         );
-        orb.position.y = 2.85;
+        orb.position.y = 3.05;
         group.add(orb);
         const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side));
-        bar.position.y = 3.5;
+        bar.position.y = 3.85;
         group.add(bar);
         group.userData['hpBar'] = bar;
       }
@@ -297,11 +336,14 @@ export class ArenaApp {
       const anim = entry.attackLeft > 0 ? def.attackAnim : moved > 0.004 ? 'run' : def.idleAnim;
       if (entry.dude) {
         entry.dude.moveTo(u.x, u.z);
+        // 脚必须踩在**地块表面**上：草地表面在 y=0.5，而 DudeSprite 自带的身高偏移是从 y=0 起算的。
+        // 老模式的 UnitView 一直有这一句，我这一版漏了 —— 表现就是整个小人埋掉半个身子。
+        entry.obj.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
         entry.dude.faceCamera(this.rig.yaw);
         entry.dude.play(anim, time);
       } else {
         // 没有素材包：锥体直接跟着走，玩法读数照常
-        entry.obj.position.set(u.x, DUDE.heightTiles / 2, u.z);
+        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       }
     }
     for (const [id, entry] of this.unitSprites) {
@@ -316,19 +358,25 @@ export class ArenaApp {
     // 没有素材包就退成一枚阵营色锥体：玩法照常，只是看不到像素小人
     if (!this.pack || !this.gallery) {
       const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.22, DUDE.heightTiles, 6),
+        new THREE.ConeGeometry(0.24, UNIT_HEIGHT, 6),
         new THREE.MeshStandardMaterial({ color: sideColor(u.side), flatShading: true, roughness: 0.7 }),
       );
-      cone.position.set(u.x, DUDE.heightTiles / 2, u.z);
+      cone.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       this.scene.add(cone);
       return { obj: cone, dude: null, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
     }
     const def = unitDef(u.defId);
     const style = this.styleOf(u.side, def.id, def);
     const { atlas, texture } = this.gallery.acquire(style, def.anims);
-    const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: DUDE.heightTiles });
+    const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
+    dude.mesh.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
     this.scene.add(dude.mesh);
     return { obj: dude.mesh, dude, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+  }
+
+  /** 这一点脚下的地表高度（草地 0.5）。所有贴地的件都读它，别各写各的。 */
+  private groundY(x: number, z: number): number {
+    return this.map.surfaceY(worldToCell(x, z));
   }
 
   /** 阵营色带：蓝方取蓝、红方取红，头脸从兵种自己的区间里挑。 */

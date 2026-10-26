@@ -33,6 +33,20 @@ export const ECONOMY = {
   millBonus: 2,
 };
 
+/**
+ * 对战模式的机位 —— 和老模式（45° 斜看）不一样，这里**正对**战场：
+ * 蓝在下、红在上，和皇室战争那种"上下对峙"的读图一致。
+ * 斜 45° 会把场地转成菱形，四角全是黑洞（截图里就是这个毛病）。
+ */
+export const ARENA_CAMERA = {
+  pitchDeg: 52,
+  yawDeg: 0,
+  /** 16 列宽的场地整幅入画，两侧留一点边 */
+  tilesAcross: 30,
+  minTilesAcross: 12,
+  maxTilesAcross: 44,
+};
+
 export const CORE = {
   /** 双方主城（核心）的格子尺寸与血量 */
   cols: 2,
@@ -59,6 +73,13 @@ export const MILL = { hp: 300 };
 
 /** 手牌：4 张，打出去之后进冷却再补一张新的。 */
 export const HAND = { size: 4, refillSeconds: 2.2 };
+
+/**
+ * 对战模式里小人的显示身高（格）。
+ * 比老模式（1.12）高一档：这一版兵少、镜头拉得更近，1.45 才看得清脸和动作。
+ * 注意这是**等比放大**（宽度跟着高），不是把贴图拉扁。
+ */
+export const UNIT_HEIGHT = 1.45;
 
 /** 兵的基础口径（秒/格沿用战斗内核那一套）。 */
 export const UNIT = {
