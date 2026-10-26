@@ -25,9 +25,9 @@ import { unitDef } from '@game/data/units';
 import { ModelLibrary } from '@game/models/registry';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
-import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
+import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
-import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, UNIT_HEIGHT } from './config';
+import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { makeBanner, shade, bannerSpot, type Banner } from './props';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
@@ -42,9 +42,14 @@ export interface ArenaAppOptions {
 }
 
 interface UnitSprite {
-  /** 场景里的那个东西：有素材包时是像素小人，没有时是一枚阵营色的小锥体 */
+  /** 场景里的那个东西：普通兵是像素小人，移动火炮是"推车 + 两个小人" */
   obj: THREE.Object3D;
   dude: DudeSprite | null;
+  /** 推车后面那两个人（只有移动火炮有） */
+  pushers: DudeSprite[];
+  siege: boolean;
+  /** 车头朝向（弧度，绕 y），只给移动火炮用 */
+  face: number;
   x: number;
   z: number;
   cooldown: number;
@@ -79,6 +84,7 @@ export class ArenaApp {
   private readonly flagMarks = new Map<number, THREE.Group>();
   private readonly styles = new Map<string, DudeStyle>();
   /** 会动的零件：磨坊的风车、炮塔的头、塔口的火光 */
+  private readonly ruinMeshes = new Map<number, THREE.Group>();
   private readonly parts = new Map<
     number,
     { sails?: THREE.Object3D; turret?: THREE.Object3D; flash?: THREE.Sprite; banner?: Banner }
@@ -338,6 +344,7 @@ export class ArenaApp {
     this.syncUnits(info.time, info.delta);
     this.syncFlags();
     this.syncShots(info.time);
+    this.syncRuins();
     this.syncParts(info.time);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
@@ -456,6 +463,17 @@ export class ArenaApp {
       if (justFired) entry.attackLeft = 0.5;
       else entry.attackLeft = Math.max(0, entry.attackLeft - dt);
 
+      if (entry.siege) {
+        // 车头朝着"这一步往哪走"；停下来就保持最后朝向
+        if (moved > 0.004) entry.face = -Math.atan2(u.z - entry.z, u.x - entry.x);
+        entry.obj.position.set(u.x, this.groundY(u.x, u.z), u.z);
+        entry.obj.rotation.y = entry.face;
+        for (const p of entry.pushers) {
+          p.faceCamera(this.rig.yaw);
+          p.play(moved > 0.004 ? 'run' : 'idle', time);
+        }
+        continue;
+      }
       const def = unitDef(u.defId);
       const anim = entry.attackLeft > 0 ? def.attackAnim : moved > 0.004 ? 'run' : def.idleAnim;
       if (entry.dude) {
@@ -487,15 +505,83 @@ export class ArenaApp {
       );
       cone.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       this.scene.add(cone);
-      return { obj: cone, dude: null, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
     }
+    if (statsOf(u.defId).siege) return this.makeSiege(u);
     const def = unitDef(u.defId);
     const style = this.styleOf(u.side, def.id, def);
     const { atlas, texture } = this.gallery.acquire(style, def.anims);
     const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
     dude.mesh.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
     this.scene.add(dude.mesh);
-    return { obj: dude.mesh, dude, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+  }
+
+  /**
+   * 移动火炮：一辆木车 + 车上那门 3D 炮 + 车尾两个推车的小人。
+   * 两个小人用素材包里的普通杂役（`worker`），脚步跟着"有没有在动"切 run/idle。
+   */
+  private makeSiege(u: ArenaUnit): UnitSprite {
+    const group = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 });
+    const iron = new THREE.MeshStandardMaterial({ color: 0x3b4250, flatShading: true, roughness: 0.55, metalness: 0.35 });
+
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.14, 0.62), wood);
+    bed.position.y = 0.34;
+    bed.castShadow = true;
+    group.add(bed);
+    for (const sx of [-0.3, 0.3]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.1, 10), iron);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(sx, 0.2, 0);
+      wheel.castShadow = true;
+      group.add(wheel);
+    }
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.7, 8), iron);
+    barrel.rotation.z = -Math.PI / 2;
+    barrel.position.set(0.12, 0.52, 0);
+    barrel.castShadow = true;
+    const breech = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.24), iron);
+    breech.position.set(-0.24, 0.5, 0);
+    group.add(barrel, breech);
+    // 阵营色小旗插在车尾：一眼分敌我
+    const mark = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.26, 0.1),
+      new THREE.MeshStandardMaterial({
+        color: sideColor(u.side),
+        emissive: sideColor(u.side),
+        emissiveIntensity: 0.5,
+        flatShading: true,
+      }),
+    );
+    mark.position.set(-0.42, 0.56, 0);
+    group.add(mark);
+
+    // 两个推车的小人：站在车尾两侧
+    const pushers: DudeSprite[] = [];
+    const pusherDef = unitDef('worker');
+    const style = this.styleOf(u.side, pusherDef.id, pusherDef);
+    const { atlas, texture } = this.gallery!.acquire(style, pusherDef.anims);
+    for (const dz of [-0.26, 0.26]) {
+      const dude = new DudeSprite(this.pack!, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT * 0.85 });
+      dude.mesh.position.set(-0.62, UNIT_HEIGHT * 0.85 * 0.5, dz);
+      group.add(dude.mesh);
+      pushers.push(dude);
+    }
+
+    group.position.set(u.x, this.groundY(u.x, u.z), u.z);
+    this.scene.add(group);
+    return {
+      obj: group,
+      dude: null,
+      pushers,
+      siege: true,
+      face: u.side === 'blue' ? 0 : Math.PI,
+      x: u.x,
+      z: u.z,
+      cooldown: u.cooldown,
+      attackLeft: 0,
+    };
   }
 
   /** 这一点脚下的地表高度（草地 0.5）。所有贴地的件都读它，别各写各的。 */
@@ -592,6 +678,32 @@ export class ArenaApp {
       this.shotMeshes.delete(id);
     }
     void time;
+  }
+
+  /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后自己塌平（最后几秒淡出）。 */
+  private syncRuins(): void {
+    const live = new Set<number>();
+    for (const r of this.world.ruins) {
+      live.add(r.id);
+      let group = this.ruinMeshes.get(r.id);
+      if (!group) {
+        group = makeRuin(r.cols, r.rows);
+        const center = cellToWorld(pos(r.col + r.cols / 2 - 0.5, r.row + r.rows / 2 - 0.5));
+        group.position.set(center.x, this.groundY(center.x, center.z), center.z);
+        this.scene.add(group);
+        this.ruinMeshes.set(r.id, group);
+      }
+      const fade = r.ttl < RUIN.fadeSeconds ? Math.max(0, r.ttl / RUIN.fadeSeconds) : 1;
+      group.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (m && 'opacity' in m) m.opacity = fade;
+      });
+    }
+    for (const [id, group] of this.ruinMeshes) {
+      if (live.has(id)) continue;
+      this.scene.remove(group);
+      this.ruinMeshes.delete(id);
+    }
   }
 
   /** 场地中心（导演的"回中"目标）。 */
@@ -802,6 +914,45 @@ function makeBall(radius: number): THREE.Mesh {
   );
   mesh.castShadow = true;
   return mesh;
+}
+
+/** 废墟：几块歪斜的深色碎石 + 一根断梁，铺满原地块。 */
+function makeRuin(cols: number, rows: number): THREE.Group {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x4a443a,
+    roughness: 0.98,
+    flatShading: true,
+    transparent: true,
+    opacity: 1,
+  });
+  // 碎石比断梁更像"塌了"：四块大小不一的深石 + 一堆浅色碎渣 + 一根短梁
+  const rubble: [number, number, number, number, number][] = [
+    [0.75, 0.26, 0.6, 1.25, 0.12],
+    [0.5, 0.36, 0.45, 4.1, -0.28],
+    [0.38, 0.18, 0.34, 2.6, 0.34],
+    [0.3, 0.14, 0.28, 5.4, -0.05],
+  ];
+  for (const [w, h, d, ang, dz] of rubble) {
+    const block = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    block.position.set(Math.cos(ang) * cols * 0.18, h / 2, dz * rows * 0.2);
+    block.rotation.y = ang;
+    block.castShadow = true;
+    group.add(block);
+  }
+  // 碎渣：一小堆浅色颗粒，压住"这是废墟"的读图
+  const dust = new THREE.Mesh(
+    new THREE.ConeGeometry(cols * 0.42, 0.16, 8),
+    new THREE.MeshStandardMaterial({ color: 0x6b6255, roughness: 1, flatShading: true, transparent: true, opacity: 1 }),
+  );
+  dust.position.y = 0.08;
+  group.add(dust);
+  // 一根断梁，斜搭在碎堆上
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(cols * 0.5, 0.08, 0.12), mat);
+  beam.position.set(-cols * 0.08, 0.22, rows * 0.16);
+  beam.rotation.z = 0.22;
+  group.add(beam);
+  return group;
 }
 
 function makeFlag(side: Side, selected: boolean): THREE.Group {

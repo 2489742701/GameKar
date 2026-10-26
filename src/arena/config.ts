@@ -100,7 +100,7 @@ export const UNIT = {
   moveStep: 0.02,
 };
 
-export type CardKind = 'building' | 'squad';
+export type CardKind = 'building' | 'squad' | 'siege';
 
 export interface ArenaCard {
   id: string;
@@ -162,6 +162,14 @@ export const CARDS: ArenaCard[] = [
     squad: [{ unitId: 'archer', count: 3 }],
   },
   {
+    id: 'mobileCannon',
+    name: '移动火炮',
+    blurb: '两个小人推着走，射程比塔还远。只拆建筑不打兵，慢、脆、贵，但它能白嫖塔。',
+    kind: 'siege',
+    cost: 16,
+    squad: [{ unitId: 'mobileCannon', count: 1 }],
+  },
+  {
     id: 'orcs',
     name: '兽人',
     blurb: '两个兽人，血厚、冲撞会把对面顶开。',
@@ -209,3 +217,28 @@ export const FACTION_TINT = {
 
 /** 单位表的形状校验用：卡池里提到的兵种必须真的存在。 */
 export type ArenaUnitRef = Pick<UnitDef, 'id' | 'name' | 'hp' | 'attack' | 'defense' | 'range' | 'speed'>;
+
+/**
+ * 移动火炮（用户 2026-10-27 点名要的"工程设备"）：
+ * 两个小人在后面推，车上架一门 3D 火炮，**射程比防御塔还远** —— 就是拿来白嫖塔的。
+ * 代价写在这一行里：贵（16 金）、慢（0.5 格/秒）、脆（90 血）、装填很久（2.8 秒），
+ * 而且**只拆建筑不打兵**，所以对面放一队兵出来就能把它吃掉。
+ */
+export const MOBILE = {
+  hp: 90,
+  speed: 0.5,
+  range: 7.2,
+  damage: 26,
+  cooldown: 2.8,
+  /** 索敌半径 = 射程（它只关心看得见的建筑） */
+  sight: 8,
+  /** 两个推车的人：位置相对车尾，纯视觉 */
+  pushers: 2,
+};
+
+/** 废墟：被拆掉的建筑在原地留一堆碎石，过这么久自己塌平。 */
+export const RUIN = {
+  seconds: 14,
+  /** 最后几秒开始淡出 */
+  fadeSeconds: 2.5,
+};

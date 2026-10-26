@@ -11,7 +11,7 @@
  */
 
 import { Random } from '@engine/math/Random';
-import { UNITS, damageOf, unitDef } from '@game/data/units';
+import { damageOf, unitDef } from '@game/data/units';
 import {
   AI,
   BARRACKS,
@@ -22,6 +22,8 @@ import {
   NO_BUILD,
   FIELD,
   HAND,
+  MOBILE,
+  RUIN,
   TOWER,
   cardById,
   type ArenaCard,
@@ -56,6 +58,49 @@ export interface ArenaBuilding {
   shotsMuzzle: number;
 }
 
+export interface UnitStats {
+  hp: number;
+  speed: number;
+  range: number;
+  damage: number;
+  cooldown: number;
+  sight: number;
+  defense: number;
+  /** 只打建筑（移动火炮就是这么白嫖塔的） */
+  buildingsOnly: boolean;
+  /** 画成"推车 + 两个小人" */
+  siege: boolean;
+}
+
+/** 一个兵种的口径。兵走 UNITS 表，移动火炮走 MOBILE 表 —— 判据只在这里分一次。 */
+export function statsOf(defId: string): UnitStats {
+  if (defId === 'mobileCannon') {
+    return {
+      hp: MOBILE.hp,
+      speed: MOBILE.speed,
+      range: MOBILE.range,
+      damage: MOBILE.damage,
+      cooldown: MOBILE.cooldown,
+      sight: MOBILE.sight,
+      defense: 0,
+      buildingsOnly: true,
+      siege: true,
+    };
+  }
+  const d = unitDef(defId);
+  return {
+    hp: d.hp,
+    speed: d.speed,
+    range: d.range,
+    damage: d.attack,
+    cooldown: d.cooldown,
+    sight: d.sight,
+    defense: d.defense,
+    buildingsOnly: false,
+    siege: false,
+  };
+}
+
 export interface ArenaUnit {
   id: number;
   side: Side;
@@ -81,6 +126,19 @@ export interface ArenaShot {
   /** 0..1 飞行进度 */
   t: number;
   seconds: number;
+}
+
+export interface ArenaRuin {
+  id: number;
+  kind: string;
+  side: Side;
+  col: number;
+  row: number;
+  cols: number;
+  rows: number;
+  /** 还剩几秒（到 0 就从名单里消失） */
+  ttl: number;
+  total: number;
 }
 
 export type Outcome = 'playing' | 'win' | 'lose';
@@ -110,6 +168,8 @@ export class ArenaWorld {
   units: ArenaUnit[] = [];
   /** 在飞的弹丸（纯视觉，不参与结算） */
   shots: ArenaShot[] = [];
+  /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后塌平 */
+  ruins: ArenaRuin[] = [];
 
   outcome: Outcome = 'playing';
   elapsed = 0;
@@ -285,8 +345,7 @@ export class ArenaWorld {
     let i = 0;
     for (const part of squad) {
       for (let n = 0; n < part.count; n++) {
-        const def = UNITS[part.unitId];
-        if (!def) continue;
+        const st = statsOf(part.unitId);
         // 以落点为中心散开：一格塞不下三个，错开成 3×3 的小方阵
         const dc = (i % 3) - 1;
         const dr = Math.floor(i / 3) - 1;
@@ -296,8 +355,8 @@ export class ArenaWorld {
           defId: part.unitId,
           x: col + 0.5 + dc * 0.32,
           z: row + 0.5 + dr * 0.32,
-          hp: def.hp,
-          maxHp: def.hp,
+          hp: st.hp,
+          maxHp: st.hp,
           cooldown: 0,
           stun: 0,
           order: null,
@@ -327,6 +386,8 @@ export class ArenaWorld {
 
     this.tickBuildings(dt);
     this.tickShots(dt);
+    for (const r of this.ruins) r.ttl -= dt;
+    this.ruins = this.ruins.filter((r) => r.ttl > 0);
     this.tickUnits(dt);
     this.tickAi(dt);
     this.checkOutcome();
@@ -363,7 +424,12 @@ export class ArenaWorld {
        * 而弓箭手在边缘外 3.6 格就能打到它 —— 差 0.7 格，正好白嫖整座炮塔。
        */
       const edge = Math.max(b.cols, b.rows) / 2;
-      const target = this.nearestEnemyUnit(b.side, c.x, c.z, spec.range + edge);
+      /**
+       * 塔的目标不再是"只有兵"：**敌方的塔/楼也打**（用户 2026-10-27：
+       * "防御性建筑之间互相也会攻击，只要瞄准到了"）。取"最近的敌对目标"，
+       * 兵和建筑放在同一个池子里比距离 —— 打建筑时按占地边缘算，和兵那套同一口径。
+       */
+      const target = this.nearestTowerTarget(b, c.x, c.z, spec.range + edge);
       if (!target) continue;
       b.fireIn = spec.interval;
       b.aim = Math.atan2(target.z - c.z, target.x - c.x);
@@ -384,8 +450,10 @@ export class ArenaWorld {
           if (u.side === b.side || u.hp <= 0) continue;
           if (Math.hypot(u.x - target.x, u.z - target.z) <= spec.splash) this.hurtUnit(u, dmg);
         }
-      } else {
-        this.hurtUnit(target, dmg);
+      } else if (target.unit) {
+        this.hurtUnit(target.unit, dmg);
+      } else if (target.building) {
+        this.hurtBuilding(target.building, dmg);
       }
     }
     this.units = this.units.filter((u) => u.hp > 0);
@@ -403,17 +471,17 @@ export class ArenaWorld {
   private tickUnits(dt: number): void {
     for (const u of this.units) {
       if (u.hp <= 0) continue;
-      const def = unitDef(u.defId);
+      const st = statsOf(u.defId);
       u.cooldown = Math.max(0, u.cooldown - dt);
       u.stun = Math.max(0, u.stun - dt);
       if (u.stun > 0) continue;
 
-      const foe = this.nearestHostile(u, def.sight, def.range);
-      if (foe && foe.dist <= def.range) {
+      const foe = this.nearestHostile(u, st.sight, st.buildingsOnly);
+      if (foe && foe.dist <= st.range) {
         if (u.cooldown > 0) continue;
-        u.cooldown = def.cooldown;
-        if (foe.unit) this.hurtUnit(foe.unit, def.attack);
-        else if (foe.building) this.hurtBuilding(foe.building, def.attack);
+        u.cooldown = st.cooldown;
+        if (foe.unit) this.hurtUnit(foe.unit, st.damage);
+        else if (foe.building) this.hurtBuilding(foe.building, st.damage);
         continue;
       }
 
@@ -424,7 +492,7 @@ export class ArenaWorld {
         const d = Math.hypot(dx, dz);
         if (d <= 0.35) u.order = null;
         else {
-          const step = Math.min(d, def.speed * dt);
+          const step = Math.min(d, st.speed * dt);
           u.x += (dx / d) * step;
           u.z += (dz / d) * step;
           continue;
@@ -439,7 +507,7 @@ export class ArenaWorld {
       const tz = foe ? foe.z : gz;
       const dist = Math.hypot(tx - u.x, tz - u.z);
       if (dist < 0.001) continue;
-      const step = Math.min(dist, def.speed * dt);
+      const step = Math.min(dist, st.speed * dt);
       u.x += ((tx - u.x) / dist) * step;
       u.z += ((tz - u.z) / dist) * step;
     }
@@ -450,10 +518,11 @@ export class ArenaWorld {
   private nearestHostile(
     u: ArenaUnit,
     sight: number,
-    _range: number,
+    buildingsOnly: boolean,
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
-    for (const other of this.units) {
+    // 移动火炮只拆建筑：兵从它旁边走过去它也不理
+    for (const other of buildingsOnly ? [] : this.units) {
       if (other.side === u.side || other.hp <= 0) continue;
       const d = Math.hypot(other.x - u.x, other.z - u.z);
       if (d <= sight && (!best || d < best.dist)) best = { dist: d, x: other.x, z: other.z, unit: other };
@@ -470,23 +539,30 @@ export class ArenaWorld {
     return best;
   }
 
-  private nearestEnemyUnit(side: Side, x: number, z: number, range: number): ArenaUnit | null {
-    let best: ArenaUnit | null = null;
-    let bestD = range;
+  /** 塔的目标池：敌兵与敌方建筑放在一起比距离（建筑按占地边缘算）。 */
+  private nearestTowerTarget(
+    tower: ArenaBuilding,
+    x: number,
+    z: number,
+    range: number,
+  ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
+    let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
     for (const u of this.units) {
-      if (u.side === side || u.hp <= 0) continue;
+      if (u.side === tower.side || u.hp <= 0) continue;
       const d = Math.hypot(u.x - x, u.z - z);
-      if (d <= bestD) {
-        bestD = d;
-        best = u;
-      }
+      if (d <= range && (!best || d < best.dist)) best = { dist: d, x: u.x, z: u.z, unit: u };
+    }
+    for (const other of this.buildings.values()) {
+      if (other.side === tower.side || other.id === tower.id) continue;
+      const c = this.buildingCenter(other);
+      const edge = Math.max(0, Math.hypot(c.x - x, c.z - z) - Math.max(other.cols, other.rows) / 2);
+      if (edge <= range && (!best || edge < best.dist)) best = { dist: edge, x: c.x, z: c.z, building: other };
     }
     return best;
   }
 
   private hurtUnit(u: ArenaUnit, attack: number): void {
-    const def = unitDef(u.defId);
-    u.hp -= damageOf(attack, def.defense);
+    u.hp -= damageOf(attack, statsOf(u.defId).defense);
     if (u.hp < 0) u.hp = 0;
   }
 
@@ -495,6 +571,18 @@ export class ArenaWorld {
     if (b.hp < 0) b.hp = 0;
     if (b.hp > 0) return;
     this.buildings.delete(b.id);
+    // 留一堆废墟，过一会儿自己塌平（用户：被摧毁的地方要留废墟，等一段时间才消失）
+    this.ruins.push({
+      id: this.nextId++,
+      kind: b.kind,
+      side: b.side,
+      col: b.col,
+      row: b.row,
+      cols: b.cols,
+      rows: b.rows,
+      ttl: RUIN.seconds,
+      total: RUIN.seconds,
+    });
   }
 
   // ---------------------------------------------------------------- AI

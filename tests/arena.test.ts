@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld } from '@arena/ArenaWorld';
-import { BARRACKS, CARDS, CORE, ECONOMY, FIELD, HAND } from '@arena/config';
+import { BARRACKS, CARDS, CORE, ECONOMY, FIELD, HAND, RUIN } from '@arena/config';
 
 function run(world: ArenaWorld, seconds: number, each?: (t: number) => void): void {
   const steps = Math.round(seconds / 0.05);
@@ -344,5 +344,75 @@ describe('中场黄区（禁建带）', () => {
       (b) => b.col + b.cols > FIELD.midCol - 1 && b.col < FIELD.midCol + 2,
     );
     expect(band).toHaveLength(0);
+  });
+});
+
+describe('塔互殴 / 移动火炮 / 废墟', () => {
+  it('两座塔都在射程里时会互相拆（不再只打兵）', () => {
+    const world = new ArenaWorld({ seed: 51 });
+    world.gold.blue = 20;
+    world.gold.red = 20;
+    give(world, 'arrowTower');
+    expect(world.playCard('blue', 0, 17, 10).ok).toBe(true);
+    give(world, 'arrowTower');
+    expect(world.playCard('red', 0, 23, 10).ok).toBe(true);
+    const [blue, red] = [...world.buildings.values()].filter((b) => b.kind === 'arrowTower');
+    const hpB = blue!.hp;
+    const hpR = red!.hp;
+    // 清掉双方出的兵，只留两座塔互相打
+    run(world, 12, () => {
+      world.units = [];
+    });
+    expect(blue!.hp).toBeLessThan(hpB);
+    expect(red!.hp).toBeLessThan(hpR);
+  });
+
+  it('移动火炮射程比塔远：站在塔射程外能把塔拆掉，自己不掉血', () => {
+    const world = new ArenaWorld({ seed: 52 });
+    world.gold.red = 20;
+    give(world, 'arrowTower');
+    expect(world.playCard('red', 0, 26, 9).ok).toBe(true);
+    const tower = [...world.buildings.values()].find((b) => b.kind === 'arrowTower')!;
+    const cx = tower.col + tower.cols / 2;
+    const cz = tower.row + tower.rows / 2;
+    // 摆在塔中心左边 7.0 格：塔的边缘射程只到 7.0（5.5+1.5），这一格刚好打不到
+    world.units.push({
+      id: 9100,
+      side: 'blue',
+      defId: 'mobileCannon',
+      x: cx - 7.0,
+      z: cz,
+      hp: 90,
+      maxHp: 90,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+    });
+    const hp0 = tower.hp;
+    run(world, 10, () => {
+      world.units = world.units.filter((u) => u.id === 9100);
+    });
+    const me = world.units.find((u) => u.id === 9100);
+    expect(tower.hp).toBeLessThan(hp0); // 塔挨打了
+    if (me) expect(me.hp).toBe(me.maxHp); // 火炮一滴血没掉（白嫖）
+  });
+
+  it('被拆掉的楼留废墟，过一段时间自己塌平', () => {
+    const world = new ArenaWorld({ seed: 53 });
+    world.gold.blue = 20;
+    give(world, 'mill');
+    expect(world.playCard('blue', 0, 6, 11).ok).toBe(true);
+    const mill = [...world.buildings.values()].find((b) => b.kind === 'mill')!;
+    (world as unknown as { hurtBuilding: (b: unknown, n: number) => void }).hurtBuilding(mill, 99999);
+    expect(world.buildings.has(mill.id)).toBe(false);
+    expect(world.ruins).toHaveLength(1);
+    const ruin = world.ruins[0]!;
+    expect(ruin.col).toBe(mill.col);
+    expect(ruin.ttl).toBeCloseTo(RUIN.seconds, 5);
+
+    run(world, RUIN.seconds - 1);
+    expect(world.ruins).toHaveLength(1); // 还没到点
+    run(world, 2);
+    expect(world.ruins).toHaveLength(0); // 塌平了
   });
 });
