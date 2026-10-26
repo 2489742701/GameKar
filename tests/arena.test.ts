@@ -293,3 +293,20 @@ describe('指挥与射程口径', () => {
     expect(died || minHp < hp0).toBe(true);
   });
 });
+
+describe('炮塔朝向', () => {
+  it('默认朝对面：蓝朝右（0 弧度）、红朝左（π）', () => {
+    const world = new ArenaWorld({ seed: 31 });
+    world.gold.blue = 20;
+    world.gold.red = 20;
+    give(world, 'arrowTower');
+    expect(world.playCard('blue', 0, 6, 12).ok).toBe(true);
+    give(world, 'arrowTower');
+    expect(world.playCard('red', 0, 24, 12).ok).toBe(true);
+    const towers = [...world.buildings.values()].filter((b) => b.kind === 'arrowTower');
+    const blue = towers.find((b) => b.side === 'blue')!;
+    const red = towers.find((b) => b.side === 'red')!;
+    expect(blue.aim).toBe(0);
+    expect(Math.abs(red.aim)).toBeCloseTo(Math.PI, 6);
+  });
+});
