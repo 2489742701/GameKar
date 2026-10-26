@@ -24,43 +24,6 @@ export function shade(hex: number, factor: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
-export interface Plinth {
-  group: THREE.Group;
-}
-
-/**
- * 石台：底色深石 + 阵营色台阶 + 亮边。
- * 尺寸用**格**给（调用方传建筑占地），本件内部按占地铺满。
- */
-export function makePlinth(cols: number, rows: number, side: Side): Plinth {
-  const group = new THREE.Group();
-  const tint = sideColor(side);
-  const dark = new THREE.MeshStandardMaterial({ color: 0x4a4038, flatShading: true, roughness: 0.95 });
-  const step = new THREE.MeshStandardMaterial({ color: shade(tint, 0.62), flatShading: true, roughness: 0.85 });
-  const rim = new THREE.MeshStandardMaterial({
-    color: tint,
-    emissive: tint,
-    emissiveIntensity: 0.45,
-    flatShading: true,
-    roughness: 0.6,
-  });
-
-  const bottom = new THREE.Mesh(new THREE.BoxGeometry(cols * 0.98, 0.1, rows * 0.98), dark);
-  bottom.position.y = 0.05;
-  bottom.receiveShadow = true;
-
-  const upper = new THREE.Mesh(new THREE.BoxGeometry(cols * 0.86, 0.1, rows * 0.86), step);
-  upper.position.y = 0.15;
-  upper.receiveShadow = true;
-
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(cols * 0.9, 0.035, rows * 0.9), rim);
-  edge.position.y = 0.2;
-  edge.receiveShadow = true;
-
-  group.add(bottom, upper, edge);
-  return { group };
-}
-
 export interface Banner {
   group: THREE.Group;
   /** 每帧喂时间，布面自己摆 */
@@ -134,8 +97,9 @@ export function makeBanner(side: Side, top: number, width = 0.66, height = 1.05)
  * 位置/高度都用**格**，因为调用方会把它放进反向缩放的 ui 组里。
  */
 export function bannerSpot(kind: string, cols: number, rows: number): { x: number; z: number; top: number } {
-  const z = Math.max(0.9, rows * 0.32);
-  const x = -cols * 0.2;
+  // 模型放大 2.2 倍之后半深约 1.1 格，旗子要挂在墙**外面**，否则整面被楼吞掉
+  const z = Math.max(1.2, rows * 0.4);
+  const x = -cols * 0.26;
   switch (kind) {
     case 'core':
       return { x, z: z + 0.1, top: 2.7 };

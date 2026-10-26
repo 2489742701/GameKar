@@ -190,7 +190,7 @@ export const BUILDING_SPECS = {
 } as const;
 
 /** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */
-export const BUILDING_SCALE = 1.75;
+export const BUILDING_SCALE = 2.2;
 
 export type BuildingKind = keyof typeof BUILDING_SPECS;
 

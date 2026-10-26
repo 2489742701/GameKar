@@ -28,7 +28,7 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, UNIT_HEIGHT } from './config';
-import { makeBanner, makePlinth, shade, bannerSpot, type Banner } from './props';
+import { makeBanner, shade, bannerSpot, type Banner } from './props';
 import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -369,9 +369,9 @@ export class ArenaApp {
       const ui = new THREE.Group();
       ui.scale.setScalar(1 / BUILDING_SCALE);
       group.add(ui);
-      // 石台 + 旗：都放进反向缩放的 ui 组，所以尺寸直接用"格"。
-      // （之前贴在脚下那块纯色方板被用户否了：像地毯，不像建筑的一部分）
-      ui.add(makePlinth(b.cols, b.rows, b.side).group);
+      // 旗：放进反向缩放的 ui 组，所以尺寸直接用"格"。
+      // 石台整个拿掉了（用户：不要那个地基，在地皮上变颜色丑死了）——
+      // 现在阵营色只出现在"建筑自己的零件"上：炮塔四角、磨坊顶盖、旗面。
       const spot = bannerSpot(b.kind, b.cols, b.rows);
       const banner = makeBanner(b.side, spot.top);
       banner.group.position.set(spot.x, 0.2, spot.z);
@@ -731,15 +731,27 @@ function makeCannon(side: Side): { group: THREE.Group; sails?: THREE.Object3D; t
   // 台面：阵营色（用户要求"模型上的台面上有颜色"，不是在地上贴一块）
   const deck = new THREE.Mesh(
     new THREE.BoxGeometry(0.96, 0.14, 0.96),
-    new THREE.MeshStandardMaterial({
-      color: shade(sideColor(side), 0.75),
-      emissive: sideColor(side),
-      emissiveIntensity: 0.25,
-      flatShading: true,
-      roughness: 0.7,
-    }),
+    new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.85 }),
   );
   deck.position.y = 0.79;
+
+  // 四个**防撞角**：阵营色只落在这四个小方块上（用户："4 个角变颜色就行了"）。
+  // 比给整个底座上色低调得多，但远远看过去仍然一眼能分出是谁的炮塔。
+  const bumperMat = new THREE.MeshStandardMaterial({
+    color: sideColor(side),
+    emissive: sideColor(side),
+    emissiveIntensity: 0.5,
+    flatShading: true,
+    roughness: 0.55,
+  });
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const bumper = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.3, 0.16), bumperMat);
+      bumper.position.set(sx * 0.4, 0.86, sz * 0.4);
+      bumper.castShadow = true;
+      group.add(bumper);
+    }
+  }
 
   const turret = new THREE.Group();
   turret.position.y = 0.92;
