@@ -107,6 +107,8 @@ export class ArenaApp {
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Object3D>();
+  /** 已经放过治疗圈的 id（world.heals 是逐帧还在的事件，别重复放） */
+  private readonly seenHeals = new Set<number>();
   readonly director = new ArenaDirector();
   private fitZoom = ARENA_CAMERA.tilesAcross;
   /** 当前这一笔拖动是从场地上开始的吗（真=平移，假=转视角） */
@@ -363,6 +365,7 @@ export class ArenaApp {
     this.syncUnits(info.time, info.delta);
     this.syncFlags();
     this.syncShots(info.time);
+    this.syncHeals();
     this.syncRuins();
     this.syncParts(info.time);
     this.damage.update(info.delta);
@@ -844,14 +847,30 @@ export class ArenaApp {
       const hit = mesh.userData['hit'] as { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' } | undefined;
       if (hit) this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
       this.scene.remove(mesh);
-      // 弹丸可能是 Group（箭）：逐个几何体释放
-      mesh.traverse((o) => {
-        const part = o as THREE.Mesh;
-        if (part.geometry) part.geometry.dispose();
-      });
+      // 箭的几何体/材质是全场共用的（ARROW_GEO/ARROW_MAT），不能 dispose；
+      // 炮弹和法术弹是每次新建的，要释放。
+      if (hit?.ammo !== 'arrow') {
+        mesh.traverse((o) => {
+          const part = o as THREE.Mesh;
+          if (part.geometry) part.geometry.dispose();
+        });
+      }
       this.shotMeshes.delete(id);
     }
     void time;
+  }
+
+  /** 牧师回血：世界只报"谁在哪回了血"，这里放一圈绿环。 */
+  private syncHeals(): void {
+    const live = new Set<number>();
+    for (const h of this.world.heals) {
+      live.add(h.id);
+      if (this.seenHeals.has(h.id)) continue;
+      this.seenHeals.add(h.id);
+      const y = this.map.surfaceY(worldToCell(h.x, h.z)) + 0.9;
+      this.fx.healPulse(h.x, h.z, y);
+    }
+    for (const id of this.seenHeals) if (!live.has(id)) this.seenHeals.delete(id);
   }
 
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后自己塌平（最后几秒淡出）。 */
@@ -976,17 +995,28 @@ function makeNeedLabel(): THREE.Sprite {
 /** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
 const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95, ballista: 1.15, unit: 1.1 } as const;
 
-/** 一支箭：杆 + 三角箭头 + 两片尾羽，沿 +Z 指向前方。 */
+/**
+ * 一支箭：杆 + 三角箭头 + 两片尾羽，沿 +Z 指向前方。
+ * 几何体和材质**全场共用**：射手一多，每帧都在造箭，逐个 dispose 会反复重建几何体。
+ */
+const ARROW_GEO = {
+  shaft: new THREE.BoxGeometry(0.035, 0.035, 0.5),
+  head: new THREE.ConeGeometry(0.06, 0.14, 4),
+  tail: new THREE.BoxGeometry(0.12, 0.02, 0.14),
+};
+const ARROW_MAT = {
+  wood: new THREE.MeshStandardMaterial({ color: 0x8a5f2c, flatShading: true, roughness: 0.9 }),
+  steel: new THREE.MeshStandardMaterial({ color: 0xd9d9e3, flatShading: true, roughness: 0.4 }),
+  fletch: new THREE.MeshStandardMaterial({ color: 0xe6d8b4, flatShading: true, roughness: 0.9 }),
+};
+
 function makeArrow(): THREE.Group {
   const group = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5f2c, flatShading: true, roughness: 0.9 });
-  const steel = new THREE.MeshStandardMaterial({ color: 0xd9d9e3, flatShading: true, roughness: 0.4 });
-  const fletch = new THREE.MeshStandardMaterial({ color: 0xe6d8b4, flatShading: true, roughness: 0.9 });
-  const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.5), wood);
-  const head = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.14, 4), steel);
+  const shaft = new THREE.Mesh(ARROW_GEO.shaft, ARROW_MAT.wood);
+  const head = new THREE.Mesh(ARROW_GEO.head, ARROW_MAT.steel);
   head.rotation.x = Math.PI / 2;
   head.position.z = 0.31;
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.02, 0.14), fletch);
+  const tail = new THREE.Mesh(ARROW_GEO.tail, ARROW_MAT.fletch);
   tail.position.z = -0.22;
   group.add(shaft, head, tail);
   return group;

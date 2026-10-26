@@ -135,6 +135,8 @@ export interface ArenaUnit {
   order: { x: number; z: number } | null;
   /** 绕障方向：撞墙时先往这一侧偏（±1）。固定住就不会在墙角左右抖 */
   detour?: 1 | -1;
+  /** 牧师的下一次回血倒计时（只有治疗兵种有） */
+  healIn?: number;
 }
 
 /** 一发"看得见的"弹丸。伤害已结算，这里只是让玩家看到"从塔顶飞过去"的那一下。 */
@@ -194,6 +196,8 @@ export class ArenaWorld {
   units: ArenaUnit[] = [];
   /** 在飞的弹丸（纯视觉，不参与结算） */
   shots: ArenaShot[] = [];
+  /** 回血的视觉事件（纯装饰，到点自己消失） */
+  heals: { id: number; x: number; z: number; ttl: number }[] = [];
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后塌平 */
   ruins: ArenaRuin[] = [];
 
@@ -389,6 +393,7 @@ export class ArenaWorld {
           stun: 0,
           order: null,
           detour: uid % 2 === 0 ? 1 : -1,
+          healIn: part.unitId === 'mobileCannon' ? undefined : unitDef(part.unitId).special?.kind === 'heal' ? unitDef(part.unitId).special!.every : undefined,
         });
         i++;
       }
@@ -423,18 +428,22 @@ export class ArenaWorld {
     this.tickShots(dt);
     for (const r of this.ruins) r.ttl -= dt;
     this.ruins = this.ruins.filter((r) => r.ttl > 0);
+    for (const h of this.heals) h.ttl -= dt;
+    this.heals = this.heals.filter((h) => h.ttl > 0);
     this.tickUnits(dt);
     this.tickAi(dt);
     this.checkOutcome();
   }
 
   private tickBuildings(dt: number): void {
+    // 一次 tick 只算一遍"哪些兵营配齐了后勤"：以前每座兵营各算一遍是 O(n²)
+    const support = { blue: this.supportedIds('blue'), red: this.supportedIds('red') };
     for (const b of this.buildings.values()) {
       if (b.kind === 'core') continue;
       if (b.kind === 'barracks') {
         // 用户 2026-10-27：1 座兵营要配 1 座磨坊 + 1 座民居，否则不出兵。
         // 后勤断了连计时也停：补上之后从 0 开始，不会一配齐就蹦一个兵出来。
-        if (!this.supportedIds(b.side).has(b.id)) {
+        if (!support[b.side].has(b.id)) {
           b.timer = 0;
           continue;
         }
@@ -517,6 +526,25 @@ export class ArenaWorld {
       u.cooldown = Math.max(0, u.cooldown - dt);
       u.stun = Math.max(0, u.stun - dt);
       if (u.stun > 0) continue;
+
+      // 牧师：每 spec.every 秒给身边 radius 格内的自己人回 amount 血（兵种表里的 special）
+      if (u.defId === 'priest') {
+        const spec = unitDef('priest').special!;
+        u.healIn = (u.healIn ?? spec.every) - dt;
+        if (u.healIn <= 0) {
+          u.healIn = spec.every;
+          const radius = spec.radius ?? 3;
+          const amount = spec.amount ?? 6;
+          let healed = 0;
+          for (const ally of this.units) {
+            if (ally.side !== u.side || ally.hp <= 0 || ally.hp >= ally.maxHp) continue;
+            if (Math.hypot(ally.x - u.x, ally.z - u.z) > radius) continue;
+            ally.hp = Math.min(ally.maxHp, ally.hp + amount);
+            healed += 1;
+          }
+          if (healed > 0) this.heals.push({ id: this.nextId++, x: u.x, z: u.z, ttl: 0.6 });
+        }
+      }
 
       const foe = this.nearestHostile(u, st.sight, st.buildingsOnly, st.unitsOnly);
       if (foe && foe.dist <= st.range) {

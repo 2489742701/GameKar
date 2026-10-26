@@ -308,6 +308,7 @@ export const UNITS: Record<string, UnitDef> = {
     anims: ['idle', 'run', 'staff', 'hurt', 'die'],
     headBands: [[319, 332], [164, 199]],
     faceBand: [60, 102],
+    heightTiles: 1.9,
     trainSeconds: 0,
     stockInitial: 0,
   }),

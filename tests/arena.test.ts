@@ -742,3 +742,43 @@ describe('移动弩箭：只打兵，不拆楼（用户 2026-10-27）', () => {
     expect(seen).toBe(true);
   });
 });
+
+describe('牧师：周期回血（用户 2026-10-27："继续增加单位"）', () => {
+  it('每 2.5 秒给身边 3 格内的自己人回 6 血，并放一个治疗事件', () => {
+    const world = new ArenaWorld({ seed: 66 });
+    world.units.push({
+      id: 9930,
+      side: 'blue',
+      defId: 'priest',
+      x: 10.5,
+      z: 10.5,
+      hp: 30,
+      maxHp: 30,
+      cooldown: 0,
+      stun: 0,
+      order: { x: 12, z: 10.5 },
+      detour: 1 as const,
+    });
+    world.units.push({
+      id: 9931,
+      side: 'blue',
+      defId: 'knight',
+      x: 11.4,
+      z: 10.5,
+      hp: 20,
+      maxHp: 60,
+      cooldown: 0,
+      stun: 0,
+      order: { x: 12, z: 10.5 },
+      detour: 1 as const,
+    });
+    let sawHealFx = false;
+    run(world, 3.2, () => {
+      world.units = world.units.filter((u) => u.id === 9930 || u.id === 9931);
+      if (world.heals.length > 0) sawHealFx = true;
+    });
+    const knight = world.units.find((u) => u.id === 9931)!;
+    expect(knight.hp, '骑士应该被奶了一口').toBeGreaterThan(20);
+    expect(sawHealFx, '应该产生治疗视觉事件').toBe(true);
+  });
+});

@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 320 条回归
+npm run check        # 类型检查 + 321 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -91,7 +91,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage —— 共 320 条
+                      arena · ruins · cameraId · models · damage —— 共 321 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
@@ -831,9 +831,10 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
   想跨过中线只能用远程单位/塔（箭塔射程 6.8、炮塔 5.6）。
 - **兵营要后勤**：每座兵营要配 **1 座磨坊 + 1 座民居** 才会出兵（1:1:1，按盖的先后配对）；
   没配齐时兵营头顶挂「缺 磨坊 + 民居」。
-- **卡池十二张**（价格按用户要求整体翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
+- **卡池十四张**（价格按用户要求整体翻倍）：兵营 12（每 6 秒自动出兵，不花金）·
   箭塔 10 · 炮塔 14 · 磨坊 8（每 5 秒 +2 金）· 民居 6（兵营的后勤）· 弓箭手小队 6 · 骑士小队 9 · 法师小队 11 ·
   **机器巨人 16**（一台 2.4 格高的铁疙瘩，慢但一拳砸穿墙）· 兽人 8 ·
+  **牧师小队 10**（每 2.5 秒给身边自己人回 6 血）· **石怪 9**（1.9 格高，血厚防高）·
   **移动火炮 16**（两个小人推着走，射程 7.2 比塔还远，拆塔也打兵）·
   **移动弩箭 12**（一辆弩车，射程 6 格专点步兵，但拆不了楼）。
 - **建筑没有寿命**：不会自己掉血、不会定时消失（这是和老外的皇室战争刻意不同的地方），

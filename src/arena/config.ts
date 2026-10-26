@@ -212,6 +212,22 @@ export const CARDS: ArenaCard[] = [
     squad: [{ unitId: 'mage', count: 2 }],
   },
   {
+    id: 'priests',
+    name: '牧师小队',
+    blurb: '两个牧师：每 2.5 秒给身边 3 格内的自己人回 6 血，攻弱。',
+    kind: 'squad',
+    cost: 10,
+    squad: [{ unitId: 'priest', count: 2 }],
+  },
+  {
+    id: 'golem',
+    name: '石怪',
+    blurb: '一只石怪：走得慢，但血厚防高，扛线最合适。',
+    kind: 'squad',
+    cost: 9,
+    squad: [{ unitId: 'golem', count: 1 }],
+  },
+  {
     id: 'mech',
     name: '机器巨人',
     blurb: '一台机器巨人：慢、笨重，但一拳能砸穿墙。',

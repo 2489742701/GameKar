@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import type { Combat, Shot } from '@game/systems/Combat';
 
-const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16, haze: 72, spark: 48 };
+const CAP = { arrow: 48, cannon: 24, magic: 32, smoke: 64, flash: 16, haze: 72, spark: 48, pulse: 24 };
 
 /** 单栋楼同时最多几团雾（global cap 之上的第二道闸，防止一栋楼吃满全场） */
 const PER_SITE_HAZE = 26;
@@ -108,6 +108,21 @@ function hazeTexture(seed: number): THREE.Texture {
   return t;
 }
 
+/** 治疗脉冲：一圈绿环 + 中间一个十字。 */
+function healTexture(): THREE.Texture {
+  const size = 48;
+  const { c, ctx } = canvasOf(size);
+  ctx.strokeStyle = 'rgba(126,224,138,0.95)';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2 - 6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(126,224,138,0.9)';
+  ctx.fillRect(size / 2 - 3, size / 2 - 11, 6, 22);
+  ctx.fillRect(size / 2 - 11, size / 2 - 3, 22, 6);
+  return pixelTexture(c);
+}
+
 /** 炮口火光：一个十字亮片。 */
 function flashTexture(): THREE.Texture {
   const { c, ctx } = canvasOf(10);
@@ -155,6 +170,13 @@ interface Puff {
 
 /** 一团体积雾：大到能挡住楼、淡到不脏屏，起身快、散得慢。 */
 /** 火星：一小块亮片，带重力。用在建筑碎片的崩口上。 */
+/** 治疗脉冲：一圈绿环从牧师脚下扩散开。 */
+interface Pulse {
+  sprite: THREE.Sprite;
+  life: number;
+  seconds: number;
+}
+
 interface Spark {
   sprite: THREE.Sprite;
   vx: number;
@@ -194,6 +216,7 @@ export class BattleFx {
     flash: flashTexture(),
     magic: magicTexture(),
     smoke: [smokeTexture(7), smokeTexture(101), smokeTexture(2023)],
+    heal: healTexture(),
     haze: [hazeTexture(11), hazeTexture(77), hazeTexture(313)],
   };
   private readonly box = new THREE.BoxGeometry(0.17, 0.17, 0.17);
@@ -202,6 +225,7 @@ export class BattleFx {
   private readonly quads = new Map<string, THREE.Sprite[]>();
   private readonly puffs: Puff[] = [];
   private readonly sparks: Spark[] = [];
+  private readonly pulses: Pulse[] = [];
   private readonly hazes: Haze[] = [];
   /** 散掉的雾不销毁，留着下一团复用 —— 否则每团一次材质分配，跑十分钟就是几千份 */
   private readonly hazeFree: THREE.Sprite[] = [];
@@ -231,7 +255,37 @@ export class BattleFx {
   step(dt: number): void {
     this.age(dt);
     this.ageSparks(dt);
+    this.agePulses(dt);
     this.ageHaze(dt);
+  }
+
+  /** 牧师回血：脚下一圈绿环扩散、淡出（0.55 秒）。 */
+  healPulse(x: number, z: number, y: number): void {
+    if (this.pulses.length >= CAP.pulse) return;
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.tex.heal, transparent: true, opacity: 0.95, depthWrite: false }),
+    );
+    sprite.position.set(x, y, z);
+    sprite.scale.set(0.7, 0.7, 1);
+    this.group.add(sprite);
+    this.pulses.push({ sprite, life: 0, seconds: 0.55 });
+  }
+
+  private agePulses(dt: number): void {
+    for (let i = this.pulses.length - 1; i >= 0; i--) {
+      const p = this.pulses[i]!;
+      p.life += dt;
+      const k = p.life / p.seconds;
+      if (k >= 1) {
+        this.group.remove(p.sprite);
+        (p.sprite.material as THREE.SpriteMaterial).dispose();
+        this.pulses.splice(i, 1);
+        continue;
+      }
+      const size = 0.7 + k * 1.3;
+      p.sprite.scale.set(size, size, 1);
+      (p.sprite.material as THREE.SpriteMaterial).opacity = 0.95 * (1 - k);
+    }
   }
 
   /**
