@@ -103,7 +103,7 @@ export class ArenaApp {
   private readonly ruinMeshes = new Map<number, THREE.Group>();
   private readonly parts = new Map<
     number,
-    { sails?: THREE.Object3D; sailSpeed?: number; turret?: THREE.Object3D; banner?: Banner }
+    { sails?: { group: THREE.Object3D; speed: number }[]; turret?: THREE.Object3D; banner?: Banner }
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Mesh>();
@@ -383,9 +383,11 @@ export class ArenaApp {
       // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
       const shell = new WallShell(model.shell);
       group.add(shell.mesh);
-      const spinner = spinnersOf(group)[0];
+      // 磨坊的帆是六块各自带 pivot 的件 ⇒ 套件建了六个转轴 Group。
+      // 只转第一个的话，就是"一块帆在转、其余五块钉死"（用户："有的地方转，有的地方不转"）。
+      const sails = spinnersOf(group).map((s) => ({ group: s.group, speed: s.speed }));
       const turret = group.userData[TURRET] as THREE.Object3D | undefined;
-      this.parts.set(b.id, { sails: spinner?.group, sailSpeed: spinner?.speed ?? 0, turret });
+      this.parts.set(b.id, { sails: sails.length > 0 ? sails : undefined, turret });
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
@@ -665,7 +667,7 @@ export class ArenaApp {
     for (const [id, part] of this.parts) {
       const b = this.world.buildings.get(id);
       if (!b) continue;
-      if (part.sails) part.sails.rotation.z = -time * (part.sailSpeed ?? 1.7);
+      for (const sail of part.sails ?? []) sail.group.rotation.z = -time * sail.speed;
       if (part.turret) {
         // 炮口常驻对准 aim：aim 平时就是"冲着对面"的默认值，只有开火时才被改成目标方向。
         // 所以它不会自己到处扫视（用户说过"不是全自动转向"），但一眼就能看出朝哪边。

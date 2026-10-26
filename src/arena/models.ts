@@ -313,11 +313,8 @@ export function arrowTowerModel(): ArenaModel {
       plinth([1.12, 0.06, 1.12], ARENA_PAL.stoneDark),
       cyl([0.5, 0.6, 0.5], ARENA_PAL.stone, [0, mid(0.06, 0.5), 0], 10),
       cyl([0.58, 0.58, 0.07], ARENA_PAL.stoneDark, [0, mid(1.61, 0.07), 0], 10),
+      // 外挑的垛口台保留；用户 2026-10-27 点名去掉上面那 4 个正方形齿
       cyl([0.68, 0.55, 0.22], ARENA_PAL.stone, [0, mid(1.68, 0.22), 0], 10),
-      box([0.22, 0.3, 0.22], ARENA_PAL.stone, [-0.5, mid(1.9, 0.3), -0.5]),
-      box([0.22, 0.3, 0.22], ARENA_PAL.stone, [0.5, mid(1.9, 0.3), -0.5]),
-      box([0.22, 0.3, 0.22], ARENA_PAL.stone, [-0.5, mid(1.9, 0.3), 0.5]),
-      box([0.22, 0.3, 0.22], ARENA_PAL.stone, [0.5, mid(1.9, 0.3), 0.5]),
       box([0.09, 0.3, 0.05], ARENA_PAL.stoneDark, [0, mid(1.0, 0.3), 0.545]),
       box([0.05, 0.3, 0.09], ARENA_PAL.stoneDark, [0.545, mid(1.0, 0.3), 0]),
       box([0.05, 0.3, 0.09], ARENA_PAL.stoneDark, [-0.545, mid(1.0, 0.3), 0]),

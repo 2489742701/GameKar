@@ -58,9 +58,9 @@ describe('外墙面片', () => {
       const removed = shell.breach(5, new Random(7));
       expect(removed, `${kind} 摘掉块数`).toHaveLength(Math.min(5, before));
       expect(shell.count).toBe(before - removed.length);
-      expect(shell.mesh.geometry.getAttribute('position').count).toBe(shell.count * 24);
-      expect(vertsBefore).toBe(before * 24);
-      // 没有 NaN（合错矩阵时最常见的崩法）；box 是 indexed 的 24 个顶点
+      expect(shell.mesh.geometry.getAttribute('position').count).toBe(shell.count * 36);
+      expect(vertsBefore).toBe(before * 36);
+      // 没有 NaN（合错矩阵时最常见的崩法）；非索引 box = 36 个顶点
       const pos = shell.mesh.geometry.getAttribute('position').array as Float32Array;
       expect([...pos].every((v) => Number.isFinite(v))).toBe(true);
     }

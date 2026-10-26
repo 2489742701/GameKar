@@ -90,10 +90,14 @@ export class WallShell {
 
     for (const p of this.panels) {
       // 一块板就是一个 box：旋转（绕 y）→ 平移到墙上
-      const geo = new THREE.BoxGeometry(p.w, p.h, p.t);
+      const src = new THREE.BoxGeometry(p.w, p.h, p.t);
       matrix.makeRotationY(p.yaw);
       matrix.setPosition(p.x, p.y, p.z);
-      geo.applyMatrix4(matrix);
+      src.applyMatrix4(matrix);
+      // **必须转成非索引**：BoxGeometry 是 24 顶点 + 36 索引，只抄顶点会把角点
+      // 当成连续三角形 → 塔身上凭空出现几道白色大叉（这个 bug 是看截图抓到的）。
+      const geo = src.toNonIndexed();
+      src.dispose();
 
       const pos = geo.getAttribute('position');
       const nrm = geo.getAttribute('normal');
