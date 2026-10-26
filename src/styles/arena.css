@@ -156,8 +156,35 @@
   box-shadow: inset 0 0 0 2px var(--gold), 0 3px 0 rgba(0, 0, 0, 0.45), 0 0 12px rgba(246, 220, 156, 0.5);
 }
 
+/* 打出去的牌留下一个**空白格**（不是"补牌中"）：牌已经离手，等新牌自己回来 */
 .ahud__card[data-empty='1'] {
-  opacity: 0.45;
+  opacity: 0.55;
+  background: rgba(0, 0, 0, 0.22);
+  background-image: none;
+  border-style: dashed;
+  border-color: rgba(154, 107, 63, 0.55);
+  box-shadow: none;
+}
+
+/* 出牌那一下：牌往上飞、缩小、淡出，然后露出下面的空白格 */
+.ahud__card[data-played='1'] {
+  animation: ahud-card-play 0.26s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes ahud-card-play {
+  0% {
+    transform: translateY(0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  45% {
+    transform: translateY(-18px) scale(1.06) rotate(-4deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-44px) scale(0.6) rotate(-11deg);
+    opacity: 0;
+  }
 }
 
 .ahud__card__cost {

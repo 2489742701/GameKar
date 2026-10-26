@@ -34,6 +34,8 @@ export class ArenaHud {
   private readonly redText = make('span', 'ahud__hp__num', '');
   private readonly cards: HTMLButtonElement[] = [];
   private readonly cardParts: { cost: HTMLElement; name: HTMLElement; kind: HTMLElement }[] = [];
+  /** 上一帧这一格是什么牌：用来识别"刚打出去"，播一下飞出动画 */
+  private readonly lastCardId: (string | null)[] = [];
   private readonly toast = make('div', 'ahud__toast');
   private readonly end = make('div', 'ahud__end');
   private viewBtn!: HTMLButtonElement;
@@ -134,20 +136,42 @@ export class ArenaHud {
   private paintCard(slot: number): void {
     const el = this.cards[slot]!;
     const parts = this.cardParts[slot]!;
+    // 正在播"飞出去"的这 260ms：别改它，让动画把旧牌面带走
+    if (el.dataset['played'] === '1') return;
+
     const card = this.app.world.hand[slot];
-    const cd = this.app.world.handCooldown[slot]!;
-    const gold = this.app.world.gold.blue;
+    const id = card ? card.id : null;
+    const last = this.lastCardId[slot] ?? null;
+
+    // 刚打出去：牌面再留 260ms 做飞出动画，然后变成**空白格**（不再显示"补牌中"）
+    if (!card && last !== null) {
+      this.lastCardId[slot] = null;
+      el.dataset['played'] = '1';
+      el.dataset['selected'] = 'false';
+      window.setTimeout(() => {
+        el.dataset['played'] = '0';
+        el.dataset['empty'] = '1';
+        el.dataset['affordable'] = 'true';
+        parts.cost.textContent = '';
+        parts.name.textContent = '';
+        parts.kind.textContent = '';
+      }, 260);
+      return;
+    }
+    this.lastCardId[slot] = id;
+
     el.dataset['selected'] = String(this.app.selectedSlot === slot);
     if (!card) {
+      // 空白格：没有数字、没有名字、没有倒计时 —— 就是"这张牌已经打出去了"
       el.dataset['empty'] = '1';
-      el.dataset['affordable'] = 'false';
-      parts.cost.textContent = '—';
-      parts.name.textContent = '补牌中';
-      parts.kind.textContent = `${cd.toFixed(1)}s`;
+      el.dataset['affordable'] = 'true';
+      parts.cost.textContent = '';
+      parts.name.textContent = '';
+      parts.kind.textContent = '';
       return;
     }
     el.dataset['empty'] = '0';
-    el.dataset['affordable'] = String(gold >= card.cost);
+    el.dataset['affordable'] = String(this.app.world.gold.blue >= card.cost);
     parts.cost.textContent = String(card.cost);
     parts.name.textContent = card.name;
     // 移动火炮是**军队**（'siege' 只是模型差异），不再单独标'工程'

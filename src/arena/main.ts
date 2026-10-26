@@ -49,7 +49,7 @@ const app = await ArenaApp.boot({
 hud = new ArenaHud(container, app, {
   onSelectCard: (slot) => {
     const result = app.selectCard(slot);
-    if (result === 'empty') hud?.say('这一格在补牌，等一下', 'warn');
+    if (result === 'empty') hud?.say('这张牌已经打出去了，等新牌', 'warn');
     else if (result === 'cooldown') hud?.say('这张还在冷却', 'warn');
     else if (result === 'poor') {
       const card = app.world.hand[slot];
