@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 300 条回归
+npm run check        # 类型检查 + 307 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
@@ -83,13 +83,15 @@ src/
 ├─ arena/             对战模式（只依赖 engine/ 与素材，不碰老模式的 GameWorld/Combat）
 │  ├─ ArenaWorld.ts   纯逻辑：出牌/金币/兵线/炮塔/废墟，不 import three
 │  ├─ ArenaApp.ts     把状态画出来：模型、旗帜、弹道、废墟、镜头手势
-│  ├─ models.ts       五栋楼的模型**数据**（核心/兵营/箭塔/炮塔/磨坊）+ 旗子落点表
+│  ├─ models.ts       五栋楼的模型**数据**：骨架/屋顶/台基 + 可脱落外墙（面片）+ 旗子落点
+│  ├─ shell.ts        外墙网格：面片合成一张网格，受伤时整块摘掉（洞口连成一片）
+│  ├─ damage.ts       受伤碎裂：按血量档位崩面片 → 弹道掉落 → 落地躺平
 │  ├─ config.ts       对战数值（价格、血量、射程、金币节奏）
 │  └─ …                Camera / cameraId（机位码）· ruins（BSP 碎裂）· props（会摆的旗）· DebugPanel
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models —— 共 300 条
+                      arena · ruins · cameraId · models · damage —— 共 307 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
 ```
 
@@ -829,6 +831,8 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
   **移动火炮 16**（两个小人推着走，射程 7.2 比塔还远、只拆建筑不打兵）。
 - **建筑没有寿命**：不会自己掉血、不会定时消失（这是和老外的皇室战争刻意不同的地方），
   只能被兵拆掉或被塔轰掉。**塔会打塔**：进入射程的敌方建筑也会挨打，不再只打兵。
+- **受伤**：血量每掉一档，外墙就崩掉一片 —— 面片整块脱落、掉到地上躺平，露出里面的木骨架，
+  洞是连成一片的（不是撒了一墙小洞）。掉下去的就是原来那块墙板。
 - **废墟**：被拆掉的楼在原地留一堆碎石，14 秒后自己塌平（最后 2.5 秒淡出）。
 - **出兵旗**：兵营有一个出兵点（地上插旗）。点自家兵营 → 再点地面，就把旗挪过去。
   每栋楼的**阵营旗按模型落点插**（核心=墙角高杆、兵营=屋脊端、箭塔=垛口、炮塔=座角、磨坊=杆顶），

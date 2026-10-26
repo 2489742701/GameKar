@@ -21,7 +21,10 @@ const OUT = mkdtempSync(join(tmpdir(), 'gamekar-models-'));
 
 interface Measured {
   name: string;
-  parts: number;
+  /** 不动的件（台基、屋顶、骨架） */
+  statics: number;
+  /** 可脱落的外墙面片 */
+  shell: number;
   width: number;
   depth: number;
   height: number;
@@ -33,9 +36,16 @@ function render(tag: string, pitch: number): { bytes: Buffer; rows: Measured[] }
   const stdout = execFileSync(process.execPath, [SCRIPT, out, String(pitch)], { cwd: ROOT, encoding: 'utf8' });
   const rows = stdout
     .split('\n')
-    .map((line) => /^(\w+): (\d+) 件 · ([\d.]+)×([\d.]+) 格 · 高 ([\d.]+) 格$/.exec(line.trim()))
+    .map((line) => /^(\w+): (\d+) \+ (\d+) 件 · ([\d.]+)×([\d.]+) 格 · 高 ([\d.]+) 格$/.exec(line.trim()))
     .filter((m): m is RegExpExecArray => m !== null)
-    .map((m) => ({ name: m[1]!, parts: Number(m[2]), width: Number(m[3]), depth: Number(m[4]), height: Number(m[5]) }));
+    .map((m) => ({
+      name: m[1]!,
+      statics: Number(m[2]),
+      shell: Number(m[3]),
+      width: Number(m[4]),
+      depth: Number(m[5]),
+      height: Number(m[6]),
+    }));
   return { bytes: readFileSync(out), rows };
 }
 
@@ -54,10 +64,14 @@ describe('建筑模型体型', () => {
     }
   });
 
-  it('每栋 ≤14 个原语（设计语言里"别碎"的那条）', () => {
+  it('骨架件数不多，外墙切成够多的面片（掉起来才像"一块块"）', () => {
     for (const r of base.rows) {
-      expect(r.parts, `${r.name} 件数`).toBeLessThanOrEqual(14);
-      expect(r.parts, `${r.name} 件数`).toBeGreaterThanOrEqual(8);
+      // 不动的件（含内部骨架）不超过 22：再多就是又堆碎了
+      expect(r.statics, `${r.name} 固定件`).toBeLessThanOrEqual(22);
+      expect(r.statics, `${r.name} 固定件`).toBeGreaterThanOrEqual(8);
+      // 面片至少 10 块：12 块的炮塔每档崩 2 块也够看出洞
+      expect(r.shell, `${r.name} 面片`).toBeGreaterThanOrEqual(10);
+      expect(r.shell, `${r.name} 面片`).toBeLessThanOrEqual(60);
     }
   });
 

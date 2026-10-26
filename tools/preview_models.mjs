@@ -387,8 +387,15 @@ names.forEach((name, index) => {
     }
 
     drawGround();
-    const nodes = ARENA_MODELS[name](accents[name] ?? 0);
-    for (const node of nodes) {
+    const model = ARENA_MODELS[name](accents[name] ?? 0);
+    // 外墙是面片数据；预览器把它们当普通 box 画（和游戏里合成的网格同一份几何）
+    const panels = model.shell.map((p) => ({
+      part: { kind: 'box', size: [p.w, p.h, p.t] },
+      color: p.color,
+      at: [p.x, p.y, p.z],
+      rot: [0, p.yaw, 0],
+    }));
+    for (const node of [...model.static, ...panels]) {
       for (const face of facesOf(node)) {
         drawPoly(face.pts, shade(face.color, face.normal));
       }
@@ -398,7 +405,14 @@ names.forEach((name, index) => {
 
 // 每栋楼的实测尺寸（格）：判断"是不是又超出占地了"就看这行
 const summary = names.map((name) => {
-  const nodes = ARENA_MODELS[name](accents[name] ?? 0);
+  const model = ARENA_MODELS[name](accents[name] ?? 0);
+  const panels = model.shell.map((p) => ({
+    part: { kind: 'box', size: [p.w, p.h, p.t] },
+    color: p.color,
+    at: [p.x, p.y, p.z],
+    rot: [0, p.yaw, 0],
+  }));
+  const nodes = [...model.static, ...panels];
   let minX = Infinity;
   let maxX = -Infinity;
   let minZ = Infinity;
@@ -415,7 +429,7 @@ const summary = names.map((name) => {
       }
     }
   }
-  return `${name}: ${nodes.length} 件 · ${(maxX - minX).toFixed(1)}×${(maxZ - minZ).toFixed(1)} 格 · 高 ${maxY.toFixed(1)} 格`;
+  return `${name}: ${model.static.length} + ${model.shell.length} 件 · ${(maxX - minX).toFixed(1)}×${(maxZ - minZ).toFixed(1)} 格 · 高 ${maxY.toFixed(1)} 格`;
 });
 
 const out = process.argv[2] ?? '.scratch/models.png';

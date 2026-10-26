@@ -17,7 +17,7 @@ import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { Viewport } from '@engine/viewport/Viewport';
-import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite } from '@game/dudes/DudeView';
+import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
 import { faceCandidates, headCandidates, isBlue } from '@game/dudes/roster';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
@@ -28,9 +28,11 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
+import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
+import { WallShell } from './shell';
 import { makeBanner, type Banner } from './props';
-import { fracture, spall } from './ruins';
+import { fracture } from './ruins';
 import { sideColor } from './theme';
 
 export interface ArenaAppOptions {
@@ -56,6 +58,14 @@ interface UnitSprite {
   z: number;
   cooldown: number;
   attackLeft: number;
+  /**
+   * "还在走"的保留时间（秒）。
+   *
+   * 逻辑是 20Hz、渲染是 60Hz：直接拿"这一帧挪了多少"判跑步，三次渲染里两次挪了 0，
+   * 动画就在 run / idle 之间每帧切一次 —— 屏幕上就是一闪一闪。
+   * 给 0.18 秒迟滞：这期间动过就一直算走（老模式的 UnitView 同一条规矩）。
+   */
+  runHold: number;
 }
 
 export class ArenaApp {
@@ -76,6 +86,8 @@ export class ArenaApp {
   private readonly loop: GameLoop;
   private readonly ground: GroundView;
   private readonly map: TileMap;
+  /** 受伤的渐进碎裂：破洞、裂纹、掉下来的碎块 */
+  private readonly damage: DamageFx;
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
   private readonly opts: ArenaAppOptions;
@@ -106,6 +118,7 @@ export class ArenaApp {
 
     this.map = new TileMap({ cols: this.world.fieldSize.cols, rows: this.world.fieldSize.rows });
     this.ground = new GroundView(this.map);
+    this.damage = new DamageFx(this.scene);
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
     this.rig = new CameraRig({
@@ -347,6 +360,7 @@ export class ArenaApp {
     this.syncShots(info.time);
     this.syncRuins();
     this.syncParts(info.time);
+    this.damage.update(info.delta);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
   }
@@ -358,7 +372,11 @@ export class ArenaApp {
       const name = b.kind as ArenaModelName;
       // 阵营色只落在小件上：核心水晶、炮塔四角、磨坊顶盖
       const accent = name === 'core' || name === 'cannonTower' || name === 'mill' ? sideColor(b.side) : 0;
-      const group = buildModel(ARENA_MODELS[name](accent));
+      const model = ARENA_MODELS[name](accent);
+      const group = buildModel(model.static);
+      // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
+      const shell = new WallShell(model.shell);
+      group.add(shell.mesh);
       const spinner = spinnersOf(group)[0];
       const turret = group.userData[TURRET] as THREE.Object3D | undefined;
       this.parts.set(b.id, { sails: spinner?.group, sailSpeed: spinner?.speed ?? 0, turret });
@@ -375,13 +393,11 @@ export class ArenaApp {
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
       group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
       group.scale.setScalar(BUILDING_SCALE);
-      // 量一次模型自身的高度/半宽（格）：血条挂多高、裂纹贴哪、掉渣撒多远，全从这里来，
-      // 不再按建筑种类写死一串数 —— 模型改了这些自动跟着走。
+      // 量一次模型自身的高度（格）：血条挂多高就按它算，不再按建筑种类写死。
+      // 相对组自身量：组已经抬到了地块表面，直接用世界坐标会把那 0.5 格算进去。
       group.updateMatrixWorld(true);
       const bounds = new THREE.Box3().setFromObject(group);
-      // 相对组自身量：组已经抬到了地块表面，直接用世界坐标会把那 0.5 格算进去
       const modelTop = bounds.max.y - group.position.y;
-      const modelHalf = bounds.max.x - group.position.x;
       this.scene.add(group);
       // 血条要挂在**抵消缩放**的子组里：直接挂在 group 上会跟着放大，位置被抬到半空
       const ui = new THREE.Group();
@@ -397,14 +413,12 @@ export class ArenaApp {
       bar.position.y = modelTop + 0.25;
       ui.add(bar);
       group.userData['hpBar'] = bar;
-      const cracks = makeCracks(group, modelHalf / BUILDING_SCALE, modelTop / BUILDING_SCALE);
-      group.userData['cracks'] = cracks;
-      for (const crack of cracks) crack.visible = false;
-
-      // 掉渣：从同一套碎裂里挑几块摆到墙脚，血量越低露得越多（"塔楼会有破损"）。
-      // 挂在 ui 组里 = 坐标是格，和 spall() 的口径一致。
-      const chips = makeSpallChips(b.cols, b.rows, b.id * 31 + 7, ui);
-      group.userData['chips'] = chips;
+      // 受伤碎裂：注册时把实测尺寸交给它，之后每帧只喂血量分数
+      this.damage.register(
+        b.id,
+        { center, groundY: group.position.y, scale: BUILDING_SCALE, seed: b.id * 7919 + 17 },
+        shell,
+      );
 
       // 核心的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
       // 用户 2026-10-27："整个建筑的模型本身里面就嵌了一个水晶，为什么还要再画一个水晶"。
@@ -421,20 +435,11 @@ export class ArenaApp {
           bar.visible = frac < 0.999;
           updateHpBar(bar, frac);
         }
-        const cracks = group.userData['cracks'] as THREE.Mesh[] | undefined;
-        if (cracks) {
-          cracks[0]!.visible = frac <= 0.66;
-          cracks[1]!.visible = frac <= 0.4;
-          cracks[2]!.visible = frac <= 0.2;
-        }
-        const chips = group.userData['chips'] as THREE.Mesh[] | undefined;
-        if (chips) {
-          const shown = frac <= 0.3 ? chips.length : frac <= 0.6 ? Math.ceil(chips.length / 2) : 0;
-          chips.forEach((c, i) => (c.visible = i < shown));
-        }
+        this.damage.sync(id, frac);
         continue;
       }
       this.scene.remove(group);
+      this.damage.forget(id);
       this.buildingMeshes.delete(id);
     }
   }
@@ -448,33 +453,45 @@ export class ArenaApp {
         entry = this.makeSprite(u);
         this.unitSprites.set(u.id, entry);
       }
-      const moved = Math.hypot(u.x - entry.x, u.z - entry.z);
+      // 位移必须在更新缓存坐标**之前**算：老代码先写了 entry.z = u.z 再算 dz，
+      // 于是 dz 恒为 0，推车的朝向永远不变（这次顺手修掉）。
+      const dx = u.x - entry.x;
+      const dz = u.z - entry.z;
+      const moved = Math.hypot(dx, dz);
       const justFired = u.cooldown > entry.cooldown;
       entry.x = u.x;
       entry.z = u.z;
       entry.cooldown = u.cooldown;
       if (justFired) entry.attackLeft = 0.5;
       else entry.attackLeft = Math.max(0, entry.attackLeft - dt);
+      // 迟滞：这一帧动过就续 0.18 秒，否则慢慢放掉 —— 不然 run/idle 每帧切换，屏幕上一闪一闪
+      entry.runHold = moved > 0.004 ? 0.18 : Math.max(0, entry.runHold - dt);
+      const moving = entry.runHold > 0;
 
       if (entry.siege) {
         // 车头朝着"这一步往哪走"；停下来就保持最后朝向
-        if (moved > 0.004) entry.face = -Math.atan2(u.z - entry.z, u.x - entry.x);
+        if (moved > 0.004) entry.face = -Math.atan2(dz, dx);
         entry.obj.position.set(u.x, this.groundY(u.x, u.z), u.z);
         entry.obj.rotation.y = entry.face;
         for (const p of entry.pushers) {
-          p.faceCamera(this.rig.yaw);
-          p.play(moved > 0.004 ? 'run' : 'idle', time);
+          // 推车是**转过的父组**：贴在它底下的小人要正对镜头，就得把父级转角减掉，
+          // 否则车往左走时小人跟着转 180°，等于背对镜头且左右反了。
+          p.faceCamera(this.rig.yaw - (entry.face * 180) / Math.PI);
+          p.setFlipX(facingFlip(dx, dz, this.rig.yaw, p.flipped));
+          p.play(moving ? 'run' : 'idle', time);
         }
         continue;
       }
       const def = unitDef(u.defId);
-      const anim = entry.attackLeft > 0 ? def.attackAnim : moved > 0.004 ? 'run' : def.idleAnim;
+      const anim = entry.attackLeft > 0 ? def.attackAnim : moving ? 'run' : def.idleAnim;
       if (entry.dude) {
         entry.dude.moveTo(u.x, u.z);
         // 脚必须踩在**地块表面**上：草地表面在 y=0.5，而 DudeSprite 自带的身高偏移是从 y=0 起算的。
         // 老模式的 UnitView 一直有这一句，我这一版漏了 —— 表现就是整个小人埋掉半个身子。
         entry.obj.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
         entry.dude.faceCamera(this.rig.yaw);
+        // 左右朝向看**屏幕**：把世界位移投到相机的右向量上，镜头转到哪边都不会反着走
+        entry.dude.setFlipX(facingFlip(dx, dz, this.rig.yaw, entry.dude.flipped));
         entry.dude.play(anim, time);
       } else {
         // 没有素材包：锥体直接跟着走，玩法读数照常
@@ -498,7 +515,7 @@ export class ArenaApp {
       );
       cone.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       this.scene.add(cone);
-      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
     }
     if (statsOf(u.defId).siege) return this.makeSiege(u);
     const def = unitDef(u.defId);
@@ -507,7 +524,7 @@ export class ArenaApp {
     const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: UNIT_HEIGHT });
     dude.mesh.position.y = this.groundY(u.x, u.z) + UNIT_HEIGHT / 2;
     this.scene.add(dude.mesh);
-    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0 };
+    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0 };
   }
 
   /**
@@ -574,6 +591,7 @@ export class ArenaApp {
       z: u.z,
       cooldown: u.cooldown,
       attackLeft: 0,
+      runHold: 0,
     };
   }
 
@@ -750,32 +768,6 @@ function labelOf(b: ArenaBuilding): string {
   return b.kind === 'core' ? '核心' : b.kind === 'barracks' ? '兵营' : b.kind === 'mill' ? '磨坊' : '防御塔';
 }
 
-/**
- * 破损：三道随机角度的深色裂纹，血越少露得越多。
- * 不用"给模型换材质变暗"那条路 —— 材质是共享缓存的，改一处会把全场都改暗。
- *
- * 位置按**模型实测尺寸**推（`half`/`height` 是模型局部单位），不是按种类写死：
- * 换模型之后裂纹自动贴在新墙上，不会悬在半空或者缩在楼里。
- */
-function makeCracks(parent: THREE.Object3D, half: number, height: number): THREE.Mesh[] {
-  const out: THREE.Mesh[] = [];
-  const mat = new THREE.MeshBasicMaterial({ color: 0x1a1410, transparent: true, opacity: 0.85 });
-  const spots: { x: number; y: number; rot: number; w: number }[] = [
-    { x: -0.28, y: 0.34, rot: 0.55, w: 0.2 },
-    { x: 0.18, y: 0.52, rot: -0.85, w: 0.26 },
-    { x: -0.06, y: 0.68, rot: 1.25, w: 0.18 },
-  ];
-  for (const s of spots) {
-    const crack = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.14, s.w * half), Math.max(0.03, half * 0.04)), mat);
-    // 贴在正面外皮附近（0.82 是量了几栋楼的均值：多数落在墙面上，不会飘在半空）
-    crack.position.set(s.x * half, s.y * height, half * 0.82);
-    crack.rotation.z = s.rot;
-    parent.add(crack);
-    out.push(crack);
-  }
-  return out;
-}
-
 function makeHpBar(frac: number, color: number, width = 1.6): THREE.Mesh {
   const geo = new THREE.PlaneGeometry(width, 0.2);
   const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
@@ -887,22 +879,6 @@ function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
   if (kind === 'arrowTower' || kind === 'cannonTower') return 'tower';
   if (kind === 'mill' || kind === 'barracks') return 'wood';
   return 'stone';
-}
-
-/** 墙脚的碎渣块：一块块小石头，按血量露出来（挂在 ui 组里，坐标直接用格）。 */
-function makeSpallChips(cols: number, rows: number, seed: number, parent: THREE.Object3D): THREE.Mesh[] {
-  const out: THREE.Mesh[] = [];
-  const mat = new THREE.MeshStandardMaterial({ color: 0x7d7468, roughness: 1, flatShading: true });
-  for (const p of spall(cols, rows, seed, 5)) {
-    const chip = new THREE.Mesh(new THREE.BoxGeometry(Math.min(p.w, 0.3), Math.min(p.h, 0.16), Math.min(p.d, 0.3)), mat);
-    chip.position.set(p.x, 0.08, p.z);
-    chip.rotation.y = p.spin;
-    chip.visible = false;
-    chip.castShadow = true;
-    parent.add(chip);
-    out.push(chip);
-  }
-  return out;
 }
 
 function makeFlag(side: Side, selected: boolean): THREE.Group {
