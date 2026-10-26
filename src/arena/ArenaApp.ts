@@ -29,7 +29,7 @@ import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } fr
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { makeBanner, shade, bannerSpot, type Banner } from './props';
-import { CARD_MODEL, CORE_COLOR, sideColor } from './theme';
+import { CARD_MODEL, sideColor } from './theme';
 
 export interface ArenaAppOptions {
   container: HTMLElement;
@@ -356,8 +356,17 @@ export class ArenaApp {
       if (this.buildingMeshes.has(b.id)) continue;
       // 磨坊与炮塔用自己的件：模型库里的那两件是静态合并的，帆和炮管转不起来
       const custom =
-        b.kind === 'mill' ? makeMill(b.side) : b.kind === 'cannonTower' ? makeCannon(b.side) : null;
-      const group = custom ? custom.group : this.library.create(b.kind === 'core' ? 'hall' : CARD_MODEL[b.kind]);
+        b.kind === 'core'
+          ? makeCore(b.side)
+          : b.kind === 'mill'
+            ? makeMill(b.side)
+            : b.kind === 'cannonTower'
+              ? makeCannon(b.side)
+              : null;
+      // 核心/磨坊/炮塔是自建件；剩下会走到这里的只有兵营和箭塔
+      const group = custom
+        ? custom.group
+        : this.library.create(b.kind === 'barracks' ? CARD_MODEL.barracks : CARD_MODEL.arrowTower);
       if (custom) this.parts.set(b.id, { sails: custom.sails, turret: custom.turret });
       if (b.kind === 'arrowTower' || b.kind === 'cannonTower') {
         const flash = makeFlashSprite();
@@ -392,34 +401,8 @@ export class ArenaApp {
       group.userData['cracks'] = cracks;
       for (const crack of cracks) crack.visible = false;
 
-      if (b.kind === 'core') {
-        // 阵营色环：两颗核心用同一套模型，只靠头顶小水晶分不清，加一圈地环
-        const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(Math.max(b.cols, b.rows) * 0.34, 0.06, 6, 24),
-          new THREE.MeshStandardMaterial({
-            color: sideColor(b.side),
-            emissive: sideColor(b.side),
-            emissiveIntensity: 0.6,
-            roughness: 0.5,
-            flatShading: true,
-          }),
-        );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.06;
-        group.add(ring);
-        const orb = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.46, 0),
-          new THREE.MeshStandardMaterial({
-            color: CORE_COLOR[b.side],
-            emissive: CORE_COLOR[b.side],
-            emissiveIntensity: 0.9,
-            roughness: 0.25,
-            flatShading: true,
-          }),
-        );
-        orb.position.y = 3.05;
-        group.add(orb);
-      }
+      // 核心的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
+      // 用户 2026-10-27："整个建筑的模型本身里面就嵌了一个水晶，为什么还要再画一个水晶"。
       this.buildingMeshes.set(b.id, group);
       group.userData['side'] = b.side;
     }
@@ -953,6 +936,73 @@ function makeRuin(cols: number, rows: number): THREE.Group {
   beam.rotation.z = 0.22;
   group.add(beam);
   return group;
+}
+
+/**
+ * 核心（主城）：基座 + 墙 + 四坡屋顶 + **嵌在屋顶里的水晶**（按阵营上色）。
+ *
+ * 为什么不用模型库里的 hall：那份模型的水晶是固定色的、材质还是全局缓存的，
+ * 想按阵营染色会把场上所有实例一起改掉。自建一份最省事，也正好把"水晶是模型的一部分"落实了。
+ */
+function makeCore(side: Side): { group: THREE.Group; sails?: THREE.Object3D; turret?: THREE.Object3D } {
+  const group = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({ color: 0x5f6472, flatShading: true, roughness: 0.95 });
+  const wall = new THREE.MeshStandardMaterial({ color: 0xc9b795, flatShading: true, roughness: 0.9 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0xa8483c, flatShading: true, roughness: 0.9 });
+  const tint = sideColor(side);
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.28, 2.3), stone);
+  base.position.y = 0.14;
+  base.receiveShadow = true;
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.85, 1.15, 1.85), wall);
+  body.position.y = 0.86;
+  body.castShadow = true;
+  body.receiveShadow = true;
+
+  // 一道深色墙裙 + 一扇门：不然从高处看，正面就是一整片浅色，像开了个洞
+  const skirt = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.3, 1.92), stone);
+  skirt.position.y = 0.44;
+  skirt.receiveShadow = true;
+  const door = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.62, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0x6b4526, flatShading: true, roughness: 0.9 }),
+  );
+  door.position.set(0, 0.62, 0.94);
+  group.add(skirt, door);
+
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(1.28, 0.72, 4), roofMat);
+  roof.position.y = 1.78;
+  roof.rotation.y = Math.PI / 4;
+  roof.castShadow = true;
+
+  // 水晶：半嵌在屋顶顶端的凹槽里（不是飘在上面）
+  const crystal = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.42, 0),
+    new THREE.MeshStandardMaterial({
+      color: tint,
+      emissive: tint,
+      emissiveIntensity: 0.95,
+      roughness: 0.25,
+      flatShading: true,
+    }),
+  );
+  crystal.position.y = 2.2;
+  crystal.scale.y = 1.35;
+  crystal.castShadow = true;
+
+  // 四角立柱，让"主城"看起来比兵营更厚重
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 1.5, 6), stone);
+      post.position.set(sx * 0.95, 0.86, sz * 0.95);
+      post.castShadow = true;
+      group.add(post);
+    }
+  }
+
+  group.add(base, body, roof, crystal);
+  return { group };
 }
 
 function makeFlag(side: Side, selected: boolean): THREE.Group {
