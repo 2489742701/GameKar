@@ -81,11 +81,20 @@ interface UnitSprite {
   runHold: number;
   /** 贴地黑影（2026-11-06 用户："给他们一个影子"）；siege 车的影子在 group 里跟着转 */
   shadow?: THREE.Mesh;
+  /** 受击闪白剩余时间（秒）；0 = 正常 */
+  flashLeft: number;
+  /** 上一次消费的受击标记（unitFlash 的时间戳；变了就重新触发闪白） */
+  lastFlashSeen?: number;
+  /** 锥体兜底（无素材包）的材质与本色：闪白往白 lerp，回落 copy 本色 */
+  flashMat?: THREE.MeshStandardMaterial;
+  flashBase?: THREE.Color;
 }
 
 /** 整栋塌下去要多久（秒）：前 2.6 秒一直扬尘，把下沉过程糊住 */
 const SINK_SECONDS = 3.4;
 const SINK_DUST_SECONDS = 2.6;
+/** 受击泛白/闪白的目标色（往这个白 lerp，别直接设——原色才恢复得回来） */
+const FLASH_WHITE = new THREE.Color(1, 1, 1);
 
 export class ArenaApp {
   readonly scene = new THREE.Scene();
@@ -131,6 +140,8 @@ export class ArenaApp {
       banner?: Banner;
       /** 外墙：施工时按进度露出，受伤时崩掉 */
       shell?: WallShell;
+      /** 楼体材质（受击泛白用）：无贴图的标准材质 + 原色副本 */
+      mats?: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[];
       /** 施工脚手架（完工后拆掉，不在 group 里 —— 它不该跟着楼一起升起） */
       scaffold?: THREE.Group;
       /** 楼的静止高度（世界 y），施工时 group 从这个高度下面往上冒 */
@@ -143,6 +154,8 @@ export class ArenaApp {
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Object3D>();
+  /** 单位受击标记（unitId → 视图时间戳）：近战命中与弹丸命中帧写入，syncUnits 消费后闪白 */
+  private readonly unitFlash = new Map<number, number>();
   /** 进加时赛的两侧彩带（HUD 触发 burst，draw 每帧 update）；HUD 也要触发，开 readonly */
   readonly confetti: Confetti;
   /** 竞技场围墙与看台：三段看台要按相机方位整段显隐，所以持有引用 */
@@ -652,6 +665,15 @@ export class ArenaApp {
       // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
       const shell = new WallShell(model.shell);
       group.add(shell.mesh);
+      // 收集楼体材质（受击泛白用）：无贴图的标准材质 + 原色副本；旗布（带 map）与后加的血条不收
+      const mats: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[] = [];
+      group.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        const m = mesh.material as THREE.MeshStandardMaterial | undefined;
+        if (m && (m as THREE.MeshStandardMaterial).isMeshStandardMaterial && !m.map) {
+          mats.push({ mat: m, color: m.color.clone() });
+        }
+      });
       // 磨坊的帆是六块各自带 pivot 的件 ⇒ 套件建了六个转轴 Group。
       // 只转第一个的话，就是"一块帆在转、其余五块钉死"（用户："有的地方转，有的地方不转"）。
       const sails = spinnersOf(group).map((s) => ({ group: s.group, speed: s.speed }));
@@ -686,6 +708,7 @@ export class ArenaApp {
         baseY: group.position.y,
         modelTop,
         built: b.build >= 1,
+        mats,
       });
       /**
        * 大本营**不要**这块原生小血条（用户 2026-11-06：「它居然有两个血条」）。
@@ -759,6 +782,23 @@ export class ArenaApp {
         const since = this.lastFrame.time - (this.lastHitAt.get(id) ?? -999);
         const show = since < 2.5;
         const alpha = since < 1.8 ? 1 : Math.max(0, 1 - (since - 1.8) / 0.7);
+
+        /**
+         * **受击泛白**（2026-11-06 用户："建筑物轻微泛一个白光，相当于有一个
+         * 透明的遮罩轻微白一点"）：挨打后 0.35 秒内把楼体材质的 color 往白 lerp，
+         * 峰值 0.45——是"遮罩感"不是闪光弹。mats 是新建楼时收集的无贴图
+         * 标准材质（带原色副本），glow=0 时逐帧 copy 回原色，无需恢复逻辑。
+         * 旗布（带 map）和血条不参与。
+         */
+        const mats = this.parts.get(id)?.mats;
+        if (mats) {
+          const glow = Math.max(0, 1 - since / 0.35);
+          if (glow > 0) {
+            for (const m of mats) m.mat.color.copy(m.color).lerp(FLASH_WHITE, glow * 0.45);
+          } else if (mats.some((m) => !m.mat.color.equals(m.color))) {
+            for (const m of mats) m.mat.color.copy(m.color);
+          }
+        }
 
         const cb = this.coreBars.get(id);
         if (cb) {
@@ -926,6 +966,21 @@ export class ArenaApp {
       if (entry.shadow && !entry.siege) {
         entry.shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
       }
+      /**
+       * 受击闪白：unitFlash 里的时间戳和 entry 记的对上了就不重放；
+       * 0.16 秒线性衰减，像素小人染 color（超白），锥体兜底往白 lerp 本色。
+       */
+      const mark = this.unitFlash.get(u.id);
+      if (mark !== undefined && mark !== entry.lastFlashSeen) {
+        entry.lastFlashSeen = mark;
+        entry.flashLeft = 0.16;
+      }
+      if (entry.flashLeft > 0) {
+        entry.flashLeft = Math.max(0, entry.flashLeft - dt);
+        const k = entry.flashLeft / 0.16;
+        if (entry.dude) entry.dude.setFlash(k);
+        if (entry.flashMat && entry.flashBase) entry.flashMat.color.copy(entry.flashBase).lerp(FLASH_WHITE, k);
+      }
       // 行军扬尘：每 0.4–0.65 秒在脚下放一小团（不是每帧，别把烟池吃满）
       entry.dustIn = Math.max(0, entry.dustIn - dt);
       if (moving && entry.dustIn <= 0) {
@@ -993,7 +1048,7 @@ export class ArenaApp {
       const shadow = makeShadow(0.5, 0.36);
       shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
       this.scene.add(shadow);
-      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow };
+      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow, flashLeft: 0, flashMat: cone.material as THREE.MeshStandardMaterial, flashBase: (cone.material as THREE.MeshStandardMaterial).color.clone() };
     }
     if (statsOf(u.defId).siege) return u.defId === 'ballista' ? this.makeBallista(u) : this.makeSiege(u);
     const def = unitDef(u.defId);
@@ -1006,7 +1061,7 @@ export class ArenaApp {
     const shadow = makeShadow(0.55, 0.4);
     shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
     this.scene.add(shadow);
-    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow };
+    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow, flashLeft: 0 };
   }
 
   /**
@@ -1083,6 +1138,7 @@ export class ArenaApp {
       attackLeft: 0,
       runHold: 0,
       dustIn: 0,
+      flashLeft: 0,
     };
   }
 
@@ -1165,6 +1221,7 @@ export class ArenaApp {
       attackLeft: 0,
       runHold: 0,
       dustIn: 0,
+      flashLeft: 0,
     };
   }
 
@@ -1282,7 +1339,7 @@ export class ArenaApp {
         const targetGround = this.map.surfaceY(worldToCell(s.toX, s.toZ));
         mesh.userData['fromY'] = fromY;
         mesh.userData['toY'] = targetGround + 0.7;
-        mesh.userData['hit'] = { x: s.toX, z: s.toZ, ground: targetGround, ammo: s.ammo };
+        mesh.userData['hit'] = { x: s.toX, z: s.toZ, ground: targetGround, ammo: s.ammo, targetId: s.targetId };
         // 开火那一下：火光 + 烟（BattleFx 和老模式同一套）。
         // 炮塔的炮管有 1.9 格长、还会转，所以顺着开火方向把烟挪到**炮口**，别落在塔心
         const dx = s.toX - s.fromX;
@@ -1326,12 +1383,14 @@ export class ArenaApp {
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
       const hit = mesh.userData['hit'] as
-        | { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' | 'magic' }
+        | { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' | 'magic'; targetId?: number }
         | undefined;
       if (hit) {
         // 火星现在由 impact 按弹种自己放（炮弹 10 颗 / 法术 5 / 箭 3），这里别再补一遍
         this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
         this.sfx.play('impact', { pitch: hit.ammo === 'cannon' ? 0.72 : hit.ammo === 'magic' ? 1.3 : 1 });
+        // 弹丸命中帧：被打的小人闪白（伤害早就结算了，这是纯渲染层的确认帧）
+        if (hit.targetId !== undefined) this.unitFlash.set(hit.targetId, this.lastFrame.time);
       }
       this.scene.remove(mesh);
       // 箭的几何体/材质是全场共用的（ARROW_GEO/ARROW_MAT），不能 dispose；
@@ -1393,6 +1452,8 @@ export class ArenaApp {
       this.seenHits.add(h.id);
       this.fx.melee(h.x, h.z, this.groundY(h.x, h.z) + h.y, h.dirX, h.dirZ, h.heavy);
       this.sfx.play('melee', { pitch: h.heavy ? 0.78 : 1 });
+      // 近战命中帧：被打的小人闪白（远程的在 syncShots 命中帧）
+      if (h.unitId !== undefined) this.unitFlash.set(h.unitId, this.lastFrame.time);
     }
     for (const id of this.seenHits) if (!live.has(id)) this.seenHits.delete(id);
   }

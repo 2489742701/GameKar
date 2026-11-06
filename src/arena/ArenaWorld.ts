@@ -120,7 +120,7 @@ export class ArenaWorld {
    * 只上报近战：远程有弹丸，视图在弹丸飞到目标那一刻自己放 `impact`，
    * 这里再报一次就是双重特效（炮弹落地会炸两次）。
    */
-  hits: { id: number; x: number; z: number; y: number; dirX: number; dirZ: number; heavy: boolean; ttl: number }[] = [];
+  hits: { id: number; x: number; z: number; y: number; dirX: number; dirZ: number; heavy: boolean; ttl: number; /** 被打目标单位 id（渲染器闪白用） */ unitId?: number }[] = [];
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后塌平 */
   ruins: ArenaRuin[] = [];
   /**
@@ -659,6 +659,7 @@ export class ArenaWorld {
       toZ: best.u.z,
       t: 0,
       seconds: 0.4,
+      targetId: best.u.id,
     });
     this.hurtUnit(best.u, spec.damage);
   }
@@ -747,6 +748,7 @@ export class ArenaWorld {
         toZ: target.z,
         t: 0,
         seconds: b.kind === 'arrowTower' ? 0.22 : 0.45,
+        targetId: target.unit?.id,
       });
       const dmg = spec.damage;
       if ('splash' in spec && spec.splash) {
@@ -845,17 +847,18 @@ export class ArenaWorld {
         } else {
           const def = unitDef(u.defId);
           if (def.projectile) {
-            this.shots.push({
-              id: this.nextId++,
-              ammo: def.projectile,
-              source: 'unit',
-              fromX: u.x,
-              fromZ: u.z,
-              toX: foe.x,
-              toZ: foe.z,
-              t: 0,
-              seconds: def.projectile === 'magic' ? 0.4 : 0.28,
-            });
+      this.shots.push({
+        id: this.nextId++,
+        ammo: def.projectile,
+        source: 'unit',
+        fromX: u.x,
+        fromZ: u.z,
+        toX: foe.x,
+        toZ: foe.z,
+        t: 0,
+        seconds: def.projectile === 'magic' ? 0.4 : 0.28,
+        targetId: foe.unit?.id,
+      });
           }
         }
         if (foe.unit) this.hurtUnit(foe.unit, st.damage);
@@ -880,6 +883,7 @@ export class ArenaWorld {
             dirZ: dz / len,
             heavy: def.role === 'tank',
             ttl: 0.08,
+            unitId: foe.unit?.id,
           });
         }
         continue;

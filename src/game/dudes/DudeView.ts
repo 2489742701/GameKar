@@ -79,6 +79,8 @@ export class DudeSprite {
   /** 贴图是否左右镜像（默认朝右，往左走才镜像） */
   private flipX = false;
   private lastRect: { x: number; w: number } | null = null;
+  /** 受击闪白强度 0..1（ArenaApp 每帧衰减后回写；材质是本 sprite 独立的，随便染） */
+  private whiteness = 0;
 
   constructor(
     private readonly pack: DudePack,
@@ -136,6 +138,21 @@ export class DudeSprite {
     if (this.flipX === flip) return;
     this.flipX = flip;
     if (this.lastRect) this.writeUv();
+  }
+
+  /**
+   * 受击闪白（2026-11-06 用户："小人被攻击的时候明显的变白一下"）。
+   *
+   * 材质是本 sprite 独立的，直接染 `color`：MeshBasicMaterial 的 color 乘在
+   * 贴图上，分量拉到 1+k×1.6（线性空间超白）就是"整个人白一下"，
+   * alphaTest 保住轮廓。k=0 恢复原样。**每帧都要调**（外部负责衰减），
+   * 只调高不调低会白成灯泡。
+   */
+  setFlash(k: number): void {
+    const v = Math.max(0, Math.min(1, k));
+    if (v === this.whiteness) return;
+    this.whiteness = v;
+    this.material.color.setScalar(1 + v * 1.6);
   }
 
   get flipped(): boolean {

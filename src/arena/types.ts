@@ -158,6 +158,12 @@ export interface ArenaShot {
   ammo: 'arrow' | 'cannon' | 'magic';
   /** 谁打出来的：视图拿它决定炮口高度与弹丸样子（箭塔顶 / 炮塔台 / 车头 / 兵的手上 / 大本营水晶顶） */
   source: 'arrowTower' | 'cannonTower' | 'siege' | 'ballista' | 'unit' | 'core';
+  /**
+   * 被打目标的单位 id（打建筑时不填）——**渲染器**在弹丸命中帧给这个小人来一下
+   * 闪白（2026-11-06 用户："小人被攻击的时候明显的变白一下"）。
+   * 远程伤害是开火瞬间结算的，闪白不挂 hurtUnit，挂弹丸命中帧才不穿帮。
+   */
+  targetId?: number;
   fromX: number;
   fromZ: number;
   toX: number;
