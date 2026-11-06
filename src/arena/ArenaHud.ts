@@ -8,11 +8,12 @@
  * 不在这一层判"还剩几秒算加时"—— 那条在 config.MATCH，改一处两边都跟着动。
  */
 
-import { ECONOMY, HAND, MATCH, REROLL, SUPPLY, type ArenaCard } from './config';
+import { ECONOMY, HAND, MATCH, REROLL, type ArenaCard } from './config';
 import type { ArenaApp } from './ArenaApp';
 import { el as make } from '@ui/dom';
 import { iconOf } from './cardIcons';
 import { BREAD_ICON, COIN_ICON, POP_ICON } from './supplyIcons';
+import { supplyRowsHtml } from './visuals/supplyRows';
 import { needsStaffing } from './visuals/labels';
 import { createBannerEditor } from './bannerEditor';
 
@@ -149,7 +150,18 @@ export class ArenaHud {
       card.addEventListener('pointerdown', (e) => {
         // 拖放手势的起点（2026-11-06）：不在这里抢 click，位移超过阈值才进拖放模式
         if (e.pointerType === 'mouse' && e.button !== 0) return;
-        this.dragFrom = { slot: i, x: e.clientX, y: e.clientY };
+        this.dragFrom = { slot: i, x: e.clientX, y: e.clientY, pointerType: e.pointerType };
+        // 触屏长按（180ms 没动）=「按住屏幕就有影子」，松手按影子落点放下；
+        // <180ms 的点击仍是普通点击选牌，不误伤
+        if (e.pointerType === 'touch') {
+          this.clearHoldTimer();
+          this.holdTimer = window.setTimeout(() => {
+            if (!this.dragFrom || this.dragging) return;
+            this.dragging = true;
+            this.app.beginCardDrag(this.dragFrom.slot);
+            this.app.moveCardDrag(this.dragFrom.x, this.dragFrom.y, 'touch');
+          }, 180);
+        }
       });
       card.addEventListener('click', () => {
         // 拖回卡牌/拖出去落牌后浏览器还会补一个 click —— 吃掉，别误选
@@ -221,9 +233,17 @@ export class ArenaHud {
 
   // ---------------------------------------------------------------- 卡牌拖放
 
-  private dragFrom: { slot: number; x: number; y: number } | null = null;
+  private dragFrom: { slot: number; x: number; y: number; pointerType: string } | null = null;
   private dragging = false;
   private suppressCardClick = false;
+  private holdTimer: number | null = null;
+
+  private clearHoldTimer(): void {
+    if (this.holdTimer !== null) {
+      window.clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+  }
 
   /**
    * 拖放（2026-11-06 用户）："拖住它拖到地图上，会显示一个影子看看放在哪里，
@@ -240,23 +260,26 @@ export class ArenaHud {
         this.dragging = true;
         this.app.beginCardDrag(this.dragFrom.slot);
       }
-      this.app.moveCardDrag(e.clientX, e.clientY);
+      this.clearHoldTimer();
+      this.app.moveCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse');
     });
     window.addEventListener('pointerup', (e) => {
       if (!this.dragFrom) return;
       if (this.dragging) {
         const hit = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
         if (hit?.closest('.ahud__hand')) this.app.cancelCardDrag();
-        else this.app.dropCardDrag(e.clientX, e.clientY);
+        else this.app.dropCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse');
         this.suppressCardClick = true;
         window.setTimeout(() => { this.suppressCardClick = false; }, 0);
       }
+      this.clearHoldTimer();
       this.dragFrom = null;
       this.dragging = false;
     });
     // 指针被系统取消（来电/切窗）：别把影子留在场上
     window.addEventListener('pointercancel', () => {
       if (this.dragging) this.app.cancelCardDrag();
+      this.clearHoldTimer();
       this.dragFrom = null;
       this.dragging = false;
     });
@@ -502,7 +525,7 @@ export class ArenaHud {
     // 「几人几包」改成 SVG 图标（用户 2026-11-06），**差哪样标哪样红**：
     // 判据读 `supplyBlocked` 的理由文本（和出牌被拒同一条路，不另算一套账），
     // 玩家看着牌面就知道"为什么造不出来"，不用点出去被拒了才明白。
-    parts.need.innerHTML = needHtmlOf(card);
+    parts.need.innerHTML = supplyRowsHtml(card);
     const why = this.app.world.supplyBlocked('blue', card);
     el.dataset['short'] = why ? (why.includes('面包') ? 'bread' : 'pop') : '';
   }
@@ -545,30 +568,5 @@ export class ArenaHud {
   }
 }
 
-/**
- * 卡面底部那行「这张牌要吃什么 / 给什么」—— SVG 图标版（用户 2026-11-06：
- * "几人几包就改成 SVG"；文字版"2 人 · 1 包"在 62px 宽的卡上挤成三行过）。
- *
- * 规矩不变：数值全部从 `SUPPLY` 拿 —— 卡面不自己算账，改一处三处都对。
- * - 民居：+ 两枚人像（它给容器加 2 人口）
- * - 磨坊：两枚人像 + 加两枚面包（自己占 2 人口、给面包加 2）
- * - 其它建筑：两枚人像（占 2 人口）
- * - 军队：n 枚人像 + n 枚面包（n ≤ 3 数图标，n > 4 写 ×n —— 竖屏卡宽装不下 10 枚）
- *
- * 每组包一层带 `data-need` 的 span：人口不够时 CSS 只把 pop 组标红、面包不够只红 bread 组。
- */
-function needHtmlOf(card: ArenaCard): string {
-  const group = (need: 'pop' | 'bread', inner: string): string =>
-    `<span class="ahud__card__need__grp" data-need="${need}">${inner}</span>`;
-  const repeat = (need: 'pop' | 'bread', svg: string, n: number): string =>
-    n > 3 ? group(need, `${svg}<b>×${n}</b>`) : group(need, svg.repeat(n));
-  const plus = '<b class="ahud__card__need__plus">+</b>';
-  const pop = SUPPLY.buildingPop;
-  if (card.kind === 'building') {
-    if (card.building === 'house') return group('pop', `${plus}${POP_ICON.repeat(SUPPLY.housePop)}`);
-    if (card.building === 'mill') return repeat('pop', POP_ICON, pop) + group('bread', `${plus}${BREAD_ICON.repeat(SUPPLY.millBread)}`);
-    return repeat('pop', POP_ICON, pop);
-  }
-  const n = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
-  return repeat('pop', POP_ICON, n) + repeat('bread', BREAD_ICON, n);
-}
+/** 两行增减需求已抽到 `visuals/supplyRows.ts`（纯函数、单测覆盖）。 */
+

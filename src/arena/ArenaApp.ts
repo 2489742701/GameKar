@@ -34,6 +34,7 @@ import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
 import { Confetti } from './visuals/confetti';
 import { makeShadow } from './visuals/shadow';
+import { buildingSpinKey, spinOf } from './visuals/spin';
 import { WallShell } from './shell';
 import { makeBanner, type Banner } from './props';
 import { sideBanner, sideColor } from './theme';
@@ -95,6 +96,8 @@ const SINK_SECONDS = 3.4;
 const SINK_DUST_SECONDS = 2.6;
 /** 受击泛白/闪白的目标色（往这个白 lerp，别直接设——原色才恢复得回来） */
 const FLASH_WHITE = new THREE.Color(1, 1, 1);
+/** 触屏拖放：影子落在手指前方（屏幕上方）这么多 CSS 像素，免得手指盖住预览 */
+const DRAG_FINGER_OFFSET = 56;
 
 export class ArenaApp {
   readonly scene = new THREE.Scene();
@@ -137,6 +140,8 @@ export class ArenaApp {
     {
       sails?: { group: THREE.Object3D; speed: number }[];
       turret?: THREE.Object3D;
+      /** 楼体朝向（弧度）：炮口目标角要减掉它才不指偏 */
+      spin?: number;
       banner?: Banner;
       /** 外墙：施工时按进度露出，受伤时崩掉 */
       shell?: WallShell;
@@ -399,6 +404,8 @@ export class ArenaApp {
     const wantCols = this.map.size.cols + 10;
     const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
     this.fitZoom = fit;
+    // 竖屏告诉导演：拉近 + 构图偏自家（2026-11-07 设计文档 D 节）
+    this.director.portrait = a < 1;
     // 自动模式下由导演每帧把缩放拉回机位；手动模式直接吃这个值
     if (this.director.locked) this.rig.zoom = fit * this.director.current.zoomFactor;
   }
@@ -511,6 +518,12 @@ export class ArenaApp {
     return inBounds(cell, this.map.size) ? cell : null;
   }
 
+  /** 拖放专用：触屏把落点抬到手指前方，桌面不变；影子与落牌共用。 */
+  private dragCell(clientX: number, clientY: number, pointerType: string): GridPos | null {
+    const lift = pointerType === 'touch' ? DRAG_FINGER_OFFSET : 0;
+    return this.clientToCell(clientX, clientY - lift);
+  }
+
   beginCardDrag(slot: number): void {
     const card = this.world.hand[slot];
     if (!card) return;
@@ -544,6 +557,7 @@ export class ArenaApp {
       });
       body.scale.setScalar(BUILDING_SCALE);
       g.add(body);
+      g.userData['body'] = body;
     } else {
       const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.3, 6), this.dragModelMat);
       cone.position.y = 0.65;
@@ -555,9 +569,10 @@ export class ArenaApp {
   }
 
   /** 影子跟随指针：贴着格子中心，合法绿 / 非法红（判据 canPlaceAt）。 */
-  moveCardDrag(clientX: number, clientY: number): void {
+  moveCardDrag(clientX: number, clientY: number, pointerType = 'mouse'): void {
     if (this.dragSlot < 0 || !this.dragGhost || !this.dragFill || !this.dragEdge || !this.dragModelMat) return;
-    const cell = this.clientToCell(clientX, clientY);
+    // 触屏：影子在手指前方（上方），手指不挡预览；桌面鼠标偏移 0
+    const cell = this.dragCell(clientX, clientY, pointerType);
     this.dragGhost.visible = cell !== null;
     if (!cell) return;
     const card = this.world.hand[this.dragSlot];
@@ -569,6 +584,10 @@ export class ArenaApp {
       ? this.map.footprintSurfaceY(pos(cell.col, cell.row), size, size)
       : this.map.surfaceY(cell) + 0.06;
     this.dragGhost.position.set(c.x, baseY, c.z);
+    // 模型影子的朝向与落成一致（同一个 落点+类型 key）
+    const ghostBody = this.dragGhost.userData['body'] as THREE.Object3D | undefined;
+    const bId = card?.building;
+    if (ghostBody && bId) ghostBody.rotation.y = spinOf(buildingSpinKey(cell.col, cell.row, bId));
     const ok = this.world.canPlaceAt('blue', this.dragSlot, cell.col, cell.row).ok;
     const color = ok ? 0x7fe09a : 0xe2503f;
     this.dragFill.color.setHex(color);
@@ -577,9 +596,10 @@ export class ArenaApp {
   }
 
   /** 松手在地图上 = 落牌；松手回到手牌区由 HUD 直接调 cancelCardDrag（拖回取消）。 */
-  dropCardDrag(clientX: number, clientY: number): void {
+  dropCardDrag(clientX: number, clientY: number, pointerType = 'mouse'): void {
     if (this.dragSlot < 0) return;
-    const cell = this.clientToCell(clientX, clientY);
+    // 落牌与影子必须用同一个函数，杜绝"看着放这、落到那"
+    const cell = this.dragCell(clientX, clientY, pointerType);
     if (cell) this.playAt(this.dragSlot, cell);
     this.cancelCardDrag();
   }
@@ -661,10 +681,20 @@ export class ArenaApp {
       // 隔着战场只看旗子和血条才分得出敌我，那是用户 2026-10-27 点名要改的。
       const accent = sideColor(b.side);
       const model = ARENA_MODELS[name](accent);
-      const group = buildModel(model.static);
+      /**
+       * 朝向随机（2026-11-07 设计文档 B 节）：外层 group 不转（位置/缩放/血条/旗/
+       * 脚手架照旧），楼体装进 body 子组按 `落点+类型` 的稳定 hash 转 0/90/180/270°
+       * ±4° 小抖动。占地仍是 3×3，横竖摆都行；同 seed 同摆法朝向一致。
+       * 拖拽影子用同一 key，预览朝向 = 落成朝向。
+       */
+      const group = new THREE.Group();
+      const body = buildModel(model.static);
+      const spin = spinOf(buildingSpinKey(b.col, b.row, b.kind));
+      body.rotation.y = spin;
+      group.add(body);
       // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
       const shell = new WallShell(model.shell);
-      group.add(shell.mesh);
+      body.add(shell.mesh);
       // 收集楼体材质（受击泛白用）：无贴图的标准材质 + 原色副本；旗布（带 map）与后加的血条不收
       const mats: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[] = [];
       group.traverse((o) => {
@@ -677,8 +707,8 @@ export class ArenaApp {
       // 磨坊的帆是六块各自带 pivot 的件 ⇒ 套件建了六个转轴 Group。
       // 只转第一个的话，就是"一块帆在转、其余五块钉死"（用户："有的地方转，有的地方不转"）。
       const sails = spinnersOf(group).map((s) => ({ group: s.group, speed: s.speed }));
-      const turret = group.userData[TURRET] as THREE.Object3D | undefined;
-      this.parts.set(b.id, { sails: sails.length > 0 ? sails : undefined, turret });
+      const turret = body.userData[TURRET] as THREE.Object3D | undefined;
+      this.parts.set(b.id, { sails: sails.length > 0 ? sails : undefined, turret, spin });
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
@@ -1306,7 +1336,8 @@ export class ArenaApp {
       if (part.turret) {
         // 炮口常驻对准 aim：aim 平时就是"冲着对面"的默认值，只有开火时才被改成目标方向。
         // 所以它不会自己到处扫视（用户说过"不是全自动转向"），但一眼就能看出朝哪边。
-        const want = -b.aim;
+        // 楼体随机转了 spin，炮口要把这个角度补回来（否则一转就指偏）
+        const want = -b.aim - (part.spin ?? 0);
         const cur = part.turret.rotation.y;
         const delta = Math.atan2(Math.sin(want - cur), Math.cos(want - cur));
         if (Math.abs(delta) > 0.002) part.turret.rotation.y = cur + delta * Math.min(1, 0.25);
