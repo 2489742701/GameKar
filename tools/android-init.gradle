@@ -1,0 +1,25 @@
+/**
+ * Gradle 国内镜像初始化脚本（2026-11-06 安卓测试分发版）。
+ *
+ * 为什么需要它：本机 Java 访问 dl.google.com / repo.maven.apache.org 会读超时，
+ * 首次构建必然卡在下载 AGP 8.7.2。这里把镜像**插到仓库列表最前面**（不删原仓库），
+ * 能连官方时一切照旧，连不上时自动走镜像。用 `-I` 传进去，不污染工程文件。
+ *
+ * 只对构建依赖生效，游戏运行时不需要网络（素材全打包进 APK）。
+ */
+def addMirrors = { RepositoryHandler repos ->
+    repos.maven { url 'https://maven.aliyun.com/repository/google' }
+    repos.maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+    repos.maven { url 'https://maven.aliyun.com/repository/public' }
+    repos.maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
+}
+
+settingsEvaluated { settings ->
+    addMirrors(settings.pluginManagement.repositories)
+    addMirrors(settings.dependencyResolutionManagement.repositories)
+}
+
+gradle.beforeProject { project ->
+    addMirrors(project.buildscript.repositories)
+    addMirrors(project.repositories)
+}

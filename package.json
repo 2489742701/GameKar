@@ -9,12 +9,19 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
-    "check": "npm run typecheck && vitest run"
+    "check": "npm run typecheck && vitest run",
+    "dist:web": "npm run build",
+    "android:web": "npm run build && node tools/prepare_android_web.mjs",
+    "android:sync": "npm run android:web && node tools/sync_android_web.mjs",
+    "android:apk": "npm run android:sync && node tools/build_android_apk.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/core": "^7.6.10",
     "three": "^0.171.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.10",
     "@types/node": "^26.6.5",
     "@types/three": "^0.171.0",
     "typescript": "^5.7.2",

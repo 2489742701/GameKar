@@ -23,3 +23,20 @@ Desktop.ini
 
 # 一次性探针与临时读数，不属于回归套件
 .scratch/
+
+# 本机工具缓存与项目记忆（.workbuddy 是 WorkBuddy 的工作区记忆，不是游戏代码）
+.codegraph/
+.workbuddy/
+
+# 像素小人生成器的素材库（267 个文件，独立管理，不进游戏仓库）
+小人生成器/
+
+# 安卓测试分发：原生工程纳入版本管理，构建产物/本机配置不纳入
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/build/
+dist-android/
+releases/*.apk
+releases/*.zip

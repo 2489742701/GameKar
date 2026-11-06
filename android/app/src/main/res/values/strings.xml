@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GAMEKAR</string>
+    <string name="title_activity_main">GAMEKAR</string>
+    <string name="package_name">com.gamekar.arena</string>
+    <string name="custom_url_scheme">com.gamekar.arena</string>
+</resources>
