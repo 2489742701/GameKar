@@ -381,6 +381,9 @@ export class ArenaHud {
   /** 10Hz 由 App 的 onState 调；内容便宜，全量重画。 */
   refresh(): void {
     const s = this.app.world.summary();
+    // 发牌裁量提示：读的判据与 draw()/reroll()/落牌校验是同一个 buildingRoom
+    const hand = this.el.querySelector('.ahud__hand');
+    if (hand) hand.setAttribute('data-no-room', String(!this.app.world.buildingRoom('blue')));
     // 金币条：数字 + 填充宽度一起走（判据只读 summary().gold，条不自己算账）。
     // data-full 给整条泛金光 —— 满了就提醒玩家"该花出去了"。
     this.goldText.textContent = String(s.gold);

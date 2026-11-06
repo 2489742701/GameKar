@@ -34,6 +34,7 @@ import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
 import { Confetti } from './visuals/confetti';
 import { makeShadow } from './visuals/shadow';
+import { makeAirscrew, makeBalloon, makeBomber } from './visuals/flyers';
 import { buildingSpinKey, spinOf } from './visuals/spin';
 import { WallShell } from './shell';
 import { makeBanner, type Banner } from './props';
@@ -55,6 +56,18 @@ export interface ArenaAppOptions {
   /** UI 回调：金/血变了、出牌失败要说话 */
   onToast?: (text: string, tone?: 'ok' | 'warn') => void;
   onState?: () => void;
+}
+
+interface Corpse {
+  obj: THREE.Object3D;
+  kind: 'corpse' | 'wreck';
+  life: number;
+  x: number;
+  z: number;
+  dude?: DudeSprite | null;
+  /** 解体碎块（局部坐标里各自飞散） */
+  pieces?: { mesh: THREE.Object3D; vx: number; vy: number; vz: number; spin: number }[];
+  fireIn: number;
 }
 
 interface UnitSprite {
@@ -82,6 +95,12 @@ interface UnitSprite {
   runHold: number;
   /** 贴地黑影（2026-11-06 用户："给他们一个影子"）；siege 车的影子在 group 里跟着转 */
   shadow?: THREE.Mesh;
+  /** 飞行单位：转子 / 翼 / 闪白材质（3D 模型，不用像素小人那套） */
+  flying?: boolean;
+  rotor?: THREE.Object3D;
+  rotorAxis?: 'y' | 'z';
+  wings?: THREE.Object3D[];
+  flyMats?: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[];
   /** 受击闪白剩余时间（秒）；0 = 正常 */
   flashLeft: number;
   /** 上一次消费的受击标记（unitFlash 的时间戳；变了就重新触发闪白） */
@@ -96,6 +115,10 @@ const SINK_SECONDS = 3.4;
 const SINK_DUST_SECONDS = 2.6;
 /** 受击泛白/闪白的目标色（往这个白 lerp，别直接设——原色才恢复得回来） */
 const FLASH_WHITE = new THREE.Color(1, 1, 1);
+/** 飞行器离地高度（格）与尸体/残骸停留时间（秒） */
+const FLY_HEIGHT = 1.25;
+const CORPSE_SECONDS = 2.6;
+const FLYER_IDS = new Set(['balloon', 'airscrew', 'bomber']);
 /** 触屏拖放：影子落在手指前方（屏幕上方）这么多 CSS 像素，免得手指盖住预览 */
 const DRAG_FINGER_OFFSET = 56;
 
@@ -131,6 +154,8 @@ export class ArenaApp {
 
   private readonly buildingMeshes = new Map<number, THREE.Group>();
   private readonly unitSprites = new Map<number, UnitSprite>();
+  /** 倒地不动的小人 / 解体冒火的车与飞机（视图自己的残骸池，逻辑层不碰） */
+  private readonly corpses: Corpse[] = [];
   private readonly flagMarks = new Map<number, THREE.Group>();
   private readonly styles = new Map<string, DudeStyle>();
   /** 会动的零件：磨坊的风车、炮塔的头、塔口的火光 */
@@ -662,6 +687,7 @@ export class ArenaApp {
     this.damage.update(info.delta);
     this.confetti.update(info.delta);
     this.stepSinking(info.delta);
+    this.stepCorpses(info.delta);
     this.fx.step(info.delta);
     this.dustLayer.update(info.delta);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
@@ -1012,6 +1038,7 @@ export class ArenaApp {
         const k = entry.flashLeft / 0.16;
         if (entry.dude) entry.dude.setFlash(k);
         if (entry.flashMat && entry.flashBase) entry.flashMat.color.copy(entry.flashBase).lerp(FLASH_WHITE, k);
+        for (const m of entry.flyMats ?? []) m.mat.color.copy(m.color).lerp(FLASH_WHITE, k * 0.8);
       }
       // 行军扬尘：每 0.4–0.65 秒在脚下放一小团（不是每帧，别把烟池吃满）
       entry.dustIn = Math.max(0, entry.dustIn - dt);
@@ -1020,6 +1047,20 @@ export class ArenaApp {
         this.fx.dust(u.x, u.z, this.groundY(u.x, u.z) + 0.12);
       }
 
+      if (entry.flying) {
+        // 悬浮 + 轻微起伏/侧晃；转子转、扑翼机机翼颤动；影子仍留在地上
+        const t = this.lastFrame.time;
+        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + FLY_HEIGHT + Math.sin(t * 1.5 + u.id) * 0.1, u.z);
+        entry.obj.rotation.z = Math.sin(t * 1.2 + u.id) * 0.02;
+        if (entry.rotor) {
+          if (entry.rotorAxis === 'z') entry.rotor.rotation.z += dt * 5.5;
+          else entry.rotor.rotation.y += dt * 0.8;
+        }
+        for (let i = 0; i < (entry.wings?.length ?? 0); i++) {
+          entry.wings![i]!.rotation.z = (i === 0 ? 1 : -1) * Math.sin(t * 4) * 0.03;
+        }
+        continue;
+      }
       if (entry.siege) {
         // 车头朝**逻辑层的 aim**：锁敌时对准目标（炮口/弩臂真的指过去），
         // 行军时朝行进方向。旧实现只在"这一步动了"时按位移改朝向，
@@ -1058,17 +1099,120 @@ export class ArenaApp {
     }
     for (const [id, entry] of this.unitSprites) {
       if (alive.has(id)) continue;
-      // 倒下的位置留几团烟 + 火星（用最后缓存的位置）
-      this.fx.death(entry.x, entry.z, this.groundY(entry.x, entry.z) + 0.5);
+      const x = entry.x, z = entry.z, ground = this.groundY(x, z);
+      // 轰炸机飞出地图：直接消失，不播解体（用户："直到地图外面就是直接消失"）
+      if (this.world.leftField.has(id)) {
+        entry.dude?.dispose();
+        entry.shadow?.removeFromParent();
+        entry.obj.removeFromParent();
+        this.unitSprites.delete(id);
+        continue;
+      }
       this.sfx.play('kill', { pitch: 0.85 + Math.random() * 0.3 });
-      entry.dude?.dispose();
+      if (entry.siege || entry.flying) {
+        // 车 / 飞机：解体碎在地上 + 冒火（用户第 2 条）
+        const pieces = this.scatterPieces(entry.obj);
+        this.fx.impact(x, z, ground, 'cannon', 1.3);
+        this.fx.spark(x, z, ground + 0.4, 0, 0, 14);
+        this.corpses.push({ obj: entry.obj, kind: 'wreck', life: CORPSE_SECONDS, x, z, pieces, fireIn: 0 });
+      } else {
+        // 小人：倒地不动（die 停在最后一帧）＋ 几团烟，过一会渐隐（用户第 1 条）
+        entry.dude?.play('die', time, false);
+        this.fx.death(x, z, ground + 0.5);
+        this.corpses.push({ obj: entry.obj, kind: 'corpse', life: CORPSE_SECONDS, x, z, dude: entry.dude, fireIn: 0 });
+      }
       entry.shadow?.removeFromParent();
-      entry.obj.removeFromParent();
       this.unitSprites.delete(id);
     }
   }
 
+  /** 把车体/机体的第一层部件打散：各自给一点初速与自旋，落到地面就停。 */
+  private scatterPieces(obj: THREE.Object3D): Corpse['pieces'] {
+    const out: NonNullable<Corpse['pieces']> = [];
+    for (const child of obj.children) {
+      const a = Math.random() * Math.PI * 2;
+      out.push({
+        mesh: child,
+        vx: Math.cos(a) * (0.4 + Math.random() * 0.8),
+        vy: 0.6 + Math.random() * 0.9,
+        vz: Math.sin(a) * (0.4 + Math.random() * 0.8),
+        spin: (Math.random() - 0.5) * 4,
+      });
+    }
+    return out;
+  }
+
+  /** 尸体/残骸每帧推进：碎块落地、火光持续 1.6 秒、最后 0.7 秒渐隐后移除。 */
+  private stepCorpses(dt: number): void {
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      const c = this.corpses[i]!;
+      c.life -= dt;
+      if (c.kind === 'wreck') {
+        for (const p of c.pieces ?? []) {
+          p.vy -= 3.2 * dt;
+          p.mesh.position.x += p.vx * dt;
+          p.mesh.position.y += p.vy * dt;
+          p.mesh.position.z += p.vz * dt;
+          p.mesh.rotation.z += p.spin * dt;
+          if (p.mesh.position.y < -0.2) {
+            p.mesh.position.y = -0.2;
+            p.vy = 0;
+            p.vx *= 0.8;
+            p.vz *= 0.8;
+          }
+        }
+        c.fireIn -= dt;
+        if (c.fireIn <= 0 && c.life > CORPSE_SECONDS - 1.6) {
+          c.fireIn = 0.26;
+          const ground = this.groundY(c.x, c.z);
+          this.fx.spark(c.x + (Math.random() - 0.5) * 0.6, c.z + (Math.random() - 0.5) * 0.6, ground + 0.35, 0, 0, 6);
+          this.fx.dust(c.x, c.z, ground + 0.4);
+        }
+      }
+      const fade = Math.min(1, Math.max(0, c.life / 0.7));
+      c.obj.traverse((o) => {
+        const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+        if (m) { m.transparent = true; m.opacity = fade; }
+      });
+      if (c.life <= 0) {
+        c.dude?.dispose();
+        c.obj.removeFromParent();
+        if (c.kind === 'wreck') c.obj.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.geometry) mesh.geometry.dispose();
+          const m = mesh.material;
+          if (Array.isArray(m)) m.forEach((x) => x.dispose());
+          else if (m) m.dispose();
+        });
+        this.corpses.splice(i, 1);
+      }
+    }
+  }
+
+  /** 三架飞行器：按 defId 取对应模型，悬浮 + 贴地影子 + 闪白材质副本。 */
+  private makeFlyerUnit(u: ArenaUnit): UnitSprite {
+    const accent = sideColor(u.side);
+    const model = u.defId === 'balloon' ? makeBalloon(accent)
+      : u.defId === 'airscrew' ? makeAirscrew(accent)
+        : makeBomber(accent);
+    const g = model.group;
+    g.position.set(u.x, this.groundY(u.x, u.z) + FLY_HEIGHT, u.z);
+    this.scene.add(g);
+    const shadow = makeShadow(1.0, 0.75);
+    shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
+    this.scene.add(shadow);
+    return {
+      obj: g, dude: null, pushers: [], siege: false, face: 0,
+      x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0,
+      shadow, flashLeft: 0, flying: true,
+      rotor: model.rotor, rotorAxis: model.rotorAxis, wings: model.wings,
+      flyMats: model.mats.map((m) => ({ mat: m, color: m.color.clone() })),
+    };
+  }
+
   private makeSprite(u: ArenaUnit): UnitSprite {
+    // 三个飞行器是纯 3D 模型，不依赖像素小人素材包
+    if (FLYER_IDS.has(u.defId)) return this.makeFlyerUnit(u);
     // 没有素材包就退成一枚阵营色锥体：玩法照常，只是看不到像素小人
     if (!this.pack || !this.gallery) {
       const cone = new THREE.Mesh(

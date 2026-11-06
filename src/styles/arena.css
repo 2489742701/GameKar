@@ -289,9 +289,25 @@
 }
 
 .ahud__hand {
+  position: relative;
   display: flex;
   gap: 8px;
   pointer-events: auto;
+}
+
+/* 没地方盖楼了：只发军队（判据 world.buildingRoom，HUD 不自己算） */
+.ahud__hand[data-no-room='true']::after {
+  content: '场地已满 · 只发军队';
+  position: absolute;
+  left: 50%;
+  top: -19px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--gold-hi);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
 }
 
 .ahud__card {

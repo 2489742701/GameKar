@@ -102,7 +102,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）· start.css（开始菜单）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 478 条
+                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 488 条
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
                       arena_shot.mjs：实机读数器（无头 Edge + CDP），跑几秒后读世界状态与 HUD 文案并截图
                       unit_lineup.js：把九个兵种排成两排、量实机身高并打标签（配合 arena_shot 用）

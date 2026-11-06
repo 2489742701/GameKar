@@ -132,6 +132,46 @@ export const CARD_ICON: Record<string, string> = {
     <path fill="currentColor" d="M6.8 1.8c3.2 0 5.6 1.9 5.6 4.2 0 1.6-1.2 2.8-3 3.3L6.8 1.8Z"/>
     <path fill="currentColor" d="M17.2 1.8C14 1.8 11.6 3.7 11.6 6c0 1.6 1.2 2.8 3 3.3l2.6-7.5Z"/>
   </svg>`,
+
+  /** 长矛兵小队：三支长矛 */
+  spearmen: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 1.5 14 5.5h-4l2-4Zm0 4.2 1 13.8h-2l1-13.8Z"/>
+    <path fill="currentColor" d="M5.5 2.5 7 6H4l1.5-3.5Zm.8 4 .8 12.5H5.5l.8-12.5Z"/>
+    <path fill="currentColor" d="M18.5 2.5 20 6h-3l1.5-3.5Zm-.8 4 .8 12.5h-.8l0-12.5Z"/>
+  </svg>`,
+
+  /** 弩手小队：弩臂 + 弦 */
+  crossbowmen: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M11 3h2v16h-2V3Zm-1 7h4v2h-4v-10Z"/>
+    <path d="M3 6c4 2 14 2 18 0M3 6l5 4M21 6l-5 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </svg>`,
+
+  /** 盾卫：一面重盾 */
+  shields: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 1.8 2.8 5v7c0 5 3.8 8.4 9.2 10.2 5.4-1.8 9.2-5.2 9.2-10.2V5L12 1.8Zm0 2.4 7 2.5v5.3c0 3.7-2.7 6.2-7 7.8-4.3-1.6-7-4.1-7-7.8V6.7l7-2.5Z"/>
+    <path fill="currentColor" d="M11 6h2v10h-2V6Zm-4 4h10v2H7v-2Z"/>
+  </svg>`,
+
+  /** 热气球：球囊 + 吊绳 + 吊篮（和飞行器是两回事，07:45 用户纠正） */
+  balloon: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 1.5c4.1 0 7 3.2 7 7.2 0 3.7-2.6 6.6-5.4 8.3h-3.2C7.6 15.3 5 12.4 5 8.7c0-4 2.9-7.2 7-7.2Z"/>
+    <path d="M10 17h4l1 5H9l1-5Zm1-2 1 2m2-2-1 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+  </svg>`,
+
+  /** 达芬奇空气螺旋机：尖锥吊舱 + 旋转螺旋帆 */
+  airscrew: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 13 7.5 21h9L12 13Z"/>
+    <path d="M12 2v11M4.5 4c5 2 10 2 15 0M4.5 8c5 2 10 2 15 0M4.5 12c5 2 10 2 15 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+    <circle fill="currentColor" cx="12" cy="2" r="1.4"/>
+  </svg>`,
+
+  /** 扑翼轰炸机：龙骨 + 双三角翼 + 燕尾 */
+  bomber: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M11.2 3h1.6v18h-1.6V3Z"/>
+    <path fill="currentColor" d="M11.2 7 2 11.5 4 13l7.2-3V7Zm1.6 0 9.2 4.5L20 13l-7.2-3V7Z"/>
+    <path fill="currentColor" d="M11.2 17 7 21h10l-4.2-4h-1.6Z"/>
+    <circle fill="currentColor" cx="12" cy="3" r="1.3"/>
+  </svg>`,
 };
 
 /** 取一张卡的图标；卡池里新加卡但忘了画图时退回一个空框，不要崩。 */

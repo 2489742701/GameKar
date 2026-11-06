@@ -454,6 +454,54 @@ export const CARDS: ArenaCard[] = [
     kind: 'squad',
     cost: 11,
     squad: [{ unitId: 'orc', count: 4 }],
+  },  // ---------------------------------------------------------------- 2026-11-07 四张新军队卡（平衡见设计文档 B 节）
+  {
+    id: 'spearmen',
+    name: '长矛兵小队',
+    blurb: '三个长矛兵。便宜近战铺量，人多但血薄。',
+    kind: 'squad',
+    cost: 6,
+    squad: [{ unitId: 'spearman', count: 3 }],
+  },
+  {
+    id: 'crossbowmen',
+    name: '弩手小队',
+    blurb: '三个弩手。射程比弓手远一格，装填更慢。',
+    kind: 'squad',
+    cost: 8,
+    squad: [{ unitId: 'crossbowman', count: 3 }],
+  },
+  {
+    id: 'shields',
+    name: '盾卫',
+    blurb: '两个重盾。扛线专用，几乎打不动人。',
+    kind: 'squad',
+    cost: 10,
+    squad: [{ unitId: 'shieldbearer', count: 2 }],
+  },
+  {
+    id: 'balloon',
+    name: '热气球',
+    blurb: '悬浮投弹：越过建筑与黄区，从空中丢炸弹。',
+    kind: 'squad',
+    cost: 12,
+    squad: [{ unitId: 'balloon', count: 1 }],
+  },
+  {
+    id: 'airscrew',
+    name: '空气螺旋机',
+    blurb: '达芬奇飞行器：螺旋帆掠袭，速度快但血薄。',
+    kind: 'squad',
+    cost: 9,
+    squad: [{ unitId: 'airscrew', count: 1 }],
+  },
+  {
+    id: 'bomber',
+    name: '扑翼轰炸机',
+    blurb: '一次性冲刺：直扑敌方，下方有敌军就投弹，飞出地图即消失。',
+    kind: 'squad',
+    cost: 14,
+    squad: [{ unitId: 'bomber', count: 1 }],
   },
 ];
 
@@ -480,6 +528,20 @@ export const BUILDING_SPECS = {
 export const BUILDING_SCALE = 2.2;
 
 export type BuildingKind = keyof typeof BUILDING_SPECS;
+
+/** 扑翼轰炸机（2026-11-07 设计文档 E 节）：一次性冲刺、下方投弹、飞出界消失。 */
+export const BOMBER = {
+  /** 检测「下方有敌方军队」的半径 */
+  detect: 2.5,
+  /** 投弹溅射半径 */
+  splash: 1.6,
+  /** 每发炸弹的伤害 */
+  damage: 22,
+  /** 投弹间隔（秒） */
+  interval: 1.4,
+  /** 飞出这个边界就算离场 */
+  exitMargin: 1,
+};
 
 /** 敌方 AI 的节奏：多久想一次、出手的随机上限。 */
 export const AI = {

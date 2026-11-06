@@ -16,6 +16,7 @@ import { damageOf, unitDef } from '@game/data/units';
 import {
   AI,
   BARRACKS,
+  BOMBER,
   BUILD,
   BUILDING_SPECS,
   CARDS,
@@ -121,6 +122,8 @@ export class ArenaWorld {
    * 这里再报一次就是双重特效（炮弹落地会炸两次）。
    */
   hits: { id: number; x: number; z: number; y: number; dirX: number; dirZ: number; heavy: boolean; ttl: number; /** 被打目标单位 id（渲染器闪白用） */ unitId?: number }[] = [];
+  /** 飞出地图消失的单位（视图据此跳过解体特效；只增不减，一局最多几十条） */
+  readonly leftField = new Set<number>();
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后塌平 */
   ruins: ArenaRuin[] = [];
   /**
@@ -190,6 +193,17 @@ export class ArenaWorld {
     if (exclude) taken.add(exclude);
     let pool = CARDS.filter((c) => !taken.has(c.id));
     if (pool.length === 0) pool = CARDS;
+
+    /**
+     * **发牌裁量（2026-11-07 设计文档 A 节）**：没地方放楼了就别再发建筑卡。
+     * 判据 `buildingRoom` 与落牌共用 `buildingPlacementIssue`，不另算一套账；
+     * 没空位时两个建筑保底（后勤 / 建筑）也必须跳过，否则刚过滤完又塞回来。
+     */
+    if (!this.buildingRoom(side)) {
+      const army = pool.filter((c) => c.kind !== 'building');
+      pool = army.length > 0 ? army : pool;
+      return this.rng.pick(pool);
+    }
 
     // ① 后勤保底（2026-10-31）：场上缺民居/磨坊，而手里一张都没有 ⇒ 这一张发它。
     //    没有这一条，实测 seed 20261027 打 120 秒双方**一兵未出**：
@@ -311,6 +325,32 @@ export class ArenaWorld {
     return side === 'blue' ? col < FIELD.midCol : col >= FIELD.midCol;
   }
 
+  /**
+   * **建筑落位判据（唯一一处，2026-11-07 设计文档 A 节）**：
+   * 半场 / 3×3 不越界 / 三列不压黄区 / 不与任何楼重叠。
+   * `placementProblem` 的建筑分支直接返回它，`buildingRoom` 与发牌裁量也读它——
+   * 卡面提示、落牌拒绝、发牌过滤三件事不会算出两套账。
+   */
+  private buildingPlacementIssue(side: Side, col: number, row: number): string | null {
+    void side;
+    const spec = { cols: 3, rows: 3 }; // 五栋楼全是 3×3（BUILDING_SPECS）
+    if (col < 0 || row < 0 || col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return '出界了';
+    for (let c = col; c < col + spec.cols; c++) if (this.inNoBuild(c)) return '中间黄区不能盖楼';
+    if (!this.cellFree(col, row, spec.cols, spec.rows)) return '这格被占了';
+    return null;
+  }
+
+  /** 这一侧还有没有能放下一栋 3×3 楼的空位。 */
+  buildingRoom(side: Side): boolean {
+    for (let row = 0; row <= FIELD.rows - 3; row++) {
+      for (let col = 0; col <= FIELD.cols - 3; col++) {
+        if (!this.inOwnHalf(side, col)) continue;
+        if (this.buildingPlacementIssue(side, col, row) === null) return true;
+      }
+    }
+    return false;
+  }
+
   buildingCenter(b: ArenaBuilding): { x: number; z: number } {
     return { x: b.col + b.cols / 2, z: b.row + b.rows / 2 };
   }
@@ -396,6 +436,8 @@ export class ArenaWorld {
     const card = this.hands[side][slot]!;
 
     this.execute(side, card, col, row);
+    // 这栋楼落地后可能刚好把最后一处空位占掉：手里剩下的建筑卡立刻换成军队卡
+    if (card.kind === 'building') this.purgeBuildingsIfNoRoom(side);
     // 打出去就进冷却，冷却完补一张新的（配卡组以后再做）
     this.lastPlayed[side][slot] = card.id;
     this.hands[side][slot] = null;
@@ -422,15 +464,11 @@ export class ArenaWorld {
     if (blocked) return blocked;
     if (!this.inOwnHalf(side, col)) return '只能放在自己半场';
 
-    const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
-    if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return '出界了';
-    if (card.kind !== 'building' && !this.cellFree(col, row, 1, 1)) return '这格被占了';
-    // 中间那条黄区是禁建带：连边都不许压进去
-    for (let c = col; c < col + spec.cols; c++) {
-      if (!this.inNoBuild(c)) continue;
-      return card.kind === 'building' ? '中间黄区不能盖楼' : '中间黄区不能放兵';
-    }
-    if (card.kind === 'building' && !this.cellFree(col, row, spec.cols, spec.rows)) return '这格被占了';
+    if (card.kind === 'building') return this.buildingPlacementIssue(side, col, row);
+    // 军队卡仍占 1×1（飞行单位也一样：落牌位置维持与现有锁一致）
+    if (col + 1 > FIELD.cols || row + 1 > FIELD.rows) return '出界了';
+    if (!this.cellFree(col, row, 1, 1)) return '这格被占了';
+    if (this.inNoBuild(col)) return '中间黄区不能放兵';
     return null;
   }
 
@@ -473,14 +511,17 @@ export class ArenaWorld {
      * 现在：`missingLogistics()` 说缺磨坊就保 mill，**同时仍保一张房屋**
      * （用户原话「刷新默认会给一张房屋」，这条不破）。都不缺时只保房屋。
      */
-    const needs = this.missingLogisticsAll(side);
-    const wanted: string[] = needs.length > 0 ? [...needs] : ['house'];
-    // 用户原话「刷新默认会给一张房屋」：即使只缺磨坊，房屋也照保
-    if (!wanted.includes('house')) wanted.push('house');
-    let slot = HAND.size - 1;
-    for (const id of wanted) {
-      if (this.hands[side].some((c) => c?.id === id)) continue;
-      this.hands[side][slot--] = cardById(id);
+    // 没空位时**不塞** house/mill 保底（否则刷新完又是一张盖不下去的楼）
+    if (this.buildingRoom(side)) {
+      const needs = this.missingLogisticsAll(side);
+      const wanted: string[] = needs.length > 0 ? [...needs] : ['house'];
+      // 用户原话「刷新默认会给一张房屋」：即使只缺磨坊，房屋也照保
+      if (!wanted.includes('house')) wanted.push('house');
+      let slot = HAND.size - 1;
+      for (const id of wanted) {
+        if (this.hands[side].some((c) => c?.id === id)) continue;
+        this.hands[side][slot--] = cardById(id);
+      }
     }
 
     // 牌全换了，冷却与「刚打出去那张」的记录一起清掉
@@ -488,6 +529,15 @@ export class ArenaWorld {
     this.lastPlayed[side].fill(null);
     this.spend(side, REROLL.cost);
     return { ok: true };
+  }
+
+  /** 场地没空位时，把手牌里的建筑卡换成军队卡（槽位/冷却不动，只换卡面）。 */
+  private purgeBuildingsIfNoRoom(side: Side): void {
+    if (this.buildingRoom(side)) return;
+    for (let i = 0; i < HAND.size; i++) {
+      const card = this.hands[side][i];
+      if (card?.kind === 'building') this.hands[side][i] = this.draw(side, card.id);
+    }
   }
 
   /** 立刻补一张牌到那一格（补的是**手上还没有的**牌，也不补刚打出去那张）。 */
@@ -533,6 +583,7 @@ export class ArenaWorld {
           // 默认朝向就是冲着对面：蓝朝右(+x)、红朝左(π)
           aim: side === 'blue' ? 0 : Math.PI,
           healIn: part.unitId === 'mobileCannon' ? undefined : unitDef(part.unitId).special?.kind === 'heal' ? unitDef(part.unitId).special!.every : undefined,
+          bombIn: this.bomberOf(part.unitId) ? BOMBER.interval * 0.5 : undefined,
         });
         i++;
       }
@@ -598,6 +649,8 @@ export class ArenaWorld {
       for (let j = i + 1; j < us.length; j++) {
         const b = us[j]!;
         if (b.hp <= 0) continue;
+        // 飞行单位不与地面兵互挤（空中分层，v1 简单口径）
+        if (this.flyingOf(a.defId) || this.flyingOf(b.defId)) continue;
         let dx = b.x - a.x;
         let dz = b.z - a.z;
         let d = Math.hypot(dx, dz);
@@ -618,9 +671,10 @@ export class ArenaWorld {
         b.z += uz * push;
       }
     }
-    // 推出场地边界就算了：按回场内，别让分离把兵挤出场外
+    // 推出场地边界就算了：按回场内，别让分离把兵挤出场外。
+    // 飞行单位**不 clamp**：轰炸机要靠飞出地图来消失（2026-11-07 设计文档 E 节）。
     for (const u of us) {
-      if (u.hp <= 0) continue;
+      if (u.hp <= 0 || this.flyingOf(u.defId)) continue;
       u.x = Math.min(FIELD.cols - 0.4, Math.max(0.4, u.x));
       u.z = Math.min(FIELD.rows - 0.4, Math.max(0.4, u.z));
     }
@@ -777,6 +831,61 @@ export class ArenaWorld {
     }
   }
 
+  /**
+   * **扑翼轰炸机**（2026-11-07 设计文档 E 节，用户第二份 HTML）：
+   * 从己方直冲敌方，不索敌；检测「下方」半径内有敌方军队就投弹（溅射）；
+   * 飞出地图直接消失（记进 leftField，视图不播解体）；在地图内被打掉则走正常死亡
+   * ⇒ 视图按「飞行单位被击毁」播解体 + 火。
+   */
+  /** mobileCannon / ballista 不在 UNITS 表里（statsOf 特判），直接 unitDef 会抛异常 */
+  private flyingOf(defId: string): boolean {
+    if (defId === 'mobileCannon' || defId === 'ballista') return false;
+    return unitDef(defId).flying === true;
+  }
+
+  private bomberOf(defId: string): boolean {
+    if (defId === 'mobileCannon' || defId === 'ballista') return false;
+    return unitDef(defId).bomber === true;
+  }
+
+  private tickBomber(u: ArenaUnit, speed: number, dt: number): void {
+    const dir = u.side === 'blue' ? 1 : -1;
+    u.x += dir * speed * dt;
+    u.aim = dir > 0 ? 0 : Math.PI;
+    u.bombIn = Math.max(0, (u.bombIn ?? 0) - dt);
+    if (u.bombIn <= 0) {
+      let target: ArenaUnit | null = null;
+      let best = BOMBER.detect;
+      for (const e of this.units) {
+        if (e.side === u.side || e.hp <= 0 || this.bomberOf(e.defId)) continue;
+        const d = Math.hypot(e.x - u.x, e.z - u.z);
+        if (d <= best) { best = d; target = e; }
+      }
+      if (target) {
+        u.bombIn = BOMBER.interval;
+        this.shots.push({
+          id: this.nextId++,
+          ammo: 'cannon',
+          source: 'unit',
+          fromX: u.x,
+          fromZ: u.z,
+          toX: target.x,
+          toZ: target.z,
+          t: 0,
+          seconds: 0.5,
+        });
+        for (const e of this.units) {
+          if (e.side === u.side || e.hp <= 0) continue;
+          if (Math.hypot(e.x - target.x, e.z - target.z) <= BOMBER.splash) this.hurtUnit(e, BOMBER.damage);
+        }
+      }
+    }
+    if (u.x < -BOMBER.exitMargin || u.x > FIELD.cols + BOMBER.exitMargin) {
+      u.hp = 0;
+      this.leftField.add(u.id);
+    }
+  }
+
   private tickUnits(dt: number): void {
     for (const u of this.units) {
       if (u.hp <= 0) continue;
@@ -784,6 +893,12 @@ export class ArenaWorld {
       u.cooldown = Math.max(0, u.cooldown - dt);
       u.stun = Math.max(0, u.stun - dt);
       if (u.stun > 0) continue;
+
+      // 扑翼轰炸机：一次性直冲 + 下方投弹 + 飞出界消失，不参与常规索敌
+      if (this.bomberOf(u.defId)) {
+        this.tickBomber(u, st.speed, dt);
+        continue;
+      }
 
       // 牧师：每 spec.every 秒给身边 radius 格内的自己人回 amount 血（兵种表里的 special）
       if (u.defId === 'priest') {
@@ -858,7 +973,7 @@ export class ArenaWorld {
         toX: foe.x,
         toZ: foe.z,
         t: 0,
-        seconds: def.projectile === 'magic' ? 0.4 : 0.28,
+        seconds: def.projectile === 'cannon' ? 0.45 : def.projectile === 'magic' ? 0.4 : 0.28,
         targetId: foe.unit?.id,
       });
           }
@@ -1013,6 +1128,12 @@ export class ArenaWorld {
     if (len < 1e-6) return;
     // 行军时朝向跟着这一步走（攻击分支会先把它覆盖成"对准目标"）
     u.aim = Math.atan2(dz, dx);
+    // 飞行单位：越过建筑/黄区，不做绕障（设计文档 C 节 v1）
+    if (this.flyingOf(u.defId)) {
+      u.x += dx;
+      u.z += dz;
+      return;
+    }
     const base = Math.atan2(dz, dx);
     const side = u.detour ?? 1;
     // 必须包含 ±90°：贴着墙走时任何带前进分量的方向都会撞墙，只有纯侧移能滑出去
