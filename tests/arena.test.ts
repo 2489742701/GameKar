@@ -282,8 +282,12 @@ describe('场地口径', () => {
   });
 });
 
-describe('指挥与射程口径', () => {
-  it('点地面 = 全军朝那儿走，到了自动恢复推进', () => {
+/**
+ * 2026-11-07：玩家点地面指挥已关（军队是棋子），这里测的是**内部 API**
+ * `world.command()` —— 留给 PVE 波次脚本用；玩家入口由实机探针验收。
+ */
+describe('内部指挥 API 与射程口径', () => {
+  it('内部 command：全军朝那儿走，到了自动恢复推进', () => {
     const world = new ArenaWorld({ seed: 21 });
     give(world, 'archers');
     world.playCard('blue', 0, 6, 9);

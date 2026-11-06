@@ -457,9 +457,11 @@ export class ArenaApp {
         this.opts.onToast?.('再点一处地面，把出兵旗放过去');
         return;
       }
-      // 点空地 = 指挥己方所有兵往那儿走（再点一次对面也不管用，它们路上遇敌照打）
-      const n = this.world.command('blue', cell.col, cell.row);
-      this.opts.onToast?.(n > 0 ? `全军向 (${cell.col}, ${cell.row}) 推进` : '场上还没有你的兵', n > 0 ? 'ok' : 'warn');
+      /**
+       * 2026-11-07 用户："点击移动军队这个功能给关掉，军队是棋子，落下之后
+       * 就不归我们管了，他会自己走。" 点空地一律静默 —— 不再改任何单位的 order。
+       * （兵营挪旗是建筑配置，仍然保留；world.command 留作 PVE 波次脚本的内部 API。）
+       */
       return;
     }
 
