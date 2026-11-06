@@ -272,6 +272,77 @@ export class BattleFx {
     );
   }
 
+  /**
+   * 整栋楼塌下来时的尘雾（用户 2026-11-06：「地面扬起尘埃，让人看不清楚房子缩到地里面的样子」）。
+   *
+   * 和 `dust()`（行军那一小撮）不是一回事：这里要的是**一大片、活得久、往外扑**的烟，
+   * 单团 scale 1.1–2.4 格、寿命 1.4–2.4 秒，十几团叠起来才糊得住一栋 3×3 的楼下沉。
+   * 下沉过程里 `collapsePuff()` 还会继续补，否则烟散了楼还剩半截露在外面。
+   */
+  collapseDust(x: number, z: number, baseY: number, radius: number): void {
+    /**
+     * 光靠像素烟挡不住楼（实测 puffs=42 还是看得见楼在往下缩）：
+     * 烟贴图是镂空的像素点，放大只让点更稀。遮挡要靠**软边大雾** ——
+     * `spawnHaze` 的 depthTest:false + renderOrder 8，雾永远叠在世界之上。
+     * 这里用 -1 当 key，不和建造雾共用每栋楼的 26 团配额。
+     */
+    for (let i = 0; i < 9; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * radius;
+      this.spawnHaze(
+        x + Math.cos(a) * r,
+        z + Math.sin(a) * r,
+        // 尘要从地面一直扬到楼身中段：只贴地面（<1 格）时红顶还整个露着，遮不住下沉
+        baseY + 0.3 + Math.random() * 1.8,
+        2.2 + Math.random() * 1.2,
+        // alpha 给足：age 里 fade 是幂次衰减，中期只剩三成，0.42 实测糊不住
+        0.7,
+        // 寿命盖住整个下沉（3.4 秒），别让尘先散、楼还剩半截
+        3.4 + Math.random() * 1.0,
+        -1,
+      );
+    }
+    // 贴地那一层：更宽更久，负责"脚下也看不清"
+    this.spawnHaze(x, z, baseY - 0.02, 3.0 + radius * 0.4, 0.5, 4.0, -1);
+
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * radius;
+      this.puff(
+        x + Math.cos(a) * r,
+        z + Math.sin(a) * r,
+        baseY + 0.12 + Math.random() * 0.55,
+        1.1 + Math.random() * 1.3,
+        1.4 + Math.random() * 1.0,
+        Math.cos(a) * 0.55,
+        Math.sin(a) * 0.55,
+      );
+    }
+  }
+
+  /** 下沉过程中补两团像素烟 + 一团软雾，把"楼还在往下缩"的那几秒继续糊住。 */
+  collapsePuff(x: number, z: number, baseY: number): void {
+    const a = Math.random() * Math.PI * 2;
+    this.spawnHaze(
+      x + Math.cos(a) * 0.8, z + Math.sin(a) * 0.8,
+      baseY + 0.4 + Math.random() * 1.4,
+      2.0 + Math.random() * 1.1, 0.55, 2.2 + Math.random() * 0.8, -1,
+    );
+    for (let i = 0; i < 2; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * 1.6;
+      this.puff(
+        x + Math.cos(a) * r,
+        z + Math.sin(a) * r,
+        baseY + 0.1 + Math.random() * 0.4,
+        1.0 + Math.random() * 1.1,
+        1.1 + Math.random() * 0.8,
+        Math.cos(a) * 0.4,
+        Math.sin(a) * 0.4,
+      );
+    }
+  }
+
   /** 单位倒下：几团烟 + 一把火星。 */
   death(x: number, z: number, y: number): void {
     for (let i = 0; i < 4; i++) {
@@ -321,7 +392,17 @@ export class BattleFx {
    * 火星：外壳崩开时从破口往外溅的一把亮片（重力 14 格/秒²，0.3–0.65 秒熄灭）。
    * 和烟雾分开是因为它要"往下掉"、要亮，混在烟里两颗都不像。
    */
-  spark(x: number, z: number, y: number, dirX: number, dirZ: number, count = 8): void {
+  spark(
+    x: number,
+    z: number,
+    y: number,
+    dirX: number,
+    dirZ: number,
+    count = 8,
+    sizeScale = 1,
+    /** 上抛强度：建筑崩落要"往上溅"（1），近战要"横向打出去"（0.35） */
+    lift = 1,
+  ): void {
     for (let i = 0; i < count; i++) {
       if (this.sparks.length >= CAP.spark) return;
       const sprite = new THREE.Sprite(
@@ -329,7 +410,7 @@ export class BattleFx {
       );
       const spread = (Math.random() - 0.5) * 1.8;
       const power = 1.1 + Math.random() * 2.2;
-      const size = 0.1 + Math.random() * 0.14;
+      const size = (0.1 + Math.random() * 0.14) * sizeScale;
       sprite.position.set(
         x + (Math.random() - 0.5) * 0.35,
         y + (Math.random() - 0.5) * 0.35,
@@ -340,7 +421,7 @@ export class BattleFx {
       this.sparks.push({
         sprite,
         vx: dirX * power + dirZ * spread,
-        vy: 1.2 + Math.random() * 1.8,
+        vy: (1.2 + Math.random() * 1.8) * lift,
         vz: dirZ * power - dirX * spread,
         life: 0,
         seconds: 0.3 + Math.random() * 0.35,
@@ -427,6 +508,37 @@ export class BattleFx {
         0.5 + Math.random() * 0.5,
       );
     }
+    /**
+     * 三种弹的"碎片"不一样（2026-11-05 用户："远程也要有不同的粒子放射"）：
+     * 炮弹砸出十颗火星、法术是五颗青点、箭只有三颗木屑 —— 箭要是也炸十颗，就和炮弹没区别了。
+     * 这里统一放，调用方别再各自补一遍（`ArenaApp` 原来在炮弹落地处又补了 8 颗，重复）。
+     */
+    this.spark(x, z, groundY + 0.45, 0, 1, ammo === 'cannon' ? 10 : ammo === 'magic' ? 5 : 3);
+  }
+
+  /**
+   * 近战命中：贴身的火星 + 一小团土，方向朝受击方被推的方向。
+   *
+   * 为什么和 `impact` 分开：那边是"弹丸落地"，有烟有闪。
+   * 近战没有飞行物，给的必须是**短促的一下**（火星 0.3–0.65 秒、土 0.24 秒），
+   * 数量一多就成了爆炸，刀砍的分量反而没了。
+   *
+   * @param heavy 重击（机器巨人那种大块头）给多一点，普通兵 4 颗
+   */
+  melee(x: number, z: number, y: number, dirX: number, dirZ: number, heavy = false): void {
+    /**
+     * 位置往**攻击者**那侧退半格（`-dir`）：受击点正好压在像素小人的卡片上，
+     * 小人是 alphaTest 0.5 的不透明面片，粒子生成在它正中心就会被整块挡住 ——
+     * 第一版截图里"只有脚下两粒白点"就是这个原因（火星全在卡片后面）。
+     */
+    const hx = x - dirX * 0.45;
+    const hz = z - dirZ * 0.45;
+    // 闪光给足：0.28 那档在绿地上几乎看不见
+    this.flash(hx, hz, y + 0.1, heavy ? 1.4 : 1.0);
+    // 火星横向打出去（lift 0.35）：默认的上抛是给"墙崩落往上溅"用的，近战那样会变成头顶冒星
+    this.spark(hx, hz, y + 0.1, dirX, dirZ, heavy ? 8 : 5, 2.2, 0.35);
+    // 土从**脚下**起，不是从被砍的位置 —— 那才是"踩起来的一脚"
+    this.puff(hx, hz, Math.max(0.55, y - 0.55), 0.24, 0.3);
   }
 
   /**

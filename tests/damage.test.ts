@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { HIT_THRESHOLDS, hitsFor } from '../src/arena/damage';
+import * as THREE from 'three';
+import { DamageFx, HIT_THRESHOLDS, hitsFor } from '../src/arena/damage';
 import { ARENA_MODELS } from '../src/arena/models';
 import { WallShell } from '../src/arena/shell';
 import { Random } from '../src/engine/math/Random';
@@ -95,5 +96,74 @@ describe('外墙面片', () => {
     while (shell.count > 0 && guard++ < 20) shell.breach(6, new Random(guard));
     expect(shell.count).toBe(0);
     expect(shell.breach(6, new Random(1))).toHaveLength(0);
+  });
+});
+
+describe('碎块的生命周期', () => {
+  /**
+   * 用户 2026-11-05："废墟砖块掉到哪里都不影响，只要最后过一段时间后自动消失，慢慢消失就可以了。"
+   *
+   * 上一版碎块**永远不会消失**（只在超过 70 块时回收最老的），打满 3 分钟塔脚下会积一圈板子。
+   * 这条锁就是钉住"会消失"：落地 12 秒后由 `update` 摘掉。
+   */
+  it('崩下来的板子会落地，并在 12 秒后自己消失', () => {
+    const scene = new THREE.Scene();
+    const fx = new DamageFx(scene);
+    const model = ARENA_MODELS.arrowTower(0);
+    const shell = new WallShell(model.shell);
+    fx.register(1, { center: { x: 0, z: 0 }, groundY: 0.5, scale: 2.2, seed: 7 }, shell);
+    fx.sync(1, 0.5, 'cannon');
+    const born = fx.debrisCount;
+    expect(born).toBeGreaterThan(0);
+
+    // 跑 3 秒：应该全都落地了，一块都还没被摘
+    for (let i = 0; i < 190; i++) fx.update(0.016);
+    expect(fx.debrisCount).toBe(born);
+
+    // 再跑 15 秒（合计 18 秒 > 12 秒寿命 + 落地/弹跳那 1 秒）：全清
+    for (let i = 0; i < 940; i++) fx.update(0.016);
+    expect(fx.debrisCount).toBe(0);
+  });
+});
+
+/**
+ * 整栋塌了的面片（用户 2026-11-06：「倒塌之后，所有的面片都掉在地上」）。
+ *
+ * 反证必须成立：旧的 `forget()` 会把还立着的板子连同网格一起抹掉 ——
+ * 那条才是「凭空消失」的 bug。新实现 `collapseAll()` 必须把剩余面片一块不剩地变成落体。
+ */
+describe('整栋倒塌：面片全部落地', () => {
+  const setup = () => {
+    const scene = new THREE.Scene();
+    const fx = new DamageFx(scene);
+    const model = ARENA_MODELS.arrowTower(0);
+    const shell = new WallShell(model.shell);
+    fx.register(1, { center: { x: 0, z: 0 }, groundY: 0.5, scale: 2.2, seed: 7 }, shell);
+    return { fx, shell };
+  };
+
+  it('反证：旧 forget() 之后还立着一堆面片（旧实现就是这么让墙凭空消失的）', () => {
+    const { fx, shell } = setup();
+    fx.sync(1, 0.45, 'arrow');
+    const left = shell.count;
+    expect(left).toBeGreaterThan(0);
+    fx.forget(1);
+    expect(shell.count, 'forget 不掉落任何面片').toBe(left);
+  });
+
+  it('collapseAll 把剩余面片一块不剩变成落体，且不会重复掉', () => {
+    const { fx, shell } = setup();
+    const total = shell.count;
+    fx.sync(1, 0.45, 'arrow');
+    const left = shell.count;
+    expect(left).toBeLessThan(total);
+    expect(fx.debrisCount).toBeGreaterThan(0);
+
+    const dropped = fx.collapseAll(1, 'cannon');
+    expect(dropped).toBe(left);
+    expect(shell.count).toBe(0);
+    expect(fx.debrisCount).toBeGreaterThan(left / 2);
+    // 再调一次：状态已删，不该重复掉
+    expect(fx.collapseAll(1)).toBe(0);
   });
 });

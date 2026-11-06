@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Random } from '@engine/math/Random';
+import type { HitKind } from './ArenaWorld';
 import type { ShellPanel } from './models';
 import type { WallShell } from './shell';
 
@@ -46,7 +47,15 @@ interface Chunk {
   restY: number;
   /** 躺平时的朝向（外墙原朝向） */
   yaw: number;
+  /** 落地后的倾斜与偏转：每块都不一样，不然一排板子躺得像铺地砖 */
+  tiltX: number;
+  tiltZ: number;
+  yawJitter: number;
+  /** 被什么打下来的：炮弹打下来的板子落地就歪着，不再摆正 */
+  kind: HitKind;
   rest: boolean;
+  /** 落地之后活了多久（用来"过一会儿慢慢消失"，见 DEBRIS_LIFE） */
+  age: number;
 }
 
 interface Damaged extends DamageInfo {
@@ -58,6 +67,18 @@ const GRAVITY = 16;
 const BOUNCE = 0.3;
 /** 场上最多留多少块碎块：再多就回收最老的（每栋楼最多 5 档 × 6 块 = 30） */
 const MAX_DEBRIS = 70;
+/**
+ * 碎块落地后活多久（秒）以及最后几秒怎么消失。
+ *
+ * 用户 2026-11-05："废墟砖块掉到哪里都不影响，只要最后过一段时间后自动消失，慢慢消失就可以了。"
+ * 上一版碎块**永远不会消失**，只在超过 `MAX_DEBRIS` 时回收最老的 ——
+ * 一局打到 3 分钟，塔脚底下会积一圈永远躺着的板子。
+ *
+ * 消失方式用**缩小 + 下沉**，不用淡出：碎块的材质按颜色共享（`matOf`），
+ * 改 opacity 会把场上所有同色碎块一起变透明。
+ */
+const DEBRIS_LIFE = 12;
+const DEBRIS_FADE = 2.2;
 
 export class DamageFx {
   /** 外壳崩开时的回调：让视图在破口处溅一把火星 */
@@ -76,14 +97,33 @@ export class DamageFx {
   }
 
   /** 每帧喂血量分数：跨过一档就崩一片（一次掉很多血会连崩多档）。 */
-  sync(id: number, frac: number): void {
+  sync(id: number, frac: number, kind: HitKind = 'blade'): void {
     const st = this.states.get(id);
     if (!st) return;
     const want = hitsFor(frac);
     while (st.hits < want) {
-      this.breakOnce(st, st.hits);
+      this.breakOnce(st, st.hits, kind);
       st.hits += 1;
     }
+  }
+
+  /**
+   * 整栋塌了：**剩下没崩的面片一块不剩地全掉到地上**（用户 2026-11-06）。
+   *
+   * 之前 `sync()` 只按血量档位崩（最多 5 档、每档 12% 左右），楼一没就
+   * `forget()` 把整张外墙网格 dispose 掉 —— 墙上还立着的板子凭空消失。
+   * 现在拆楼统一走这里：一次 `breach(count)` 摘光，逐块变成落体。
+   * 返回掉了几块，方便视图 / 探针核实。
+   */
+  collapseAll(id: number, kind: HitKind = 'cannon'): number {
+    const st = this.states.get(id);
+    if (!st) return 0;
+    const rnd = new Random(st.seed + 91129);
+    const removed = st.shell.breach(st.shell.count, rnd);
+    for (const panel of removed) this.dropPanel(st, panel, rnd, kind);
+    st.shell.dispose(); // 网格已经空了；调用方负责把它从场景里摘掉
+    this.states.delete(id);
+    return removed.length;
   }
 
   /** 楼没了：外墙网格跟着释放，地上已经躺下的碎块留着。 */
@@ -94,10 +134,26 @@ export class DamageFx {
     this.states.delete(id);
   }
 
-  /** 碎块弹道：重力 + 落地弹一下，速度耗尽了就躺平。 */
+  /** 碎块弹道：重力 + 落地弹一下，速度耗尽了就躺平；躺够 12 秒缩小下沉消失。 */
   update(dt: number): void {
-    for (const c of this.debris) {
-      if (c.rest) continue;
+    // 倒序：落地满 12 秒的要在这一趟里摘掉，正序删会跳元素
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const c = this.debris[i]!;
+      if (c.rest) {
+        c.age += dt;
+        const left = DEBRIS_LIFE - c.age;
+        if (left <= 0) {
+          this.dropDebris(i);
+          continue;
+        }
+        if (left < DEBRIS_FADE) {
+          // 最后 2.2 秒：缩到 2% 并往下沉 0.4 格 —— 看起来是"陷进土里"
+          const k = left / DEBRIS_FADE;
+          c.mesh.scale.setScalar(Math.max(0.02, k));
+          c.mesh.position.y = c.restY - (1 - k) * 0.4;
+        }
+        continue;
+      }
       c.vy -= GRAVITY * dt;
       const p = c.mesh.position;
       p.x += c.vx * dt;
@@ -116,14 +172,32 @@ export class DamageFx {
           c.wy *= 0.5;
           c.wz *= 0.5;
         } else {
-          // 躺平：墙板落地不会立着，顺着原来的朝向铺在地上
-          c.mesh.rotation.set(-Math.PI / 2, c.yaw, 0);
+          /**
+           * 躺平 —— 但**每块都歪一点点**。
+           *
+           * 上一版统一按 `(-π/2, yaw, 0)` 摆，结果一排板子躺得像铺地砖；
+           * 更糟的是薄板正对镜头时只剩一条线，玩家读成"砖头直直插在地上"
+           * （用户 2026-11-02 的原话）。现在每块有自己的倾角与偏转，
+           * 炮击炸下来的歪得更狠，落地就那样，不再摆正。
+           */
+          c.mesh.rotation.set(-Math.PI / 2 + c.tiltX, c.yaw + c.yawJitter, c.tiltZ);
+          // 歪了以后板子的角会扎进土里，抬一点补回来
+          c.mesh.position.y = c.restY + Math.abs(Math.sin(c.tiltX)) * 0.12;
           c.vy = 0;
           c.rest = true;
+          c.age = 0;
           this.onLand?.(c.mesh.position.x, c.mesh.position.z, c.restY);
         }
       }
     }
+  }
+
+  /** 摘掉一块碎块并释放它的几何（材质按颜色共享，不能 dispose）。 */
+  private dropDebris(index: number): void {
+    const c = this.debris[index]!;
+    this.scene.remove(c.mesh);
+    c.mesh.geometry.dispose();
+    this.debris.splice(index, 1);
   }
 
   get debrisCount(): number {
@@ -135,12 +209,12 @@ export class DamageFx {
     return this.states.size;
   }
 
-  private breakOnce(st: Damaged, index: number): void {
+  private breakOnce(st: Damaged, index: number, kind: HitKind): void {
     const rnd = new Random(st.seed + index * 977 + 73);
     // 每档崩掉约 12% 的墙板（48 块 → 6 块；12 块 → 2 块），至少 2 块
     const n = Math.min(6, Math.max(2, Math.round(st.shell.count * 0.12)));
     const removed = st.shell.breach(n, rnd);
-    for (const panel of removed) this.dropPanel(st, panel, rnd);
+    for (const panel of removed) this.dropPanel(st, panel, rnd, kind);
     // 破口中心 + 外法线：火星从这里往外溅
     if (removed.length > 0 && this.onBreach) {
       let ax = 0;
@@ -166,7 +240,7 @@ export class DamageFx {
   }
 
   /** 把一块墙板变成落体：位置/尺寸/颜色都从模型来。 */
-  private dropPanel(st: Damaged, panel: ShellPanel, rnd: Random): void {
+  private dropPanel(st: Damaged, panel: ShellPanel, rnd: Random, kind: HitKind): void {
     const s = st.scale;
     const w = panel.w * s;
     const h = panel.h * s;
@@ -184,24 +258,35 @@ export class DamageFx {
     // 外法线 = (sin yaw, 0, cos yaw)：板子从墙上往外崩，再带一点切向抖动
     const nx = Math.sin(panel.yaw);
     const nz = Math.cos(panel.yaw);
+    /**
+     * 炮弹炸散 vs 刀砍/箭射正常掉：
+     * - 炮弹：**全方向**（不认墙面朝外那一条），速度 1.6–4.0 格/秒，转得更野；
+     * - 刀箭：顺着墙面法线往外崩 0.5–1.4，慢一点，落地就躺下。
+     */
+    const blast = kind === 'cannon';
+    const dir = rnd.next() * Math.PI * 2;
+    const blastSpeed = 1.6 + rnd.next() * 2.4;
     this.debris.push({
       mesh,
-      vx: nx * (0.5 + rnd.next() * 0.9) + nz * (rnd.next() - 0.5) * 0.8,
-      vy: 0.9 + rnd.next() * 1.3,
-      vz: nz * (0.5 + rnd.next() * 0.9) - nx * (rnd.next() - 0.5) * 0.8,
-      wx: (rnd.next() - 0.5) * 8,
-      wy: (rnd.next() - 0.5) * 8,
-      wz: (rnd.next() - 0.5) * 8,
+      vx: blast ? Math.cos(dir) * blastSpeed : nx * (0.5 + rnd.next() * 0.9) + nz * (rnd.next() - 0.5) * 0.8,
+      vy: blast ? 1.8 + rnd.next() * 1.8 : 0.9 + rnd.next() * 1.3,
+      vz: blast ? Math.sin(dir) * blastSpeed : nz * (0.5 + rnd.next() * 0.9) - nx * (rnd.next() - 0.5) * 0.8,
+      wx: (rnd.next() - 0.5) * (blast ? 18 : 8),
+      wy: (rnd.next() - 0.5) * (blast ? 16 : 8),
+      wz: (rnd.next() - 0.5) * (blast ? 18 : 8),
       restY: st.groundY + t / 2 + 0.01,
       yaw: panel.yaw,
+      // 落地姿态：平常只歪一点点（±0.2 弧度，保证"躺着"而不是立着），
+      // 炮击炸翻的歪到 ±0.7 —— 排得太整齐会像铺地砖，歪太多又会"插在地里"
+      tiltX: (rnd.next() - 0.5) * (blast ? 1.4 : 0.4),
+      tiltZ: (rnd.next() - 0.5) * (blast ? 1.2 : 0.34),
+      yawJitter: (rnd.next() - 0.5) * (blast ? 1.4 : 0.5),
+      kind,
       rest: false,
+      age: 0,
     });
 
-    while (this.debris.length > MAX_DEBRIS) {
-      const old = this.debris.shift()!;
-      this.scene.remove(old.mesh);
-      old.mesh.geometry.dispose();
-    }
+    while (this.debris.length > MAX_DEBRIS) this.dropDebris(0);
   }
 
   private matOf(color: number): THREE.MeshStandardMaterial {

@@ -1,13 +1,14 @@
 /**
  * 对战模式的旗帜 —— 阵营色只出现在这一小片布上（不在地上涂色块）。
  *
- * 布面用几段正弦摆动（每帧改顶点，不用着色器）：核心、兵营、箭塔、炮塔、磨坊各一面，
+ * 布面用几段正弦摆动（每帧改顶点，不用着色器）：大本营、兵营、箭塔、炮塔、磨坊各一面，
  * 落点由 `models.ts` 的 `ARENA_FLAGS` 给（底部/杆高都按模型自身高度配）。
  */
 
 import * as THREE from 'three';
 import type { Side } from './config';
-import { sideColor } from './theme';
+import { sideBanner, sideColor } from './theme';
+import { bannerClothCanvas } from './banner';
 
 export interface Banner {
   group: THREE.Group;
@@ -57,12 +58,17 @@ export function makeBanner(side: Side, pole = 0.85, width = 0.74, height = 0.78)
 
   const geo = new THREE.PlaneGeometry(width, height, 3, 4);
   geo.translate(0, -height / 2, 0);
+  // 2026-11-06 花色系统：旗布 = 玩家花色的**主色布 + 次色旗缘 + 徽记**（canvas 贴图）。
+  // node / 兜底路径拿不到 canvas 时退化成纯色布（老行为），摆动逻辑两种都一样。
+  const clothCanvas = bannerClothCanvas(sideBanner(side));
   const cloth = new THREE.Mesh(
     geo,
     new THREE.MeshStandardMaterial({
-      color: tint,
+      ...(clothCanvas
+        ? { map: new THREE.CanvasTexture(clothCanvas) }
+        : { color: tint }),
       emissive: tint,
-      emissiveIntensity: 0.35,
+      emissiveIntensity: clothCanvas ? 0.12 : 0.35,
       side: THREE.DoubleSide,
       flatShading: true,
       roughness: 0.85,

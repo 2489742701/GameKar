@@ -808,22 +808,61 @@ export class Combat {
     }
   }
 
-  /** 一栋楼最高能升到几级：塔按升级表，其它楼统一 3 级。 */
+  /** 一栋楼最高能升到几级：塔按升级表，写了 `upgrades` 的按表（议事厅），其余统一 3 级。 */
   maxLevel(b: Building): number {
     const spec = b.def.tower;
-    return spec ? spec.upgrades.length + 1 : 3;
+    if (spec) return spec.upgrades.length + 1;
+    return b.def.upgrades ? b.def.upgrades.length + 1 : 3;
+  }
+
+  /** 全场唯一的那栋议事厅（还没盖就 null）。 */
+  hallBuilding(): Building | null {
+    for (const b of this.opts.world.buildings.values()) if (b.def.unique) return b;
+    return null;
   }
 
   /**
-   * 下一次升级的价钱。
+   * 议事厅现在的等级 —— **这是全局升降级的天花板**。
    *
-   * 塔走它自己的升级表（表里有水晶价）；**其它楼按造价的 60%×当前等级**折算，
-   * 只花金币 —— 田、房、矿井这些楼本来就没打算让人用晶钻去堆。
+   * 场上没有议事厅时返回 99（=不设门槛），不是 0：夹具与读档的半截世界里常常还没盖主城，
+   * 那时候"所有楼都升不了级"会把一堆与门槛无关的测试一起卡红，而那不是我们要守的事。
+   * 主城**正在打地基**也算数（不要求 built）：那样才不会出现"开局六秒里其它楼随便升"的窗口。
+   */
+  hallLevel(): number {
+    return this.hallBuilding()?.level ?? 99;
+  }
+
+  /**
+   * 这栋楼**此刻**允许升到几级：议事厅自己不受限，其它楼一律不许超过主城等级。
+   *
+   * 这就是"大本营升级之后，其他建筑才能升级"那条规矩的唯一实现处 ——
+   * 菜单、按钮、扣钱三条路都读它，不会各判各的。
+   */
+  allowedLevel(b: Building): number {
+    if (b.def.unique) return this.maxLevel(b);
+    return Math.min(this.maxLevel(b), this.hallLevel());
+  }
+
+  /**
+   * 这栋楼是不是被"先升议事厅"卡住了（还没满级，但已经顶到主城等级）。
+   * UI 拿它把"已满级"和"没资格"分开说 —— 两种情况都不能升级，但给玩家的理由完全不同。
+   */
+  hallGateBlocks(b: Building): boolean {
+    if (b.def.unique) return false;
+    return b.level < this.maxLevel(b) && b.level >= this.hallLevel();
+  }
+
+  /**
+   * 下一次升级的价钱。**被主城门槛卡住或已满级都返回 null。**
+   *
+   * 塔走它自己的升级表（表里有水晶价）；议事厅走 `def.upgrades` 那条贵阶梯；
+   * 其它楼按造价的 60%×当前等级折算，只花金币 —— 田、房、矿井这些楼本来就没打算让人用晶钻去堆。
    */
   upgradePrice(b: Building): { gold: number; crystal: number } | null {
-    if (b.level >= this.maxLevel(b)) return null;
+    if (b.level >= this.allowedLevel(b)) return null;
     const spec = b.def.tower;
     if (spec) return spec.upgrades[b.level - 1] ?? null;
+    if (b.def.upgrades) return b.def.upgrades[b.level - 1] ?? null;
     const base = b.def.cost.gold ?? 60;
     return { gold: Math.round(base * 0.6 * b.level), crystal: 0 };
   }
@@ -837,9 +876,16 @@ export class Combat {
    * 所以这里只负责扣钱、加级、把塔的弹夹补满。
    */
   upgrade(b: Building): boolean {
+    const world = this.opts.world;
+    if (this.hallGateBlocks(b)) {
+      world.bus.emit('toast', {
+        text: `先把议事厅升到 Lv${b.level + 1}，${b.def.name}才跟得上`,
+        tone: 'warn',
+      });
+      return false;
+    }
     const price = this.upgradePrice(b);
     if (!price) return false;
-    const world = this.opts.world;
     const cost = { gold: price.gold, crystal: price.crystal };
     if (!world.canAfford(cost)) {
       world.bus.emit('toast', { text: `升级${b.def.name}还差一点，看看缺什么`, tone: 'warn' });

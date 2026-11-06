@@ -10,10 +10,21 @@
 import * as THREE from 'three';
 
 export interface CameraBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
+  /** 写死边界；给了 `field` 时这四个被忽略（不传也行） */
+  minX?: number;
+  maxX?: number;
+  minZ?: number;
+  maxZ?: number;
+  /**
+   * **随视野动态的场内边界**（2026-11-06 用户："往自己家里移动会被限位"、
+   * "放大的时候好像会卡"——其实是撞在写死的边界上）。
+   *
+   * 给了 field 之后，minX/maxX/minZ/maxZ 每帧按当前视野重算：
+   * 中心允许出场地 `out = min(reach×0.6, 场地×0.18/0.25)` 格——
+   * 放大时（reach 小）可以贴到自家门口看细节；缩小时（reach 大）自动收回，
+   * 不会拖出一屏黑。写死的 minX/maxX 此时被忽略。
+   */
+  field?: { cols: number; rows: number };
 }
 
 export interface VisibleRect {
@@ -47,6 +58,9 @@ export class CameraRig {
   private readonly standoff = 120;
 
   private readonly target = new THREE.Vector3();
+  /** 震动强度 0..1（`shake()` 提高，`update()` 里按 3.2/秒 衰减） */
+  private shakeAmt = 0;
+  private shakeClock = 0;
   private readonly desired = new THREE.Vector3();
   private bounds: CameraBounds = { minX: -1e6, maxX: 1e6, minZ: -1e6, maxZ: 1e6 };
 
@@ -121,7 +135,9 @@ export class CameraRig {
   }
 
   rotateBy(deg: number): void {
-    this.yawDeg += deg;
+    // 归一化到 [0,360)：自由拖拽几圈之后角度会累积到几千度，
+    // 雖然 sin/cos 无所谓，但调试读数和机位插值会越来越难看
+    this.yawDeg = ((this.yawDeg + deg) % 360 + 360) % 360;
   }
 
   get yaw(): number {
@@ -186,8 +202,23 @@ export class CameraRig {
   }
 
   private clampDesired(): void {
-    this.desired.x = clamp(this.desired.x, this.bounds.minX, this.bounds.maxX);
-    this.desired.z = clamp(this.desired.z, this.bounds.minZ, this.bounds.maxZ);
+    let minX = this.bounds.minX ?? -1e6;
+    let maxX = this.bounds.maxX ?? 1e6;
+    let minZ = this.bounds.minZ ?? -1e6;
+    let maxZ = this.bounds.maxZ ?? 1e6;
+    if (this.bounds.field) {
+      const { cols, rows } = this.bounds.field;
+      const rect = this.visibleRect(0);
+      const reach = Math.max(rect.maxX - rect.minX, rect.maxZ - rect.minZ) / 2;
+      const outX = Math.min(reach * 0.6, cols * 0.18);
+      const outZ = Math.min(reach * 0.6, rows * 0.25);
+      minX = -outX;
+      maxX = cols + outX;
+      minZ = -outZ;
+      maxZ = rows + outZ;
+    }
+    this.desired.x = clamp(this.desired.x, minX, maxX);
+    this.desired.z = clamp(this.desired.z, minZ, maxZ);
   }
 
   /** 屏幕右向与屏幕上向在 XZ 平面上的投影 —— 拖拽手感的地基。 */
@@ -222,7 +253,20 @@ export class CameraRig {
   update(dt: number): void {
     const t = 1 - Math.exp(-dt * this.damping);
     this.target.lerp(this.desired, Math.min(1, t));
+    if (this.shakeAmt > 0) this.shakeAmt = Math.max(0, this.shakeAmt - dt * 3.2);
+    this.shakeClock += dt;
     this.place();
+  }
+
+  /**
+   * 屏幕震动（炮击落地、建筑倒塌、大本营被打）。
+   *
+   * 强度取**最大值**而不是累加：三发炮弹同时落在同一片区域时，
+   * 累加会把镜头甩出去，取最大只是"这一下很重"。
+   * 衰减 3.2/秒 —— 差不多 0.3 秒，刚好是一次打击的手感长度。
+   */
+  shake(strength: number): void {
+    this.shakeAmt = Math.min(1, Math.max(this.shakeAmt, strength));
   }
 
   private place(): void {
@@ -230,12 +274,19 @@ export class CameraRig {
     const pitch = THREE.MathUtils.degToRad(this.pitchDeg);
     const cosP = Math.cos(pitch);
 
+    // 震动只平移视点（不改角度）：正交俯视下这读作"地面被震了一下"，
+    // 改角度会变成"镜头被人拽了一把"，那是另一种手感
+    const s = this.shakeAmt * this.shakeAmt * 0.42;
+    const cx = this.target.x + Math.sin(this.shakeClock * 61.3) * s;
+    const cz = this.target.z + Math.cos(this.shakeClock * 47.7) * s;
+    const cy = this.target.y + Math.sin(this.shakeClock * 71.1) * s * 0.45;
+
     this.camera.position.set(
-      this.target.x + Math.sin(yaw) * cosP * this.standoff,
-      this.target.y + Math.sin(pitch) * this.standoff,
-      this.target.z + Math.cos(yaw) * cosP * this.standoff,
+      cx + Math.sin(yaw) * cosP * this.standoff,
+      cy + Math.sin(pitch) * this.standoff,
+      cz + Math.cos(yaw) * cosP * this.standoff,
     );
-    this.camera.lookAt(this.target);
+    this.camera.lookAt(cx, cy, cz);
   }
 
   /** 当前可见的地面矩形（比实际范围略宽一点，用于实例裁剪）。 */

@@ -1,0 +1,143 @@
+/**
+ * 卡面图标 —— 每张卡一张内联 SVG，**不加载任何图片**。
+ *
+ * 三条约束（都是这套 UI 的既有风格）：
+ * 1. 单色 + `currentColor`：卡面会按"买得起/买不起/选中"改颜色，图标要跟着走；
+ * 2. 24×24 网格、只用路径和矩形：像素风的卡面里放一张细线条插画会糊；
+ * 3. 形状要**一眼分得开**：塔的轮廓、帐篷的轮廓、房子的轮廓，在 62px 高的卡上只剩 28px，
+ *    细节全丢，所以只做剪影级的设计。
+ */
+
+export const CARD_ICON: Record<string, string> = {
+  // ---------------------------------------------------------------- 建筑
+
+  /** 兵营：一顶帐篷，中间掏出帐篷门 */
+  barracks: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path fill-rule="evenodd" d="M12 2.6 1.8 20.4h20.4L12 2.6Zm0 7.2 4.9 8.6H7.1L12 9.8Z"/>
+  </svg>`,
+
+  /** 箭塔：方塔身 + 一支朝上的箭 */
+  arrowTower: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" fill-rule="evenodd" d="M8.4 21.2V8.6h7.2v12.6H8.4Zm1.9-10.7v2.4h3.4v-2.4h-3.4Z"/>
+    <path d="M12 1.6v5.4M9.4 4.2 12 6.8l2.6-2.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
+  /** 炮塔：方塔身 + 一根粗炮管 */
+  cannonTower: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M8.6 21.2V10.4h6.8v10.8H8.6Z"/>
+    <rect fill="currentColor" x="11" y="5.2" width="10.6" height="4.4" rx="1.2"/>
+    <rect fill="currentColor" x="6.4" y="8.2" width="4" height="2.4" rx="0.8"/>
+  </svg>`,
+
+  /**
+   * 磨坊：四片**斜**叶的风车。
+   *
+   * 注意别画成"圆 + 十字" —— 第一版就是那样，缩小到 27px 和牧师的十字一模一样。
+   * 叶片是斜的、还带一点宽度，剪影才和十字分得开。
+   */
+  mill: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <g fill="currentColor">
+      <path d="M12.6 10.9 13.4 2.6 16.2 9.8 12.6 10.9Z"/>
+      <path d="M12.6 10.9 13.4 2.6 16.2 9.8 12.6 10.9Z" transform="rotate(90 12 12)"/>
+      <path d="M12.6 10.9 13.4 2.6 16.2 9.8 12.6 10.9Z" transform="rotate(180 12 12)"/>
+      <path d="M12.6 10.9 13.4 2.6 16.2 9.8 12.6 10.9Z" transform="rotate(270 12 12)"/>
+      <circle cx="12" cy="12" r="2.3"/>
+    </g>
+  </svg>`,
+
+  /** 民居：尖顶 + 门窗 */
+  house: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" fill-rule="evenodd" d="M12 2.4 2.2 11h2.6v10.2h5.4v-6.4h3.6v6.4h5.4V11h2.6L12 2.4Z"/>
+  </svg>`,
+
+  // ---------------------------------------------------------------- 军队
+
+  /** 弓箭手：一张弓 + 一支搭上去的箭 */
+  archers: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M7.4 2.6c6.6 2.4 6.6 16.4 0 18.8" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+    <path d="M7.4 2.6v18.8" stroke="currentColor" stroke-width="1.2" opacity="0.55"/>
+    <path d="M17.4 5.2v13.6M14.8 7.8l2.6-2.6 2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
+  /** 骑士：盾 */
+  knights: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" fill-rule="evenodd" d="M12 1.8 3.6 5v7c0 5.2 3.5 8.4 8.4 10.2 4.9-1.8 8.4-5 8.4-10.2V5L12 1.8Zm0 3.2 5.2 2v4.6c0 3.5-2.2 5.8-5.2 7.2-3-1.4-5.2-3.7-5.2-7.2V7l5.2-2Z"/>
+  </svg>`,
+
+  /** 法师：六芒星 */
+  mages: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 1.6l2.5 6.3 6.7.4-5.2 4.3 1.8 6.5L12 15.6 6.2 19.1l1.8-6.5L2.8 8.3l6.7-.4L12 1.6Z"/>
+  </svg>`,
+
+  /** 牧师：十字 */
+  priests: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M9.8 1.8h4.4v6.4h6.2v4.4h-6.2v9.6H9.8v-9.6H3.6V8.2h6.2V1.8Z"/>
+  </svg>`,
+
+  /** 石怪：两块石头 */
+  golem: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect fill="currentColor" x="6.6" y="2.8" width="10.8" height="8.4" rx="1.2"/>
+    <rect fill="currentColor" x="3.2" y="12.8" width="17.6" height="8.4" rx="1.4"/>
+  </svg>`,
+
+  /** 兽人：**双刃**斧。单刃在 27px 下会被当成一面旗子 */
+  orcs: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect fill="currentColor" x="10.9" y="1.8" width="2.2" height="20.4" rx="1"/>
+    <path fill="currentColor" d="M10 5.4C4.8 5.4 1.8 8.4 1.8 12s3 6.6 8.2 6.6V5.4Z"/>
+    <path fill="currentColor" d="M14 5.4c5.2 0 8.2 3 8.2 6.6s-3 6.6-8.2 6.6V5.4Z"/>
+  </svg>`,
+
+  /** 机器巨人：齿轮 */
+  mech: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <circle fill="currentColor" cx="12" cy="12" r="4.6"/>
+    <path d="M12 1.6v3.2M12 19.2v3.2M1.6 12h3.2M19.2 12h3.2M4.6 4.6l2.3 2.3M17.1 17.1l2.3 2.3M19.4 4.6l-2.3 2.3M6.9 17.1l-2.3 2.3"
+      stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  </svg>`,
+
+  /** 移动火炮：轮子 + 上扬的炮管 */
+  mobileCannon: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M2.6 11.4h11.8l7-3.6v4.2l-7 3.6H2.6v-4.2Z"/>
+    <circle fill="currentColor" cx="7.2" cy="17.6" r="3.2"/>
+    <circle fill="currentColor" cx="16.4" cy="17.6" r="3.2"/>
+  </svg>`,
+
+  /** 移动弩箭：横弩 + 竖架 */
+  ballista: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect fill="currentColor" x="2.6" y="6.2" width="18.8" height="3.4" rx="0.9"/>
+    <path d="M12 9.6v11.2M7.8 20.8h8.4" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" fill="none"/>
+  </svg>`,
+
+  // ---------------------------------------------------------------- 大队卡
+  // 三张 "xxxBig" 是同一兵种的加量版：图标做成"两个"，一眼能看出是大队，
+  // 又不会和基础卡完全一样（第一版漏了这三张，卡面上是个虚线空框）。
+
+  /** 弓箭手大队：两把弓 + 中间那支箭 */
+  archersBig: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M5.2 2.8c5.2 2 5.2 14.4 0 16.4M11.2 2.8c5.2 2 5.2 14.4 0 16.4"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M19 4.6v15M16.8 7l2.2-2.4 2.2 2.4" fill="none" stroke="currentColor"
+      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
+  /** 骑士大队：两面盾 */
+  knightsBig: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M6.6 2.2 1.4 4.2v6c0 4 2.6 6.6 5.2 8 2.6-1.4 5.2-4 5.2-8v-6L6.6 2.2Zm0 2.4 3 1.2v3.4c0 2.5-1.3 4.1-3 5-1.7-.9-3-2.5-3-5V5.8l3-1.2Z"/>
+    <path fill="currentColor" d="M17.4 2.2 12.2 4.2v6c0 4 2.6 6.6 5.2 8 2.6-1.4 5.2-4 5.2-8v-6l-5.2-2Zm0 2.4 3 1.2v3.4c0 2.5-1.3 4.1-3 5-1.7-.9-3-2.5-3-5V5.8l3-1.2Z"/>
+  </svg>`,
+
+  /** 兽人大队：两把交叉的斧 */
+  orcsBig: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M6.2 2.6 8.2 2 21 19.4l-1.4 1L6.2 2.6Z"/>
+    <path fill="currentColor" d="M17.8 2.6 15.8 2 3 19.4l1.4 1L17.8 2.6Z"/>
+    <path fill="currentColor" d="M6.8 1.8c3.2 0 5.6 1.9 5.6 4.2 0 1.6-1.2 2.8-3 3.3L6.8 1.8Z"/>
+    <path fill="currentColor" d="M17.2 1.8C14 1.8 11.6 3.7 11.6 6c0 1.6 1.2 2.8 3 3.3l2.6-7.5Z"/>
+  </svg>`,
+};
+
+/** 取一张卡的图标；卡池里新加卡但忘了画图时退回一个空框，不要崩。 */
+export function iconOf(cardId: string): string {
+  return (
+    CARD_ICON[cardId] ??
+    `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 3"/></svg>`
+  );
+}

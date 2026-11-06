@@ -12,12 +12,23 @@ import * as THREE from 'three';
 import type { Random } from '@engine/math/Random';
 import type { ShellPanel } from './models';
 
+/** 每块板展开成非索引几何后的顶点数（BoxGeometry 24 顶点 / 36 索引 → 展开成 36 顶点）。 */
+const VERTS_PER_PANEL = 36;
+
 /** 一栋楼的外墙网格。 */
 export class WallShell {
   readonly mesh: THREE.Mesh;
+  /** 这栋楼原本的全部面片（崩掉的不在这里，见 destroyed） */
+  private readonly all: ShellPanel[];
+  /** 已经崩掉的面片（施工 + 受伤共用一套：崩了就不会因为"垒墙"再冒出来） */
+  private readonly destroyed = new Set<ShellPanel>();
+  /** 当前还在场的面片（= all − destroyed），**按高度从低到高排好** */
   private panels: ShellPanel[];
+  /** 施工露出比例 0..1（1 = 全部露出来） */
+  private shown = 1;
 
   constructor(panels: readonly ShellPanel[]) {
+    this.all = [...panels];
     this.panels = [...panels];
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -38,6 +49,26 @@ export class WallShell {
   /** 还剩哪些面片（只读，测试与调试用）。 */
   get remaining(): readonly ShellPanel[] {
     return this.panels;
+  }
+
+  /**
+   * 施工：只露出高度最低的那 `frac` 比例的墙板 —— **墙就一块块垒上来了**。
+   *
+   * 实现是 `drawRange` 而不是重建几何：面片在 rebuild 时已经按 y 从低到高排好，
+   * 截断前 N 块 = 从下往上露出。施工那几秒每帧都调，重建一次 50 块 BoxGeometry
+   * 是不能接受的（实测会掉帧）；改 drawRange 是零成本。
+   */
+  setBuild(frac: number): void {
+    const next = Math.max(0, Math.min(1, frac));
+    if (Math.abs(next - this.shown) < 0.0005) return;
+    this.shown = next;
+    this.applyDrawRange();
+  }
+
+  private applyDrawRange(): void {
+    const n = this.panels.length;
+    const upto = this.shown >= 1 ? n : Math.round(n * this.shown);
+    this.mesh.geometry.setDrawRange(0, upto * VERTS_PER_PANEL);
   }
 
   /**
@@ -69,6 +100,7 @@ export class WallShell {
       if (best < 0) break;
       cursor = this.panels[best]!;
       removed.push(cursor);
+      this.destroyed.add(cursor);
       this.panels.splice(best, 1);
     }
     this.rebuild();
@@ -80,8 +112,12 @@ export class WallShell {
     (this.mesh.material as THREE.Material).dispose();
   }
 
-  /** 把剩下的面片合成一张带顶点色的网格（flat shading，每块板自己的色调）。 */
+  /** 把还在场的面片合成一张带顶点色的网格（flat shading，每块板自己的色调）。 */
   private rebuild(): void {
+    // **按高度从低到高排**：施工时 drawRange 一截，露出来的就是下面那几层
+    this.panels = this.all
+      .filter((p) => !this.destroyed.has(p))
+      .sort((a, b) => a.y - b.y || a.x - b.x);
     const position: number[] = [];
     const normal: number[] = [];
     const color: number[] = [];
@@ -118,5 +154,6 @@ export class WallShell {
 
     this.mesh.geometry.dispose();
     this.mesh.geometry = next;
+    this.applyDrawRange();
   }
 }

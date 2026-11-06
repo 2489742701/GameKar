@@ -108,8 +108,23 @@ export class BuildingMenu implements HudWidget {
     if (this.confirming) return;
 
     const price = this.combat?.upgradePrice(b) ?? null;
-    setText(this.upgradeBtn, price ? `升级 Lv${b.level + 1} · 金${price.gold}${price.crystal ? ` 水${price.crystal}` : ''}` : '已满级');
+    /**
+     * 三种状态必须分开说，不然玩家只会以为按钮坏了：
+     * - 有价 → 升级 Lv? · 金? 水?
+     * - 被主城门槛卡住 → "需议事厅 Lv?"（还差哪一级写清楚，不是"已满级"）
+     * - 真满级 → "已满级"
+     */
+    const gated = this.combat?.hallGateBlocks(b) ?? false;
+    setText(
+      this.upgradeBtn,
+      price
+        ? `升级 Lv${b.level + 1} · 金${price.gold}${price.crystal ? ` 水${price.crystal}` : ''}`
+        : gated
+          ? `需议事厅 Lv${b.level + 1}`
+          : '已满级',
+    );
     setFlag(this.upgradeBtn, 'maxed', !price);
+    setFlag(this.upgradeBtn, 'gated', gated);
 
     setText(this.demolishBtn, `拆除 ${b.def.name}`);
     for (const [key, btn] of this.stanceBtns) setFlag(btn, 'active', b.stance === key);

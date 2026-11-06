@@ -10,6 +10,7 @@ export default defineConfig({
       '@game': src('game'),
       '@ui': src('ui'),
       '@arena': src('arena'),
+      '@audio': src('audio'),
     },
   },
   server: {

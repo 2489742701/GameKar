@@ -802,6 +802,15 @@ html[data-orientation='landscape'] .gacha__grid {
   opacity: 0.5;
 }
 
+/* 被主城门槛卡住：不是"不能点"，是"你还差一步" ——
+   比满级亮一点（满级是彻底没戏，这个是有戏），但也不给金色可点的暗示 */
+.bmenu__btn--up[data-gated='true'] {
+  opacity: 0.85;
+  color: #f6e6c0;
+  background-image: var(--tex-wood), linear-gradient(180deg, #6d5320, #35280c);
+  border-color: #8a6d2b;
+}
+
 .bmenu__btn--danger {
   color: #ffd9d9;
   background-image: var(--tex-wood), linear-gradient(180deg, #6b2a22, #2a0d0a);

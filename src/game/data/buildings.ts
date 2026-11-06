@@ -74,6 +74,13 @@ export interface BuildingDef {
   breadPerRound?: { base: number; perAdjacentField: number };
   /** 必须贴着这种楼才让盖（田地的"只能放在磨坊旁边"就走这一条） */
   requiresAdjacent?: string;
+  /**
+   * 非塔类建筑的升级价目：下标 0 = 升到 Lv2。
+   *
+   * 不写就走 `Combat.upgradePrice` 里"造价 60%×等级"的兜底折算。
+   * 议事厅是唯一写明的一栋 —— 它得明显比其它楼贵，否则"先升主城"这件事没有重量。
+   */
+  upgrades?: { gold: number; crystal: number }[];
   /** 防御塔：会自己找敌人开火，缺人手就不开火 */
   tower?: TowerSpec;
   /** 能被敌人拆到几点血；议事厅归零判负 */
@@ -94,6 +101,16 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     population: 0,
     populationCap: 4,
     yields: { crystal: 0.6, gold: 0.5 },
+    /**
+     * 主城的阶梯：**贵，而且是全场唯一一笔"攒一阵才付得起"的钱**。
+     *
+     * 议事厅自己不产兵也不开火，它的收益全在"解锁别人升级 + 被动产出 +30%/级"上，
+     * 所以价目必须压得住"随手点一下就满级"。标尺是建筑造价：最贵的营/神龛 260，
+     * 于是 Lv2 定 450（≈ 两座兵营），Lv3 掺晶钻 —— 那一级是"你已经在认真经营"的分界线。
+     *
+     * 别往下调回 300 附近：开局送 320 金，300 的价等于开局就能点，门槛当场失效。
+     */
+    upgrades: [{ gold: 450, crystal: 0 }, { gold: 1000, crystal: 60 }],
     unique: true,
     hp: 600,
   },

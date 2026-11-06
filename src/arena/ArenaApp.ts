@@ -19,23 +19,32 @@ import { Renderer, pickQuality } from '@engine/render/Renderer';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
-import { faceCandidates, headCandidates, isBlue } from '@game/dudes/roster';
+import { faceCandidates, headCandidates } from '@game/dudes/roster';
 import { randomStyle, type DudeStyle } from '@game/dudes/style';
 import { unitDef } from '@game/data/units';
 import { BattleFx } from '@game/fx/BattleFx';
 import { buildModel, spinnersOf, TURRET } from '@game/models/kit';
 import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
-import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type Side } from './ArenaWorld';
+import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResult, type Side } from './ArenaWorld';
 import { AmbientDust } from './ambient';
 import { ArenaDirector } from './Camera';
 import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
+import { Confetti } from './visuals/confetti';
+import { makeShadow } from './visuals/shadow';
 import { WallShell } from './shell';
 import { makeBanner, type Banner } from './props';
-import { fracture } from './ruins';
-import { sideColor } from './theme';
+import { sideBanner, sideColor } from './theme';
+// 视觉小件按"职责"分在 visuals/ 下：都是给参数就出 Object3D 的纯函数，不碰 App 的状态
+import { labelOf, makeFlag, makeHpBar, makeNeedLabel, needsStaffing, updateHpBar } from './visuals/labels';
+import { makeRuin, ruinStyleOf, settleRuin } from './visuals/ruinView';
+import { disposeTree, makeScaffold } from './visuals/scaffold';
+import { MUZZLE_Y, makeArrow, makeBall } from './visuals/shots';
+import { makeCoreBar, updateCoreBar, type CoreBar } from './visuals/coreBar';
+import { Sfx } from '@audio/sfx';
+import { buildStand, type ArenaStand } from './stand';
 
 export interface ArenaAppOptions {
   container: HTMLElement;
@@ -70,7 +79,13 @@ interface UnitSprite {
    * 给 0.18 秒迟滞：这期间动过就一直算走（老模式的 UnitView 同一条规矩）。
    */
   runHold: number;
+  /** 贴地黑影（2026-11-06 用户："给他们一个影子"）；siege 车的影子在 group 里跟着转 */
+  shadow?: THREE.Mesh;
 }
+
+/** 整栋塌下去要多久（秒）：前 2.6 秒一直扬尘，把下沉过程糊住 */
+const SINK_SECONDS = 3.4;
+const SINK_DUST_SECONDS = 2.6;
 
 export class ArenaApp {
   readonly scene = new THREE.Scene();
@@ -99,6 +114,8 @@ export class ArenaApp {
   private readonly pack: DudePack | null;
   private readonly gallery: DudeGallery | null;
   private readonly opts: ArenaAppOptions;
+  /** 画布：拖放时要把客户端坐标减掉画布偏移再投到地面 */
+  private readonly canvas: HTMLCanvasElement;
 
   private readonly buildingMeshes = new Map<number, THREE.Group>();
   private readonly unitSprites = new Map<number, UnitSprite>();
@@ -108,13 +125,55 @@ export class ArenaApp {
   private readonly ruinMeshes = new Map<number, THREE.Group>();
   private readonly parts = new Map<
     number,
-    { sails?: { group: THREE.Object3D; speed: number }[]; turret?: THREE.Object3D; banner?: Banner }
+    {
+      sails?: { group: THREE.Object3D; speed: number }[];
+      turret?: THREE.Object3D;
+      banner?: Banner;
+      /** 外墙：施工时按进度露出，受伤时崩掉 */
+      shell?: WallShell;
+      /** 施工脚手架（完工后拆掉，不在 group 里 —— 它不该跟着楼一起升起） */
+      scaffold?: THREE.Group;
+      /** 楼的静止高度（世界 y），施工时 group 从这个高度下面往上冒 */
+      baseY?: number;
+      /** 模型自身高度（世界单位），决定施工要"长"多高 */
+      modelTop?: number;
+      /** 是不是已经完工过（用来只在完工那一帧做一次收尾） */
+      built?: boolean;
+    }
   >();
   /** 在飞的弹丸（视觉件，按 world.shots 同步） */
   private readonly shotMeshes = new Map<number, THREE.Object3D>();
+  /** 进加时赛的两侧彩带（HUD 触发 burst，draw 每帧 update）；HUD 也要触发，开 readonly */
+  readonly confetti: Confetti;
+  /** 竞技场围墙与看台：三段看台要按相机方位整段显隐，所以持有引用 */
+  private readonly stand: ArenaStand;
+  /** 建筑上一次掉血的时刻（视图时间）：血条只在挨打后短暂出现，不是一直挂着 */
+  private readonly lastHitAt = new Map<number, number>();
+  private readonly lastHpFrac = new Map<number, number>();
+  /**
+   * 正在往地里沉的楼体残骸（用户 2026-11-06）：拆楼不立刻删模型，
+   * 让它整体下沉 + 尘雾遮挡，最后没入地面。
+   */
+  private readonly sinking: {
+    group: THREE.Group;
+    baseY: number;
+    depth: number;
+    x: number;
+    z: number;
+    life: number;
+    dustIn: number;
+  }[] = [];
+  /** 两座大本营的世界空间悬浮血条：满血不显示，挨打才浮出来 */
+  private readonly coreBars = new Map<number, CoreBar>();
   /** 已经放过治疗圈的 id（world.heals 是逐帧还在的事件，别重复放） */
   private readonly seenHeals = new Set<number>();
+  /** 已经放过粒子效果的近战命中 id（world.hits 是逐帧还在的事件，别重复放） */
+  private readonly seenHits = new Set<number>();
   readonly director = new ArenaDirector();
+  /** 所有声音都从这里发：合成音，不加载素材（见 `@audio/sfx`） */
+  readonly sfx = new Sfx();
+  /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
+  private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
   /** 当前这一笔拖动是从场地上开始的吗（真=平移，假=转视角） */
   private gestureFromField = true;
@@ -123,6 +182,7 @@ export class ArenaApp {
   private constructor(opts: ArenaAppOptions, pack: DudePack | null) {
     this.opts = opts;
     this.seed = opts.seed ?? 20261027;
+    this.canvas = opts.canvas;
     this.pack = pack;
     this.world = new ArenaWorld({ seed: this.seed });
 
@@ -131,6 +191,17 @@ export class ArenaApp {
     this.damage = new DamageFx(this.scene);
     this.fx = new BattleFx();
     this.scene.add(this.fx.group);
+    this.confetti = new Confetti(this.map.size.cols, this.map.size.rows);
+    this.scene.add(this.confetti.group);
+    // 竞技场：几何一次建好，但每帧要按相机 yaw 把"离镜头最近的一整段看台"藏掉
+    this.stand = buildStand({
+      cols: this.map.size.cols,
+      rows: this.map.size.rows,
+      baseY: this.map.surfaceY(pos(0, 0)),
+      blue: sideColor('blue'),
+      red: sideColor('red'),
+    });
+    this.scene.add(this.stand.group);
     this.dustLayer = new AmbientDust(this.map.size.cols, this.map.size.rows);
     this.scene.add(this.dustLayer.points);
     // 外墙崩开时溅火星；碎块落地时扬一小团土
@@ -145,7 +216,15 @@ export class ArenaApp {
       minTilesAcross: ARENA_CAMERA.minTilesAcross,
       maxTilesAcross: ARENA_CAMERA.maxTilesAcross,
     });
-    this.rig.setBounds({ minX: 0, maxX: this.map.size.cols, minZ: 0, maxZ: this.map.size.rows });
+    /**
+     * 平移边界 2026-11-06 改**随视野动态**（用户："往左边往自己家里移动会被限位"、
+     * "放大的时候好像会卡"——实测 60fps 满帧，卡的就是撞在写死的
+     * `0.3c~0.7c` 边界上的顿挫）。放大时中心可以贴到自家门口看细节；
+     * 缩小时边界自动收回，不会拖出一屏黑。规则见 CameraRig.CameraBounds.field。
+     */
+    const c = this.map.size.cols;
+    const r = this.map.size.rows;
+    this.rig.setBounds({ field: { cols: c, rows: r } });
     this.lighting = new LightingRig(this.scene, { shadowMapSize: 1024 });
 
     // 场地底盘：不然 16×26 之外全是黑洞，看着像地图没加载完
@@ -206,8 +285,9 @@ export class ArenaApp {
           // 默认**正向**：往右拖视线往右、往下拖视线往下（两个轴一起翻，不是只翻一个）。
           // invertOrbit 留给以后的设置开关，拨一下就整体回到旧方向。
           const dir = this.director.invertOrbit ? -1 : 1;
-          this.rig.rotateBy(-dx * 0.22 * dir);
-          this.rig.setPitch(Math.min(78, Math.max(24, this.rig.pitch + dy * 0.18 * dir)));
+          // 灵敏度减半、俯角收窄到 36–62：自由拖拽不再"一甩就翻到背面"
+          this.rig.rotateBy(-dx * 0.13 * dir);
+          this.rig.setPitch(Math.min(62, Math.max(36, this.rig.pitch + dy * 0.12 * dir)));
         }
       },
       onZoom: (factor, x, y) => {
@@ -223,7 +303,11 @@ export class ArenaApp {
       onHover: () => {},
     });
 
-    const mid = cellToWorld(pos(this.map.size.cols / 2, this.map.size.rows / 2 - 1.4));
+    /**
+     * 相机中心往远端（-z）再偏一点：俯角从 52 降到 44 之后地面在竖直方向被压短，
+     * 原来这个偏移会让画面下方留一大块黑地。往 -z 偏 = 场地下移，把那块黑吃掉一部分。
+     */
+    const mid = cellToWorld(pos(this.map.size.cols / 2, this.map.size.rows / 2 - 2.0));
     this.rig.centerOnWorld(mid.x, mid.z, true);
   }
 
@@ -235,7 +319,7 @@ export class ArenaApp {
       console.warn('[ArenaApp] 小人素材包没加载上，兵只跑数字：', err);
     }
     const app = new ArenaApp(opts, pack);
-    app.syncBuildings();
+    app.syncBuildings(0);
     app.start();
     return app;
   }
@@ -259,14 +343,47 @@ export class ArenaApp {
   }
 
   /**
+   * 暂停 / 恢复**逻辑**（开始菜单用）：画面照常渲染，时间不走。
+   *
+   * 不做这件事的后果很具体：玩家在菜单里读 30 秒说明，对面 AI 已经推到大本营门口了。
+   */
+  pause(): void {
+    this.loop.pause();
+  }
+
+  resume(): void {
+    this.loop.resume();
+  }
+
+  get paused(): boolean {
+    return this.loop.isPaused;
+  }
+
+  /** 手牌刷新（5 金，保底民居）；成功时由调用方让 HUD 重画卡面。 */
+  rerollHand(): PlayResult {
+    const res = this.world.reroll('blue');
+    if (res.ok) {
+      this.selectedSlot = -1;
+      this.sfx.play('place');
+      this.syncBuildings(0);
+    }
+    return res;
+  }
+
+  /**
    * 让整幅场地进画面。相机按短边看几格来定视野，所以换朝向要重算：
    * 横屏短边是高、竖屏短边是宽 —— 两个方向分别求至少要看多少格，取大者。
-   * 竖直方向多留 4 格，底下那几格是给手牌让位的（不然蓝方核心被卡牌压住）。
+   * 竖直方向多留 4 格，底下那几格是给手牌让位的（不然蓝方大本营被卡牌压住）。
    */
   private fitCamera(cssWidth: number, cssHeight: number): void {
     const a = cssWidth / Math.max(1, cssHeight);
-    const wantRows = this.map.size.rows + 4;
-    const wantCols = this.map.size.cols + 2;
+    /**
+     * 四周留的余量：2026-11-06 加了围墙与看台之后从（+2,+4）放大到（+9,+9）。
+     * 原来那点余量正好把看台裁在画面外 —— 墙看得见、台阶看不见，像是地上一圈石边。
+    加高看台 + 帆布之后再放到（+12,+11）：棚布在俯视角下会往上偏移约 3 格，不留够就只剩半截。
+     */
+    const wantRows = this.map.size.rows + 11;
+    const wantCols = this.map.size.cols + 10;
     const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
     this.fitZoom = fit;
     // 自动模式下由导演每帧把缩放拉回机位；手动模式直接吃这个值
@@ -326,23 +443,150 @@ export class ArenaApp {
       return;
     }
 
-    const card = this.world.hand[this.selectedSlot];
-    const readyBefore = this.world.supportedBarracks('blue');
-    const res = this.world.playCard('blue', this.selectedSlot, cell.col, cell.row);
+    const res = this.playAt(this.selectedSlot, cell);
+    if (res) this.selectedSlot = -1;
+  }
+
+  /** 真正落一张牌：点击放置和拖拽放置走同一条路（判据在 world.playCard）。 */
+  private playAt(slot: number, cell: GridPos): boolean {
+    const staffedBefore = this.world.staffedCount('blue');
+    const res = this.world.playCard('blue', slot, cell.col, cell.row);
     if (!res.ok) {
       this.opts.onToast?.(res.reason ?? '放不下', 'warn');
-      return;
+      return false;
     }
-    this.selectedSlot = -1;
-    this.syncBuildings();
-    // 后勤提示：兵营要 1 磨坊 + 1 民居；放对了后勤就说"开工了"
+    this.sfx.play('place');
+    this.syncBuildings(0);
+    // 后勤提示：兵营要 1 磨坊 + 1 民居；塔要 1 座民居（2026-10-31 起防御建筑也占民居）。
+    // 缺什么直接点名 —— 玩家看到"塔不开火"时不该自己去猜为什么。
     const placed = this.buildingAtCell(cell);
-    if (placed && placed.kind === 'barracks' && !this.world.isBarracksSupported(placed.id)) {
-      this.opts.onToast?.('兵营要先配 1 磨坊 + 1 民居才会出兵', 'warn');
-    } else if (card?.building === 'mill' || card?.building === 'house') {
-      if (this.world.supportedBarracks('blue') > readyBefore) this.opts.onToast?.('兵营开工了');
+    if (placed && needsStaffing(placed.kind) && !this.world.isStaffed(placed.id)) {
+      this.opts.onToast?.(
+        placed.kind === 'barracks' ? '兵营要 1 磨坊 + 1 民居才会出兵' : '这座塔要 1 座民居才开火',
+        'warn',
+      );
+    } else if (this.world.staffedCount('blue') > staffedBefore) {
+      this.opts.onToast?.('后勤配齐了，开工');
     }
     this.opts.onState?.();
+    return true;
+  }
+
+  // ---------------------------------------------------------------- 拖放（2026-11-06）
+
+  /**
+   * 用户："单位和建筑玩家可以直接点击放置，也可以拖住它拖到地图上，会显示一个
+   * 影子看看放在哪里，然后可以拖回卡牌。"
+   *
+   * HUD 负责手势（跨元素的 pointermove/up 在 window 上收），这里只管影子与落牌：
+   * 影子是一块贴地的半透明占位（建筑 3×3 / 军队 1×1），绿=可放、红=不可放，
+   * 判据和落牌共用 `world.canPlaceAt()`（与 playCard 同一份校验）。
+   */
+  private dragSlot = -1;
+  private dragGhost: THREE.Group | null = null;
+  private dragFill: THREE.MeshBasicMaterial | null = null;
+  private dragEdge: THREE.LineBasicMaterial | null = null;
+  /** 模型影子的共享材质（真模型所有 mesh 换成它，绿/红跟着合法性走） */
+  private dragModelMat: THREE.MeshStandardMaterial | null = null;
+
+  /** 客户端坐标 → 地面格子（画布外 / 场地外 = null）。 */
+  private clientToCell(clientX: number, clientY: number): GridPos | null {
+    const rect = this.canvas.getBoundingClientRect();
+    const hit = this.rig.screenToGround(clientX - rect.left, clientY - rect.top);
+    if (!hit) return null;
+    const cell = worldToCell(hit.x, hit.z);
+    return inBounds(cell, this.map.size) ? cell : null;
+  }
+
+  beginCardDrag(slot: number): void {
+    const card = this.world.hand[slot];
+    if (!card) return;
+    this.cancelCardDrag();
+    this.dragSlot = slot;
+    const size = card.kind === 'building' ? 3 : 1;
+    const g = new THREE.Group();
+    // 底下仍留一层**很淡**的占地框（给精确的 3×3 格），主角换成模型影子
+    this.dragFill = new THREE.MeshBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide });
+    this.dragEdge = new THREE.LineBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.5, depthTest: false });
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(size, size), this.dragFill);
+    fill.rotation.x = -Math.PI / 2;
+    fill.position.y = card.kind === 'building' ? 0.05 : 0;
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(size, 0.04, size)), this.dragEdge);
+    edge.renderOrder = 28;
+    edge.position.y = card.kind === 'building' ? 0.03 : 0;
+    g.add(fill, edge);
+    /**
+     * **模型影子**（2026-11-06 用户："我想的是建筑影子一个可以看见的建筑的影子，
+     * 而不是占地面积"）：建筑卡用**真模型**（ARENA_MODELS 同一套建模）半透明渲染，
+     * 摆放公式与真楼一致（footprintSurfaceY + BUILDING_SCALE），松手前就能看清
+     * "这栋楼长什么样、挡多大"。军队卡给一个小人剪影锥。
+     */
+    this.dragModelMat = new THREE.MeshStandardMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.45, depthWrite: false, roughness: 0.9, side: THREE.DoubleSide });
+    if (card.kind === 'building') {
+      const model = ARENA_MODELS[card.building as ArenaModelName](sideColor('blue'));
+      const body = buildModel(model.static);
+      body.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) mesh.material = this.dragModelMat!;
+      });
+      body.scale.setScalar(BUILDING_SCALE);
+      g.add(body);
+    } else {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.3, 6), this.dragModelMat);
+      cone.position.y = 0.65;
+      g.add(cone);
+    }
+    g.visible = false;
+    this.scene.add(g);
+    this.dragGhost = g;
+  }
+
+  /** 影子跟随指针：贴着格子中心，合法绿 / 非法红（判据 canPlaceAt）。 */
+  moveCardDrag(clientX: number, clientY: number): void {
+    if (this.dragSlot < 0 || !this.dragGhost || !this.dragFill || !this.dragEdge || !this.dragModelMat) return;
+    const cell = this.clientToCell(clientX, clientY);
+    this.dragGhost.visible = cell !== null;
+    if (!cell) return;
+    const card = this.world.hand[this.dragSlot];
+    const isBuilding = card?.kind === 'building';
+    const size = isBuilding ? 3 : 1;
+    const c = cellToWorld(pos(cell.col + size / 2, cell.row + size / 2));
+    // 模型影子的摆放公式与真楼一致；占地平面只差一层 0.05 的贴地防 z-fight
+    const baseY = isBuilding
+      ? this.map.footprintSurfaceY(pos(cell.col, cell.row), size, size)
+      : this.map.surfaceY(cell) + 0.06;
+    this.dragGhost.position.set(c.x, baseY, c.z);
+    const ok = this.world.canPlaceAt('blue', this.dragSlot, cell.col, cell.row).ok;
+    const color = ok ? 0x7fe09a : 0xe2503f;
+    this.dragFill.color.setHex(color);
+    this.dragEdge.color.setHex(color);
+    this.dragModelMat.color.setHex(color);
+  }
+
+  /** 松手在地图上 = 落牌；松手回到手牌区由 HUD 直接调 cancelCardDrag（拖回取消）。 */
+  dropCardDrag(clientX: number, clientY: number): void {
+    if (this.dragSlot < 0) return;
+    const cell = this.clientToCell(clientX, clientY);
+    if (cell) this.playAt(this.dragSlot, cell);
+    this.cancelCardDrag();
+  }
+
+  cancelCardDrag(): void {
+    if (this.dragGhost) {
+      this.scene.remove(this.dragGhost);
+      this.dragGhost.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.geometry) m.geometry.dispose();
+      });
+      this.dragFill?.dispose();
+      this.dragEdge?.dispose();
+      this.dragModelMat?.dispose();
+      this.dragGhost = null;
+      this.dragFill = null;
+      this.dragEdge = null;
+      this.dragModelMat = null;
+    }
+    this.dragSlot = -1;
   }
 
   private handleLongPress(cssX: number, cssY: number): void {
@@ -366,30 +610,43 @@ export class ArenaApp {
 
   private draw(info: FrameInfo): void {
     this.lastFrame = info;
+    // 镜头转到哪一侧，那一侧的整段看台就整段消失（台阶 + 座位 + 帆布 + 撑杆）
+    this.stand.update(this.rig.yaw);
+    this.audioCues();
     this.rig.update(info.delta);
     this.lighting.follow(this.rig);
     this.ground.update(info.time);
-    this.syncBuildings();
+    this.syncBuildings(info.delta);
     this.syncUnits(info.time, info.delta);
     this.syncFlags();
     this.syncShots(info.time);
     this.syncHeals();
+    this.syncHits();
     this.syncRuins();
     this.syncParts(info.time);
     this.damage.update(info.delta);
+    this.confetti.update(info.delta);
+    this.stepSinking(info.delta);
     this.fx.step(info.delta);
     this.dustLayer.update(info.delta);
     this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
     this.renderer.render(this.scene, this.rig.camera);
   }
 
-  /** 建筑：新增/删掉都在这补齐。模型来自 `models.ts`，五栋楼一套设计语言。 */
-  private syncBuildings(): void {
+  /**
+   * 建筑：新增/删掉都在这补齐。模型来自 `models.ts`，五栋楼一套设计语言。
+   *
+   * 2026-11-02 起这里还管**施工**：`b.build < 1` 的楼正在垒 ——
+   * 外墙按进度从下往上露（`WallShell.setBuild`）、楼体从地里往上升、外面围一圈脚手架。
+   */
+  private syncBuildings(dt: number): void {
     for (const b of this.world.buildings.values()) {
       if (this.buildingMeshes.has(b.id)) continue;
       const name = b.kind as ArenaModelName;
-      // 阵营色只落在小件上：核心水晶、炮塔四角、磨坊顶盖
-      const accent = name === 'core' || name === 'cannonTower' || name === 'mill' ? sideColor(b.side) : 0;
+      // 阵营色现在**每栋楼都发**：屋顶瓦、屋脊、顶珠、磨坊的帆。
+      // 以前只有大本营/炮塔/磨坊三栋拿到 accent，其余三栋双方长得一模一样 ——
+      // 隔着战场只看旗子和血条才分得出敌我，那是用户 2026-10-27 点名要改的。
+      const accent = sideColor(b.side);
       const model = ARENA_MODELS[name](accent);
       const group = buildModel(model.static);
       // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
@@ -415,18 +672,35 @@ export class ArenaApp {
       const ui = new THREE.Group();
       ui.scale.setScalar(1 / BUILDING_SCALE);
       group.add(ui);
+      group.userData['ui'] = ui;
       // 旗：放进反向缩放的 ui 组，所以尺寸直接用"格"（落点表在 models.ts 的 ARENA_FLAGS）
       const spot = ARENA_FLAGS[name];
       const banner = makeBanner(b.side, spot.pole);
       banner.group.position.set(spot.x, spot.base, spot.z);
       ui.add(banner.group);
       this.parts.set(b.id, { ...(this.parts.get(b.id) ?? {}), banner });
-      const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);
-      bar.position.y = modelTop + 0.25;
-      ui.add(bar);
-      group.userData['hpBar'] = bar;
-      if (b.kind === 'barracks') {
-        const need = makeNeedLabel();
+      // 施工要用的三样：外墙（按进度露出）、静止高度、模型高度
+      this.parts.set(b.id, {
+        ...(this.parts.get(b.id) ?? {}),
+        shell,
+        baseY: group.position.y,
+        modelTop,
+        built: b.build >= 1,
+      });
+      /**
+       * 大本营**不要**这块原生小血条（用户 2026-11-06：「它居然有两个血条」）。
+       * 它已经有 `visuals/coreBar` 那根永远正对镜头的世界空间悬浮条；
+       * 两个一起显示会一条挂在楼顶、一条浮在半空，读数重复还互相挡。
+       */
+      if (b.kind !== 'core') {
+        const bar = makeHpBar(b.hp / b.maxHp, sideColor(b.side), 2.6);
+        bar.position.y = modelTop + 0.25;
+        ui.add(bar);
+        group.userData['hpBar'] = bar;
+      }
+      if (needsStaffing(b.kind)) {
+        // SVG 图标替掉文字横条：缺民居 = 房屋 + 红叉；兵营再多一个小风车
+        const need = makeNeedLabel(b.kind === 'barracks' ? 'millHouse' : 'house');
         need.position.y = modelTop + 0.9;
         ui.add(need);
         group.userData['need'] = need;
@@ -438,29 +712,190 @@ export class ArenaApp {
         shell,
       );
 
-      // 核心的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
+      // 大本营的水晶是**模型自带的**（嵌在屋顶里、按阵营上色），不再往头顶飘一颗。
       // 用户 2026-10-27："整个建筑的模型本身里面就嵌了一个水晶，为什么还要再画一个水晶"。
       this.buildingMeshes.set(b.id, group);
       group.userData['side'] = b.side;
+
+      // 大本营的血条不进 HUD：挂在楼顶上方 1.5 格，满血不显示、掉血才浮出来
+      if (b.kind === 'core') {
+        const bar = makeCoreBar(sideColor(b.side));
+        bar.group.position.set(center.x, group.position.y + modelTop + 1.5, center.z);
+        this.scene.add(bar.group);
+        this.coreBars.set(b.id, bar);
+      }
+
+      if (b.build < 1) {
+        /**
+         * 施工中：楼体在 y 方向从 12% 长到 100%（**原点在底面**，所以是"往上长"），
+         * 外墙按进度从下往上逐块露出，外面围一圈跟着长高的脚手架。
+         *
+         * 为什么用 scale.y 而不是"从地下升起来"：位移露出的是**屋顶**（先看到顶，
+         * 墙反而藏在土里），读起来像"楼掉坑里了"；压扁是"矮墙在长高"，才是垒墙。
+         */
+        shell.setBuild(b.build);
+        group.scale.set(BUILDING_SCALE, BUILDING_SCALE * Math.max(0.12, b.build), BUILDING_SCALE);
+        const info = this.parts.get(b.id)!;
+        if (info.banner) info.banner.group.visible = false;
+        const scaffold = makeScaffold(b.cols, b.rows, modelTop);
+        scaffold.position.set(center.x, info.baseY!, center.z);
+        scaffold.scale.y = 0.32 + 0.68 * b.build;
+        this.scene.add(scaffold);
+        info.scaffold = scaffold;
+      }
     }
     for (const [id, group] of this.buildingMeshes) {
       const b = this.world.buildings.get(id);
       if (b) {
         const frac = b.hp / b.maxHp;
+        /**
+         * 血条「受击才显示」：比较上一帧血量，掉了就记时刻；2.5 秒后淡出。
+         * 用户 2026-11-06：「建筑只有被攻击的时候会显示血条，没攻击时默认消失。」
+         * 之前是 `frac < 0.999` 一直挂着 —— 一局打完半场全是残血条。
+         */
+        const prev = this.lastHpFrac.get(id) ?? frac;
+        if (frac < prev - 0.0005) this.lastHitAt.set(id, this.lastFrame.time);
+        this.lastHpFrac.set(id, frac);
+        const since = this.lastFrame.time - (this.lastHitAt.get(id) ?? -999);
+        const show = since < 2.5;
+        const alpha = since < 1.8 ? 1 : Math.max(0, 1 - (since - 1.8) / 0.7);
+
+        const cb = this.coreBars.get(id);
+        if (cb) {
+          cb.group.visible = show;
+          updateCoreBar(cb, frac, alpha);
+          // billboard：正交相机转视角时血条始终正对屏幕
+          cb.group.quaternion.copy(this.rig.camera.quaternion);
+        }
         const need = group.userData['need'] as THREE.Sprite | undefined;
-        if (need) need.visible = !this.world.isBarracksSupported(id);
+        // 施工中不提示缺后勤：楼还没长起来，那块牌子会被父级的 y 缩放压扁，字都糊了
+        if (need) need.visible = b.build >= 1 && !this.world.isStaffed(id);
         const bar = group.userData['hpBar'] as THREE.Mesh | undefined;
         if (bar) {
-          // 满血不挂条；掉血才出现，这样一眼能看出哪栋在挨打
-          bar.visible = frac < 0.999;
+          // 挨打后 2.5 秒可见，之后淡出 —— 不是「残血就一直挂条」
+          bar.visible = show;
+          (bar.material as THREE.MeshBasicMaterial).opacity = 0.95 * alpha;
           updateHpBar(bar, frac);
         }
-        this.damage.sync(id, frac);
+        this.damage.sync(id, frac, b.lastHit);
+        this.syncBuild(group, b, this.parts.get(id), dt);
         continue;
       }
-      this.scene.remove(group);
-      this.damage.forget(id);
+      /**
+       * 整栋塌了（用户 2026-11-06）：
+       * ① 墙上还立着的面片**一块不剩**全变成落体掉到地上；
+       * ② 楼体不立刻删，留下来慢慢沉进地里；
+       * ③ 同时地面扬起一大片尘，把下沉那几秒糊住。
+       */
+      const info = this.parts.get(id);
+      const baseY = info?.baseY ?? group.position.y;
+      const modelTop = info?.modelTop ?? 2.2;
+      this.damage.collapseAll(id, 'cannon');
+      // 外墙网格已经空了、几何也释放了，从残骸里摘掉（留着会渲染一张空网格）
+      const shellMesh = group.getObjectByName('wall-shell');
+      if (shellMesh) group.remove(shellMesh);
+      // 血条 / 「缺 民居」牌子 / 旗子不跟着沉，否则会有一串字浮在土里
+      const ui = group.userData['ui'] as THREE.Group | undefined;
+      if (ui) ui.visible = false;
+
+      this.sinking.push({
+        group,
+        baseY,
+        depth: modelTop + 1.6,
+        x: group.position.x,
+        z: group.position.z,
+        life: 0,
+        dustIn: 0,
+      });
+      // 所有楼都是 3×3 占地（BUILDING_SPECS），删除分支里 b 已经是 undefined，别去读它
+      this.fx.collapseDust(group.position.x, group.position.z, baseY, 1.9);
       this.buildingMeshes.delete(id);
+      this.damage.forget(id); // collapseAll 已经删了状态，这里只是兜底
+      this.lastHitAt.delete(id);
+      this.lastHpFrac.delete(id);
+      const cb = this.coreBars.get(id);
+      if (cb) {
+        this.scene.remove(cb.group);
+        for (const child of cb.group.children) {
+          const mesh = child as THREE.Mesh;
+          mesh.geometry.dispose();
+          (mesh.material as THREE.Material).dispose();
+        }
+        this.coreBars.delete(id);
+      }
+      // 塌的是楼：最重的一声 + 一次明显的震屏（0.55，差不多是"整栋倒下"的量）
+      this.sfx.play('collapse', { pitch: 0.92 + Math.random() * 0.16 });
+      this.rig.shake(0.55);
+    }
+  }
+
+  /**
+   * 施工的每帧表现。三件事挂在**同一个进度** `b.build` 上：
+   *
+   * 1. 外墙按进度从下往上露出（`WallShell.setBuild` 用 drawRange 截断，零重建）；
+   * 2. 楼体从地下升起，完工那一下正好回到 `baseY`；
+   * 3. 脚手架完工后 0.25 秒缩没（不是"啪"地消失）。
+   */
+  private syncBuild(
+    group: THREE.Object3D,
+    b: ArenaBuilding,
+    info:
+      | {
+          shell?: WallShell;
+          scaffold?: THREE.Group;
+          banner?: Banner;
+          baseY?: number;
+          modelTop?: number;
+          built?: boolean;
+        }
+      | undefined,
+    dt: number,
+  ): void {
+    if (!info) return;
+    const baseY = info.baseY ?? group.position.y;
+
+    if (b.build < 1) {
+      info.shell?.setBuild(b.build);
+      // 楼往上长（原点在底面）+ 脚手架跟着长：一个通到顶的空架子立在矮墙上，像楼掉坑里了
+      group.scale.set(BUILDING_SCALE, BUILDING_SCALE * Math.max(0.12, b.build), BUILDING_SCALE);
+      if (info.banner) info.banner.group.visible = false;
+      if (info.scaffold) info.scaffold.scale.y = 0.32 + 0.68 * b.build;
+      return;
+    }
+
+    if (!info.built) {
+      // 完工那一帧：墙体补齐、楼体长到原比例、旗子挂上、脚手架开始收
+      info.built = true;
+      /**
+       * 资源/建造类音效**只给玩家自己听**（用户 2026-11-06：「对方获得一个金币的音效，
+       * 我也能听到」）。实测一局里红方磨坊每次产金都在涨，而 `build` 之前是全场播 ——
+       * 红方立好一栋楼也响一串木材敲击，听起来就像"对面拿了一笔钱"。
+       *
+       * 战斗音（开火 / 命中 / 阵亡 / 倒塌）仍双方都播：它们发生在玩家视野里，
+       * 静音反而会让战场变哑。规则见 docs/工作笔记/AI决策架构_20261106.md 的音效分层表。
+       */
+      if (group.userData['side'] === 'blue') {
+        this.sfx.play('build');
+        this.rig.shake(0.16);
+      }
+      info.shell?.setBuild(1);
+      group.scale.setScalar(BUILDING_SCALE);
+      if (info.banner) info.banner.group.visible = true;
+      if (info.scaffold) info.scaffold.userData['fold'] = 0.25;
+    }
+
+    const sc = info.scaffold;
+    if (!sc) return;
+    const fold = (sc.userData['fold'] as number | undefined) ?? 0.25;
+    if (fold <= 0) return;
+    const next = fold - dt;
+    sc.userData['fold'] = next;
+    sc.scale.y = Math.max(0.02, next / 0.25);
+    sc.position.y = baseY;
+    if (next <= 0) {
+      this.scene.remove(sc);
+      disposeTree(sc);
+      info.scaffold = undefined;
     }
   }
 
@@ -487,6 +922,10 @@ export class ArenaApp {
       // 迟滞：这一帧动过就续 0.18 秒，否则慢慢放掉 —— 不然 run/idle 每帧切换，屏幕上一闪一闪
       entry.runHold = moved > 0.004 ? 0.18 : Math.max(0, entry.runHold - dt);
       const moving = entry.runHold > 0;
+      // 贴地影子：只跟位置（siege 车的影子是 group 子件，跟着车走，不用管）
+      if (entry.shadow && !entry.siege) {
+        entry.shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
+      }
       // 行军扬尘：每 0.4–0.65 秒在脚下放一小团（不是每帧，别把烟池吃满）
       entry.dustIn = Math.max(0, entry.dustIn - dt);
       if (moving && entry.dustIn <= 0) {
@@ -495,8 +934,11 @@ export class ArenaApp {
       }
 
       if (entry.siege) {
-        // 车头朝着"这一步往哪走"；停下来就保持最后朝向
-        if (moved > 0.004) entry.face = -Math.atan2(dz, dx);
+        // 车头朝**逻辑层的 aim**：锁敌时对准目标（炮口/弩臂真的指过去），
+        // 行军时朝行进方向。旧实现只在"这一步动了"时按位移改朝向，
+        // 停下来开火就永远保持最后的行军角度（用户点名的"没把头对准敌人"）。
+        const aim = u.aim ?? (u.side === 'blue' ? 0 : Math.PI);
+        entry.face = -aim;
         entry.obj.position.set(u.x, this.groundY(u.x, u.z), u.z);
         entry.obj.rotation.y = entry.face;
         for (const p of entry.pushers) {
@@ -517,8 +959,10 @@ export class ArenaApp {
         // 老模式的 UnitView 一直有这一句，我这一版漏了 —— 表现就是整个小人埋掉半个身子。
         entry.obj.position.y = this.groundY(u.x, u.z) + bodyH / 2;
         entry.dude.faceCamera(this.rig.yaw);
-        // 左右朝向看**屏幕**：把世界位移投到相机的右向量上，镜头转到哪边都不会反着走
-        entry.dude.setFlipX(facingFlip(dx, dz, this.rig.yaw, entry.dude.flipped));
+        // 左右朝向看**屏幕**：把当前的 aim（锁敌朝向 / 行军朝向）投到相机右向量上。
+        // 旧实现用帧位移 dx,dz，站着开火时是 0 ⇒ 保持行军朝向 ⇒ 背对背开打。
+        const aim = u.aim ?? (u.side === 'blue' ? 0 : Math.PI);
+        entry.dude.setFlipX(facingFlip(Math.cos(aim), Math.sin(aim), this.rig.yaw, entry.dude.flipped));
         entry.dude.play(anim, time);
       } else {
         // 没有素材包：锥体直接跟着走，玩法读数照常
@@ -529,7 +973,9 @@ export class ArenaApp {
       if (alive.has(id)) continue;
       // 倒下的位置留几团烟 + 火星（用最后缓存的位置）
       this.fx.death(entry.x, entry.z, this.groundY(entry.x, entry.z) + 0.5);
+      this.sfx.play('kill', { pitch: 0.85 + Math.random() * 0.3 });
       entry.dude?.dispose();
+      entry.shadow?.removeFromParent();
       entry.obj.removeFromParent();
       this.unitSprites.delete(id);
     }
@@ -544,7 +990,10 @@ export class ArenaApp {
       );
       cone.position.set(u.x, this.groundY(u.x, u.z) + UNIT_HEIGHT / 2, u.z);
       this.scene.add(cone);
-      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0 };
+      const shadow = makeShadow(0.5, 0.36);
+      shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
+      this.scene.add(shadow);
+      return { obj: cone, dude: null, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow };
     }
     if (statsOf(u.defId).siege) return u.defId === 'ballista' ? this.makeBallista(u) : this.makeSiege(u);
     const def = unitDef(u.defId);
@@ -554,7 +1003,10 @@ export class ArenaApp {
     const dude = new DudeSprite(this.pack, atlas, texture, { ...DEFAULT_APPEARANCE, height: bodyH });
     dude.mesh.position.y = this.groundY(u.x, u.z) + bodyH / 2;
     this.scene.add(dude.mesh);
-    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0 };
+    const shadow = makeShadow(0.55, 0.4);
+    shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
+    this.scene.add(shadow);
+    return { obj: dude.mesh, dude, pushers: [], siege: false, face: 0, x: u.x, z: u.z, cooldown: u.cooldown, attackLeft: 0, runHold: 0, dustIn: 0, shadow };
   }
 
   /**
@@ -616,6 +1068,8 @@ export class ArenaApp {
     }
 
     group.position.set(u.x, this.groundY(u.x, u.z), u.z);
+    // 影子是 group 的子件：车转影子跟着转（攻城车的椭圆比小人一个大圈）
+    group.add(makeShadow(1.9, 1.05));
     this.scene.add(group);
     return {
       obj: group,
@@ -696,6 +1150,8 @@ export class ArenaApp {
     pushers.push(dude);
 
     group.position.set(u.x, this.groundY(u.x, u.z), u.z);
+    // 影子是 group 的子件：车转影子跟着转（攻城车的椭圆比小人一个大圈）
+    group.add(makeShadow(1.9, 1.05));
     this.scene.add(group);
     return {
       obj: group,
@@ -731,7 +1187,9 @@ export class ArenaApp {
     return this.map.surfaceY(worldToCell(x, z));
   }
 
-  /** 阵营色带：蓝方取蓝、红方取红，头脸从兵种自己的区间里挑。 */
+  /** 阵营色带（2026-11-06 花色系统）：小人**严格按花色**穿——主色作衣、次色作镶边。
+   *  旧做法是从素材包的蓝/红色带里挑一条，玩家没法自定义；现在直接写 hex，
+   *  suit2 的阴影由烘图时自动加深，任意颜色都成立。头脸仍从兵种自己的区间里挑。 */
   private styleOf(side: Side, unitId: string, def: ReturnType<typeof unitDef>): DudeStyle {
     const key = `${side}:${unitId}`;
     const hit = this.styles.get(key);
@@ -739,12 +1197,12 @@ export class ArenaApp {
     if (!this.pack) throw new Error('没有素材包');
     const rng = new Random(hashString(`${this.seed}:arena:${key}`));
     const base = randomStyle(rng, this.pack);
-    const suits = this.pack.palettes.suit.filter((h) => (side === 'blue' ? isBlue(h) : isRed(h)));
+    const banner = sideBanner(side);
     const style: DudeStyle = {
       ...base,
       head: rng.pick(headCandidates(def, this.pack)),
       face: rng.pick(faceCandidates(def, this.pack)),
-      hex: { ...base.hex, suit: suits.length > 0 ? rng.pick(suits) : base.hex.suit },
+      hex: { ...base.hex, suit: banner.primary, more: banner.secondary },
     };
     // 机器巨人换成灰铁色：别的兵种靠阵营色，它靠"一看就是铁疙瘩"
     if (unitId === 'mech') {
@@ -813,9 +1271,9 @@ export class ArenaApp {
       if (!mesh) {
         mesh =
           s.ammo === 'cannon'
-            ? makeBall(0.16)
+            ? makeBall(0.16, 0x1a1d24, 0x000000, 'cannon')
             : s.ammo === 'magic'
-              ? makeBall(0.11, 0x74e0ff, 0x74e0ff)
+              ? makeBall(0.11, 0x74e0ff, 0x74e0ff, 'magic')
               : makeArrow();
         this.scene.add(mesh);
         this.shotMeshes.set(s.id, mesh);
@@ -843,6 +1301,10 @@ export class ArenaApp {
                   ? 0.15
                   : 0;
         this.fx.muzzle(s.fromX + ux * ahead, s.fromZ + uz * ahead, fromY, s.ammo, ux, uz);
+        // 开火音：炮弹是"咚"，箭/法术是"嗖"（法术用稍高的音高区分）
+        if (s.ammo === 'cannon') this.sfx.play('cannon');
+        else if (s.ammo === 'arrow') this.sfx.play('arrow', { pitch: s.source === 'ballista' ? 1.15 : 1 });
+        else this.sfx.play('arrow', { pitch: 1.5 });
       }
       const k = s.t;
       const x = s.fromX + (s.toX - s.fromX) * k;
@@ -867,16 +1329,17 @@ export class ArenaApp {
         | { x: number; z: number; ground: number; ammo: 'arrow' | 'cannon' | 'magic' }
         | undefined;
       if (hit) {
+        // 火星现在由 impact 按弹种自己放（炮弹 10 颗 / 法术 5 / 箭 3），这里别再补一遍
         this.fx.impact(hit.x, hit.z, hit.ground, hit.ammo, hit.ammo === 'cannon' ? 1.3 : 0);
-        // 炮弹落地再溅一把火星（烟之外的第二层）
-        if (hit.ammo === 'cannon') this.fx.spark(hit.x, hit.z, hit.ground + 0.4, 0, 1, 8);
+        this.sfx.play('impact', { pitch: hit.ammo === 'cannon' ? 0.72 : hit.ammo === 'magic' ? 1.3 : 1 });
       }
       this.scene.remove(mesh);
       // 箭的几何体/材质是全场共用的（ARROW_GEO/ARROW_MAT），不能 dispose；
-      // 炮弹和法术弹是每次新建的，要释放。
+      // 炮弹和法术弹是每次新建的，要释放。尾巴（TRAIL_*）同样是共用的，跳过。
       if (hit?.ammo !== 'arrow') {
         mesh.traverse((o) => {
           const part = o as THREE.Mesh;
+          if (part.userData['trail']) return;
           if (part.geometry) part.geometry.dispose();
         });
       }
@@ -898,7 +1361,74 @@ export class ArenaApp {
     for (const id of this.seenHeals) if (!live.has(id)) this.seenHeals.delete(id);
   }
 
+  /**
+   * 一种"没有事件只有状态"的声音：这局结束。
+   *
+   * 其余音效都挂在具体动作的钩子上（开火、命中、完工、倒塌、阵亡），
+   * 只有这个是"每帧比一下上一帧"——世界层不报这件事，它只报结果。
+   *
+   * （金币到账的 coin 原来也在这里，2026-11-06 用户嫌吵"把它关掉吧"——
+   * 2 秒一格的节奏音 + 磨坊产金，声音比动作密得多，撤了。）
+   */
+  private audioCues(): void {
+    const outcome = this.world.outcome;
+    if (outcome !== this.lastOutcome) {
+      if (outcome === 'win') this.sfx.play('win');
+      else if (outcome === 'lose') this.sfx.play('lose');
+      this.lastOutcome = outcome;
+    }
+  }
+
+  /**
+   * 近战命中：贴身的火星 + 一小团土（2026-11-05）。
+   *
+   * 远程不在这里 —— 它们的特效在弹丸飞到目标那一刻由 `impact` 放（按弹种分三种碎片），
+   * 这里只管"没有飞行物的那一下"。
+   */
+  private syncHits(): void {
+    const live = new Set<number>();
+    for (const h of this.world.hits) {
+      live.add(h.id);
+      if (this.seenHits.has(h.id)) continue;
+      this.seenHits.add(h.id);
+      this.fx.melee(h.x, h.z, this.groundY(h.x, h.z) + h.y, h.dirX, h.dirZ, h.heavy);
+      this.sfx.play('melee', { pitch: h.heavy ? 0.78 : 1 });
+    }
+    for (const id of this.seenHits) if (!live.has(id)) this.seenHits.delete(id);
+  }
+
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后自己塌平（最后几秒淡出）。 */
+  /**
+   * 残骸下沉：smoothstep 缓入缓出，前 SINK_DUST_SECONDS 秒持续补尘。
+   *
+   * 地面是实体地块，深度测试会把沉下去的部分自然遮住 —— 不用做剖面或遮罩。
+   * 销毁时**只 remove、不 dispose 几何**：模型里的 BoxGeometry / 血条 plane 是共享的，
+   * dispose 会把场上其它楼一起弄没。
+   */
+  private stepSinking(dt: number): void {
+    for (let i = this.sinking.length - 1; i >= 0; i--) {
+      const s = this.sinking[i]!;
+      s.life += dt;
+      const k = Math.min(1, s.life / SINK_SECONDS);
+      const ease = k * k * (3 - 2 * k);
+      s.group.position.y = s.baseY - ease * s.depth;
+      s.group.scale.setScalar(BUILDING_SCALE * (1 - 0.1 * ease));
+
+      if (s.life < SINK_DUST_SECONDS) {
+        s.dustIn -= dt;
+        if (s.dustIn <= 0) {
+          s.dustIn = 0.17;
+          this.fx.collapsePuff(s.x, s.z, s.baseY);
+        }
+      }
+
+      if (k >= 1) {
+        this.scene.remove(s.group);
+        this.sinking.splice(i, 1);
+      }
+    }
+  }
+
   private syncRuins(): void {
     const live = new Set<number>();
     for (const r of this.world.ruins) {
@@ -946,199 +1476,3 @@ export class ArenaApp {
   }
 }
 
-// ---------------------------------------------------------------- 小件
-
-const isRed = (hex: string): boolean => {
-  const v = hex.replace('#', '');
-  const n = Number.parseInt(v.length === 3 ? v.split('').map((c) => c + c).join('') : v, 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return r > g + 30 && r > b + 30;
-};
-
-function labelOf(b: ArenaBuilding): string {
-  return b.kind === 'core'
-    ? '核心'
-    : b.kind === 'barracks'
-      ? '兵营'
-      : b.kind === 'mill'
-        ? '磨坊'
-        : b.kind === 'house'
-          ? '民居'
-          : '防御塔';
-}
-
-function makeHpBar(frac: number, color: number, width = 1.6): THREE.Mesh {
-  const geo = new THREE.PlaneGeometry(width, 0.2);
-  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
-  const bar = new THREE.Mesh(geo, mat);
-  bar.renderOrder = 10;
-  bar.scale.x = Math.max(0.02, frac);
-  bar.userData['frac'] = frac;
-  bar.userData['base'] = color;
-  return bar;
-}
-
-function updateHpBar(bar: THREE.Mesh, frac: number): void {
-  const clamped = Math.max(0, Math.min(1, frac));
-  const prev = bar.userData['frac'] as number;
-  if (Math.abs(prev - clamped) < 0.005) return;
-  bar.userData['frac'] = clamped;
-  bar.scale.x = Math.max(0.02, clamped);
-  const base = bar.userData['base'] as number;
-  (bar.material as THREE.MeshBasicMaterial).color.setHex(clamped < 0.3 ? 0xff6b6b : base);
-}
-
-/** 兵营缺后勤时头顶的提示牌（缺磨坊/民居）。 */
-function makeNeedLabel(): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    ctx.fillStyle = 'rgba(28,20,14,0.88)';
-    ctx.fillRect(0, 0, 256, 64);
-    ctx.strokeStyle = '#c8a24c';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(2, 2, 252, 60);
-    ctx.fillStyle = '#f0d08a';
-    ctx.font = 'bold 30px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('缺 磨坊 + 民居', 128, 34);
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestFilter;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set(2.6, 0.65, 1);
-  sprite.visible = false;
-  return sprite;
-}
-
-/** 炮口离地高度（格）：和模型对得上（×BUILDING_SCALE 之后的塔顶 / 台面 / 车头）。 */
-const MUZZLE_Y = { arrowTower: 5.6, cannonTower: 2.55, siege: 0.95, ballista: 1.15, unit: 1.1 } as const;
-
-/**
- * 一支箭：杆 + 三角箭头 + 两片尾羽，沿 +Z 指向前方。
- * 几何体和材质**全场共用**：射手一多，每帧都在造箭，逐个 dispose 会反复重建几何体。
- */
-const ARROW_GEO = {
-  shaft: new THREE.BoxGeometry(0.035, 0.035, 0.5),
-  head: new THREE.ConeGeometry(0.06, 0.14, 4),
-  tail: new THREE.BoxGeometry(0.12, 0.02, 0.14),
-};
-const ARROW_MAT = {
-  wood: new THREE.MeshStandardMaterial({ color: 0x8a5f2c, flatShading: true, roughness: 0.9 }),
-  steel: new THREE.MeshStandardMaterial({ color: 0xd9d9e3, flatShading: true, roughness: 0.4 }),
-  fletch: new THREE.MeshStandardMaterial({ color: 0xe6d8b4, flatShading: true, roughness: 0.9 }),
-};
-
-function makeArrow(): THREE.Group {
-  const group = new THREE.Group();
-  const shaft = new THREE.Mesh(ARROW_GEO.shaft, ARROW_MAT.wood);
-  const head = new THREE.Mesh(ARROW_GEO.head, ARROW_MAT.steel);
-  head.rotation.x = Math.PI / 2;
-  head.position.z = 0.31;
-  const tail = new THREE.Mesh(ARROW_GEO.tail, ARROW_MAT.fletch);
-  tail.position.z = -0.22;
-  group.add(shaft, head, tail);
-  return group;
-}
-
-function makeBall(radius: number, color = 0x1a1d24, emissive = 0x000000): THREE.Mesh {
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(radius, 6, 4),
-    new THREE.MeshStandardMaterial({
-      color,
-      emissive,
-      emissiveIntensity: emissive ? 1.4 : 0,
-      flatShading: true,
-      roughness: 0.6,
-    }),
-  );
-  mesh.castShadow = emissive === 0;
-  return mesh;
-}
-
-/**
- * 废墟：用 `fracture()` 把这栋楼的占地**递归切碎**，每块按来源（屋瓦/墙体/木梁）
- * 换颜色、随机转向与高度。结果是 (楼号) 决定的 —— 同一堆废墟刷新前后长得一样，
- * 不同楼一定不一样（用户 2026-10-27："废墟长得不一样啊随机"）。
- *
- * 传进来的 group 里每块都带出始速度的方向，`settle()` 用前 0.5 秒把它从中心炸开再落定。
- */
-function makeRuin(cols: number, rows: number, seed: number, style: 'core' | 'tower' | 'wood' | 'stone'): THREE.Group {
-  const group = new THREE.Group();
-  const parts = fracture(cols, rows, seed, 9);
-  const palette = {
-    roof: 0x7a3a30,
-    wall: 0x8a8175,
-    wood: 0x5a4326,
-  } as const;
-  const tintBase = style === 'core' ? 0x8a7a55 : style === 'wood' ? 0x6b5638 : 0x807a70;
-
-  parts.forEach((p, i) => {
-    const base = p.part === 'roof' ? palette.roof : p.part === 'wall' ? palette.wall : palette.wood;
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(base).lerp(new THREE.Color(tintBase), 0.25).multiplyScalar(0.6 + p.tone * 0.6).getHex(),
-      roughness: 0.98,
-      flatShading: true,
-      transparent: true,
-      opacity: 1,
-    });
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(p.w, p.h, p.d), mat);
-    mesh.rotation.y = p.spin;
-    mesh.castShadow = true;
-    mesh.userData['home'] = { x: p.x, z: p.z, y: p.h / 2 };
-    mesh.userData['burst'] = { x: p.x * 0.45, z: p.z * 0.45, i };
-    group.add(mesh);
-  });
-
-  group.userData['age'] = 0;
-  return group;
-}
-
-/** 前 0.5 秒：从中心炸开、抬高，然后落到地面。之后不再动。 */
-function settleRuin(group: THREE.Group, age: number): void {
-  const k = Math.min(1, age / 0.5);
-  const ease = 1 - (1 - k) * (1 - k);
-  for (const child of group.children) {
-    const home = child.userData['home'] as { x: number; z: number; y: number } | undefined;
-    const burst = child.userData['burst'] as { x: number; z: number; i: number } | undefined;
-    if (!home || !burst) continue;
-    child.position.set(home.x + burst.x * (1 - ease), home.y + (1 - ease) * (0.7 + (burst.i % 3) * 0.2), home.z + burst.z * (1 - ease));
-  }
-}
-
-/** 建筑种类 → 废墟的颜色族。 */
-function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
-  if (kind === 'core') return 'core';
-  if (kind === 'arrowTower' || kind === 'cannonTower') return 'tower';
-  if (kind === 'mill' || kind === 'barracks' || kind === 'house') return 'wood';
-  return 'stone';
-}
-
-function makeFlag(side: Side, selected: boolean): THREE.Group {
-  const g = new THREE.Group();
-  const color = sideColor(side);
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.035, 0.04, 1.1, 6),
-    new THREE.MeshStandardMaterial({ color: 0x6b4526, roughness: 0.9, flatShading: true }),
-  );
-  pole.position.y = 0.55;
-  const cloth = new THREE.Mesh(
-    new THREE.ConeGeometry(0.2, 0.34, 4),
-    new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: selected ? 0.9 : 0.35,
-      roughness: 0.5,
-      flatShading: true,
-    }),
-  );
-  cloth.position.set(0, 1.05, 0);
-  g.add(pole, cloth);
-  return g;
-}

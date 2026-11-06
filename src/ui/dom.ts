@@ -70,3 +70,21 @@ export interface HudWidget {
   readonly el: HTMLElement;
   refresh?(now: number): void;
 }
+
+/**
+ * 造一个带类名的元素（`el('div', 'panel', '文字')`）。
+ *
+ * 和上面那个 `make(tag, options, children)` 是两套口味：那个适合"一次配一堆属性"，
+ * 这个适合"就地拼几行 DOM"。`ArenaHud` 与 `StartMenu` 用的是后者 ——
+ * 以前两边各抄了一份一模一样的 8 行实现。
+ */
+export function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className = '',
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}

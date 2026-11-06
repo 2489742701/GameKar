@@ -25,8 +25,8 @@ export interface ViewPreset {
  */
 export const VIEW_PRESETS: ViewPreset[] = [
   // 默认是**斜视**（用户 2026-10-27：更偏向从自己这边斜着看整片战场）
-  { name: '斜视', zoomFactor: 1, yaw: 24, pitch: 50 },
-  { name: '正对', zoomFactor: 0.96, yaw: 0, pitch: 52 },
+  { name: '斜视', zoomFactor: 1, yaw: 20, pitch: 44 },
+  { name: '正对', zoomFactor: 0.96, yaw: 0, pitch: 46 },
 ];
 
 /** 自动模式多久换一次机位、玩家停手多久回来。 */

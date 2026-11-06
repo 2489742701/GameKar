@@ -1,0 +1,401 @@
+/**
+ * 开始菜单 —— 只服务 `StartMenu.ts`。
+ *
+ * 和 `arena.css` 分开是因为它只在"还没开打"时存在：
+ * 真正的 HUD 样式要能被战场画面压住，这份要能压住整个战场。
+ *
+ * 视觉口径沿用老模式那套木纹 + 镀金（`base.css` 的 token），
+ * 但**不做整块不透明面板**：背后那幅战场要透出来，玩家第一眼看到的是"游戏"而不是"表单"。
+ */
+
+.start {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--safe-top) + 24px) 20px calc(var(--safe-bottom) + 24px);
+  /* 中间透、四周压暗：视线自然落在中间的标题和按钮上 */
+  background:
+    radial-gradient(120% 80% at 50% 38%, rgba(8, 6, 10, 0.18) 0%, rgba(8, 6, 10, 0.82) 62%, #08060a 100%),
+    linear-gradient(180deg, rgba(8, 6, 10, 0.55), rgba(8, 6, 10, 0.9));
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  pointer-events: auto;
+  animation: startIn 0.42s ease both;
+}
+
+@keyframes startIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.start__main,
+.start__rules {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  text-align: center;
+}
+
+/**
+ * `hidden` 必须显式压回来：上面给这两个容器写了 `display: flex`，
+ * 类选择器的优先级高于浏览器默认的 `[hidden] { display: none }` ——
+ * 少这一条，主菜单和说明面板会**叠在一起**（第一版截图就是这样）。
+ */
+.start__main[hidden],
+.start__rules[hidden] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 标题 */
+
+.start__title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.start__name {
+  margin: 0;
+  font-size: clamp(38px, 9vw, 64px);
+  line-height: 1;
+  letter-spacing: 0.18em;
+  font-weight: 800;
+  /* 金箔：亮面在上一半，暗金压在下沿 —— 纯色会显得像标题占位符 */
+  background: linear-gradient(180deg, #fbf0cf 0%, var(--gold-hi) 34%, var(--gold) 62%, #8a5f1c 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.65));
+}
+
+.start__sub {
+  margin: 0;
+  font-size: clamp(12px, 3.2vw, 15px);
+  letter-spacing: 0.3em;
+  color: var(--text-dim);
+  text-indent: 0.3em;
+}
+
+/* ---------------------------------------------------------------- 按钮 */
+
+.start__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.start__btn {
+  appearance: none;
+  cursor: pointer;
+  padding: 13px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-edge);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.16)),
+    var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  transition:
+    transform 0.12s ease,
+    border-color 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.start__btn:hover {
+  border-color: var(--gold);
+  background-color: var(--panel-solid);
+}
+
+.start__btn:active {
+  transform: translateY(1px) scale(0.995);
+}
+
+.start__btn--primary {
+  border-color: var(--gold);
+  color: #1a1206;
+  background:
+    linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 52%, #a9741f 100%);
+  font-weight: 700;
+  box-shadow: 0 8px 22px rgba(217, 178, 92, 0.24);
+}
+
+.start__btn--primary:hover {
+  filter: brightness(1.06);
+}
+
+.start__foot {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  opacity: 0.55;
+}
+
+/* ---------------------------------------------------------------- 说明 */
+
+.start__rules {
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  text-align: left;
+  gap: 14px;
+}
+
+.start__rules__title {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.2em;
+  color: var(--gold-hi);
+  text-align: center;
+}
+
+.start__rules__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.start__rule {
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(246, 220, 156, 0.14);
+  background: rgba(18, 11, 6, 0.72);
+}
+
+.start__rule__title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  color: var(--gold);
+}
+
+.start__rule__body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--text-dim);
+}
+
+.start__rule__body b {
+  color: var(--gold-hi);
+  font-weight: 600;
+}
+
+/* 竖屏窄机：标题别把按钮挤出屏幕 */
+@media (max-height: 560px) {
+  .start__name {
+    font-size: 34px;
+  }
+  .start__actions {
+    margin-top: 0;
+  }
+  .start__main,
+  .start__rules {
+    gap: 12px;
+  }
+}
+
+/* 音效开关：像个文字链，不做成第三个大按钮（它不是"主要动作"） */
+.start__link {
+  appearance: none;
+  align-self: center;
+  cursor: pointer;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(246, 220, 156, 0.22);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  transition:
+    color 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.start__link:hover {
+  color: var(--gold-hi);
+  border-color: var(--gold);
+}
+
+/* ---------------------------------------------------------------- 花色编辑器（bned）
+ * 用户 2026-11-06："额外准备一个自定义设置里面给他处理；花色太少；颜色给几个
+ * 不错的预选。" 一份组件两个入口（开始菜单 / 游戏内 HUD 设置面板），样式共用。
+ */
+.bned {
+  width: min(360px, 86vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bned__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.bned__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--gold-hi);
+}
+
+.bned__hint {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.bned__preview {
+  align-self: center;
+  width: 144px;
+  height: 96px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  image-rendering: pixelated;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.5);
+}
+
+.bned__colors {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.bned__color {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.bned__color input[type='color'] {
+  width: 30px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--wood-1);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.bned__label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+/* 预设配色卡：三段色条，点一下整套套用 */
+.bned__schemes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.bned__scheme {
+  display: inline-flex;
+  width: 54px;
+  height: 22px;
+  padding: 2px;
+  border-radius: 5px;
+  border: 1px solid var(--wood-1);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.14s ease, transform 0.1s ease;
+}
+
+.bned__scheme:hover {
+  border-color: var(--gold);
+  transform: translateY(-1px);
+}
+
+.bned__scheme span {
+  flex: 1.2;
+}
+
+.bned__scheme span + span {
+  flex: 0.7;
+}
+
+.bned__emblems {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.bned__emblem {
+  width: 44px;
+  height: 44px;
+  padding: 1px;
+  border-radius: 6px;
+  border: 1px solid var(--wood-1);
+  background: none;
+  cursor: pointer;
+  image-rendering: pixelated;
+  transition: border-color 0.14s ease;
+}
+
+.bned__emblem canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.bned__emblem[data-on='true'] {
+  border-color: var(--gold-hi);
+  box-shadow: 0 0 8px rgba(246, 220, 156, 0.5);
+}
+
+.bned__enemy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.bned__mode {
+  min-height: 26px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--wood-1);
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.3);
+  transition: border-color 0.14s ease, color 0.14s ease;
+}
+
+.bned__mode[data-on='true'] {
+  border-color: var(--gold-hi);
+  color: var(--gold-hi);
+}
+
+/* 自定义旗帜独立栏目：主界面只留一个按钮，编辑器在这里展开（2026-11-06） */
+.start__banner__body {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+.start__banner-panel .bned {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(246, 220, 156, 0.14);
+  background: rgba(18, 11, 6, 0.72);
+}

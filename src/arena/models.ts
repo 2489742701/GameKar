@@ -72,6 +72,40 @@ export interface ArenaModel {
   shell: ShellPanel[];
 }
 
+// ---------------------------------------------------------------- 阵营配色
+
+/** 明度缩放：k<1 压暗、k>1 提亮。纯算术，不 import three。 */
+export function shade(color: number, k: number): number {
+  const r = Math.min(255, Math.round(((color >> 16) & 255) * k));
+  const g = Math.min(255, Math.round(((color >> 8) & 255) * k));
+  const b = Math.min(255, Math.round((color & 255) * k));
+  return (r << 16) | (g << 8) | b;
+}
+
+/** 两色按比例混。k=0 全是 a、k=1 全是 b。 */
+export function mix(a: number, b: number, k: number): number {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const r = Math.round(ar + (br - ar) * k);
+  const g = Math.round(ag + (bg - ag) * k);
+  const bl = Math.round(ab + (bb - ab) * k);
+  return (r << 16) | (g << 8) | bl;
+}
+
+/**
+ * **屋顶瓦 = 阵营色压暗**（蓝方深蓝瓦、红方深红瓦）。
+ *
+ * 用户 2026-10-27：「我方和敌方房顶的颜色……是不一样的」。
+ * 上一版只有磨坊顶盖吃阵营色，其余五栋的屋顶全是同一个红棕 `ARENA_PAL.roof`，
+ * 隔着一个战场根本分不出哪栋是谁的（实测双方颜色集合只差旗子和血条）。
+ * 不用"红棕混阵营色"是因为红棕本身含大量红，混蓝会发紫 —— 直接把阵营色压暗更干净。
+ */
+export const roofOf = (accent: number): number => shade(accent, 0.68);
+/** 屋脊/檐口：比瓦再暗一档，屋顶才有层次，不至于是一坨纯色。 */
+export const ridgeOf = (accent: number): number => shade(accent, 0.46);
+/** 帆布这类"布"的件：米色往阵营偏，布还是布，但两边不同色。 */
+export const clothOf = (accent: number): number => mix(0xe6d8b4, accent, 0.52);
+
 /** 建筑族调色板：只在这里改颜色。 */
 export const ARENA_PAL = {
   stone: 0x6a6f7c,
@@ -236,8 +270,11 @@ function ringShell(
 // ---------------------------------------------------------------- 五栋楼
 
 /**
- * 议事厅（核心）：石台 + 石裙 + **方墙（面片）** + 四角柱 + 四坡顶 + 水晶。
+ * 大本营：石台 + 石裙 + **方墙（面片）** + 四角柱 + 四坡顶 + 水晶。
  * 墙里有木骨架 + 暗色内衬：墙片掉了能看见梁柱。
+ *
+ * 模型本身沿用老模式那栋"议事厅"的骨架 —— 两个模式共用同一套建模语言，
+ * 但玩法上它是**大本营**（用户 2026-11-01 纠正的术语），别再叫"核心"。
  */
 export function coreModel(accent: number): ArenaModel {
   return {
@@ -257,16 +294,21 @@ export function coreModel(accent: number): ArenaModel {
       box([1.74, 0.06, 1.74], ARENA_PAL.roofDark, [0, mid(1.66, 0.06), 0]),
       {
         part: { kind: 'cone', radius: 1.22, height: 0.66, seg: 4 },
-        color: ARENA_PAL.roof,
+        color: roofOf(accent),
         at: [0, mid(1.72, 0.66), 0],
         rot: [0, Math.PI / 4, 0],
       },
+      // 四条屋脊压在四坡顶的棱上：阵营色，从高处也能一眼看出是谁的主城
+      box([0.1, 0.08, 1.76], ridgeOf(accent), [-0.84, 1.94, 0]),
+      box([0.1, 0.08, 1.76], ridgeOf(accent), [0.84, 1.94, 0]),
+      box([1.76, 0.08, 0.1], ridgeOf(accent), [0, 1.94, -0.84]),
+      box([1.76, 0.08, 0.1], ridgeOf(accent), [0, 1.94, 0.84]),
       crystal(0.2, 0.62, accent, [0, mid(2.28, 0.62), 0]),
-      // 屋内：暗色内衬（洞的"深度"）+ 木骨架
+      // 屋内：暗色内衬（洞的"深度"）+ 木骨架。
+      // 骨架只留前后两根肋（原来四根）：机型锁要求固定件 ≤22，而屋顶那 4 条阵营色屋脊
+      // 更值得占这个名额 —— 屋脊是**随时**看得见的敌我标记，肋只有墙被打穿才露出来。
       box([1.06, 1.0, 1.06], ARENA_PAL.inside, [0, mid(0.57, 1.0), 0]),
       cyl([0.035, 0.04, 1.0], ARENA_PAL.wood, [-0.52, mid(0.57, 1.0), -0.52], 5),
-      cyl([0.035, 0.04, 1.0], ARENA_PAL.wood, [0.52, mid(0.57, 1.0), -0.52], 5),
-      cyl([0.035, 0.04, 1.0], ARENA_PAL.wood, [-0.52, mid(0.57, 1.0), 0.52], 5),
       cyl([0.035, 0.04, 1.0], ARENA_PAL.wood, [0.52, mid(0.57, 1.0), 0.52], 5),
       box([1.12, 0.07, 0.07], ARENA_PAL.woodLight, [0, 1.1, 0.52]),
       box([1.12, 0.07, 0.07], ARENA_PAL.woodLight, [0, 1.44, -0.52]),
@@ -278,12 +320,14 @@ export function coreModel(accent: number): ArenaModel {
 /**
  * 兵营：长屋 + 双坡脊 + 大门 + 檐柱 + 兵器架；墙片掉了露出三根木柱和一根横梁。
  */
-export function barracksModel(): ArenaModel {
+export function barracksModel(accent: number): ArenaModel {
   return {
     static: [
       plinth([1.5, 0.06, 1.16], ARENA_PAL.stoneDark),
       box([1.45, 0.16, 1.02], ARENA_PAL.stoneDark, [0, mid(0.06, 0.16), 0]),
-      prism([1.62, 0.5, 1.14], ARENA_PAL.roof, [0, 0.84, 0]),
+      prism([1.62, 0.5, 1.14], roofOf(accent), [0, 0.84, 0]),
+      // 屋脊 + 两道檐口：阵营色，扫一眼就知道这排营房是谁的
+      box([1.66, 0.07, 0.12], ridgeOf(accent), [0, mid(1.32, 0.07), 0]),
       box([1.64, 0.05, 0.1], ARENA_PAL.roofDark, [0, mid(1.32, 0.05), 0]),
       box([0.34, 0.46, 0.06], ARENA_PAL.wood, [0, mid(0.22, 0.46), 0.52]),
       box([0.44, 0.05, 0.07], ARENA_PAL.woodLight, [0, 0.7, 0.52]),
@@ -307,7 +351,7 @@ export function barracksModel(): ArenaModel {
  * 箭塔：细高石鼓 + 外挑垛口 + 三面箭窗 + 锥顶。
  * 鼓身是面片，掉了露出暗色内筒、四根木肋和两层木楼板。
  */
-export function arrowTowerModel(): ArenaModel {
+export function arrowTowerModel(accent: number): ArenaModel {
   return {
     static: [
       plinth([1.12, 0.06, 1.12], ARENA_PAL.stoneDark),
@@ -318,8 +362,11 @@ export function arrowTowerModel(): ArenaModel {
       box([0.09, 0.3, 0.05], ARENA_PAL.stoneDark, [0, mid(1.0, 0.3), 0.545]),
       box([0.05, 0.3, 0.09], ARENA_PAL.stoneDark, [0.545, mid(1.0, 0.3), 0]),
       box([0.05, 0.3, 0.09], ARENA_PAL.stoneDark, [-0.545, mid(1.0, 0.3), 0]),
-      cone(0.5, 0.8, ARENA_PAL.roof, [0, mid(1.9, 0.8), 0], 8),
-      sphere(0.06, ARENA_PAL.gold, [0, 2.74, 0], 1),
+      cone(0.5, 0.8, roofOf(accent), [0, mid(1.9, 0.8), 0], 8),
+      // 顶珠换阵营色（原来是金色的）：塔顶那一小点是最容易被看见的敌我标记
+      sphere(0.07, accent, [0, 2.74, 0], 1),
+      // 垛口台上一圈阵营色压顶
+      cyl([0.6, 0.6, 0.05], ridgeOf(accent), [0, mid(1.86, 0.05), 0], 10),
       // 屋内：暗色内筒 + 四根木肋 + 两层木楼板
       cyl([0.42, 0.42, 1.05], ARENA_PAL.inside, [0, mid(0.56, 1.05), 0], 10),
       cyl([0.035, 0.04, 1.05], ARENA_PAL.wood, [0.47, mid(0.56, 1.05), 0], 5),
@@ -350,6 +397,8 @@ export function cannonTowerModel(accent: number): ArenaModel {
       plinth([1.42, 0.06, 1.42], ARENA_PAL.stoneDark),
       box([1.32, 0.36, 1.32], ARENA_PAL.stoneDark, [0, mid(0.06, 0.36), 0]),
       cyl([0.58, 0.62, 0.1], ARENA_PAL.wood, [0, mid(0.76, 0.1), 0], 10),
+      // 台面下沿一圈阵营色带：炮塔是敞开的没有屋顶，这条带就是它的"房顶色"
+      cyl([0.66, 0.66, 0.05], ridgeOf(accent), [0, mid(0.64, 0.05), 0], 10),
       bumper(-0.46, -0.46),
       bumper(0.46, -0.46),
       bumper(-0.46, 0.46),
@@ -384,41 +433,80 @@ export function cannonTowerModel(accent: number): ArenaModel {
 }
 
 /**
- * 磨坊：石塔 + 木栈道 + 阵营色顶盖 + 四片帆。
- * 塔身是面片，掉了露出内筒、木肋和两层楼板。
+ * 磨坊（2026-10-27 重绘，用户：小磨坊太丑了）。
+ *
+ * 上一版丑在三处，都是量得出来的：
+ * 1. **帆太小**：帆直径 1.2、塔高 2.28 ⇒ 只有塔高的 52%，远看是"塔顶贴了四片纸"，
+ *    读不出这是风车。真风车的帆直径接近塔高。
+ * 2. **帆不像帆**：两根交叉细杆上挂四块 0.24×0.56 的**独立小方布**，块与块之间不连，
+ *    转起来像四片贴纸在飘，没有"一片帆"的形状。
+ * 3. **没有收分的层次**：塔身虽然是圆锥，但檐盘（r 0.64）比塔顶（r 0.46）宽一大截，
+ *    再扣一个 0.58 半径的尖帽 —— 从上往下看就是"一根管子上顶了个大斗笠"。
+ *
+ * 这一版：
+ * - 塔身收分更明显（下 0.66 → 上 0.42），**腰部加一圈挑出的木栈道**（风车的标志）；
+ * - 顶盖改成**阵营色瓦**并压低（0.66 高、0.5 半径），不再头重；
+ * - 帆重做：一个中心毂 + 两根交叉长梁（直径 **1.7 ≈ 塔高的 75%**）+
+ *   四片**顺着梁的长条布**（0.32×0.78，布和梁同向，看着才是一片帆），布按阵营上色。
  */
 export function millModel(accent: number): ArenaModel {
-  const PIVOT: Vec3 = [0, 1.5, 0.68];
+  const PIVOT: Vec3 = [0, 1.62, 0.76];
   const sail = (node: Node): Node => ({ ...node, spin: 1.7, pivot: PIVOT });
+  const ARM = 0.85; // 帆的半長：直径 1.7
+  /**
+   * 布心离轴心的距离，与布所在的 z。
+   *
+   * 上一版（用户 2026-10-28："帆错位了，应该紧紧贴着那个木棍，就在木棍后面"）：
+   * 布的位置是手算的散点，比如 `[0.2, 2.02]` —— 相对轴心 (0,1.62) 的方向是 **63°**，
+   * 而梁长轴是 **45°**。**布和梁不同向**，看上去就是帆飘在棍子旁边，没贴在棍子上。
+   *
+   * 这一版按梁的方向线摆：绕 z 转 θ 的竖直长条，长轴方向是 90°+θ，
+   * 所以布的中心也必须在同一条方向线上（±cos45 分解），布自身的 rot 与梁同值。
+   * - `ALONG`：布长 0.78 ⇒ 覆盖 0.08~0.86，正好铺满 0.85 的臂；
+   * - `CLOTH_Z`：帆布绷在木梁的**前面**（镜头在 +z 那侧）—— 梁厚 0.05、中心 0.76（占 0.735~0.785），
+   *   布厚 0.03 ⇒ 布的后表面落在 0.785，正好抵住梁的正面。
+   *   （2026-10-28 用户先要"贴在木棍后面"，看过之后改成**前面**：布在外、木梁当骨架露在布后，
+   *   才是风车该有的读法 —— 反过来会像帆被棍子压住。）
+   */
+  const ALONG = 0.47 * Math.SQRT1_2; // 0.332 = 0.47 × cos45
+  const CLOTH_Z = 0.8;
   return {
     static: [
-      plinth([1.12, 0.06, 1.12], ARENA_PAL.stoneDark),
-      cyl([0.64, 0.64, 0.05], ARENA_PAL.wood, [0, mid(1.28, 0.05), 0], 10),
-      box([0.28, 0.46, 0.06], ARENA_PAL.wood, [0, mid(0.06, 0.46), 0.56]),
-      cyl([0.64, 0.64, 0.06], ARENA_PAL.roofDark, [0, mid(1.56, 0.06), 0], 10),
-      { ...cone(0.58, 0.78, accent, [0, mid(1.62, 0.78), 0], 10), paint: { rough: 0.85 } },
+      plinth([1.16, 0.07, 1.16], ARENA_PAL.stoneDark),
+      // 腰部木栈道：挑出塔身一圈，风车的标志件
+      cyl([0.72, 0.72, 0.05], ARENA_PAL.wood, [0, mid(0.6, 0.05), 0], 12),
+      // 门 + 门楣 + 一扇小窗
+      box([0.3, 0.48, 0.07], ARENA_PAL.wood, [0, mid(0.07, 0.48), 0.62]),
+      box([0.42, 0.06, 0.08], ARENA_PAL.woodLight, [0, 0.6, 0.63]),
+      box([0.16, 0.18, 0.05], ARENA_PAL.stoneDark, [-0.4, 1.16, 0.52]),
+      // 檐盘（比塔顶宽一点就够，别再做成斗笠）
+      cyl([0.52, 0.52, 0.06], ARENA_PAL.roofDark, [0, mid(1.62, 0.06), 0], 12),
+      { ...cone(0.5, 0.66, roofOf(accent), [0, mid(1.68, 0.66), 0], 12), paint: { rough: 0.85 } },
+      sphere(0.07, accent, [0, 2.4, 0], 1),
+      // 帆毂：转轴根上那块铁盘
       {
-        part: { kind: 'cyl', rTop: 0.07, rBottom: 0.08, height: 0.22, seg: 8 },
+        part: { kind: 'cyl', rTop: 0.11, rBottom: 0.12, height: 0.16, seg: 8 },
         color: ARENA_PAL.iron,
-        at: [0, 1.5, 0.6],
+        at: [0, 1.62, 0.66],
         rot: [Math.PI / 2, 0, 0],
       },
-      sail({ ...box([0.06, 1.2, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68]), rot: [0, 0, Math.PI / 4] }),
-      sail({ ...box([0.06, 1.2, 0.04], ARENA_PAL.wood, [0, 1.5, 0.68]), rot: [0, 0, -Math.PI / 4] }),
-      sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [0.106, 1.846, 0.68]), rot: [0, 0, Math.PI / 4] }),
-      sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [-0.106, 1.154, 0.68]), rot: [0, 0, Math.PI / 4] }),
-      sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [-0.346, 1.606, 0.68]), rot: [0, 0, -Math.PI / 4] }),
-      sail({ ...box([0.24, 0.56, 0.03], 0xe6d8b4, [0.346, 1.394, 0.68]), rot: [0, 0, -Math.PI / 4] }),
+      // 两根交叉长梁 ⇒ 四个臂
+      sail({ ...box([0.075, ARM * 2, 0.05], ARENA_PAL.wood, [0, 1.62, 0.76]), rot: [0, 0, Math.PI / 4] }),
+      sail({ ...box([0.075, ARM * 2, 0.05], ARENA_PAL.wood, [0, 1.62, 0.76]), rot: [0, 0, -Math.PI / 4] }),
+      // 四片帆布：沿梁的方向铺在四个臂上，紧贴木梁的**正面**（布在外、梁当骨架）
+      sail({ ...box([0.32, 0.78, 0.03], clothOf(accent), [-ALONG, 1.62 + ALONG, CLOTH_Z]), rot: [0, 0, Math.PI / 4] }),
+      sail({ ...box([0.32, 0.78, 0.03], clothOf(accent), [ALONG, 1.62 - ALONG, CLOTH_Z]), rot: [0, 0, Math.PI / 4] }),
+      sail({ ...box([0.32, 0.78, 0.03], clothOf(accent), [ALONG, 1.62 + ALONG, CLOTH_Z]), rot: [0, 0, -Math.PI / 4] }),
+      sail({ ...box([0.32, 0.78, 0.03], clothOf(accent), [-ALONG, 1.62 - ALONG, CLOTH_Z]), rot: [0, 0, -Math.PI / 4] }),
       // 屋内：暗色内筒 + 四根木肋 + 两层楼板
-      cyl([0.4, 0.4, 1.5], ARENA_PAL.inside, [0, mid(0.06, 1.5), 0], 10),
-      cyl([0.035, 0.04, 1.5], ARENA_PAL.wood, [0.46, mid(0.06, 1.5), 0], 5),
-      cyl([0.035, 0.04, 1.5], ARENA_PAL.wood, [-0.46, mid(0.06, 1.5), 0], 5),
-      cyl([0.035, 0.04, 1.5], ARENA_PAL.wood, [0, mid(0.06, 1.5), 0.46], 5),
-      cyl([0.035, 0.04, 1.5], ARENA_PAL.wood, [0, mid(0.06, 1.5), -0.46], 5),
-      cyl([0.52, 0.52, 0.05], ARENA_PAL.woodLight, [0, mid(0.5, 0.05), 0], 10),
-      cyl([0.48, 0.48, 0.05], ARENA_PAL.woodLight, [0, mid(1.2, 0.05), 0], 10),
+      cyl([0.38, 0.38, 1.55], ARENA_PAL.inside, [0, mid(0.07, 1.55), 0], 10),
+      cyl([0.035, 0.04, 1.55], ARENA_PAL.wood, [0.44, mid(0.07, 1.55), 0], 5),
+      cyl([0.035, 0.04, 1.55], ARENA_PAL.wood, [-0.44, mid(0.07, 1.55), 0], 5),
+      cyl([0.035, 0.04, 1.55], ARENA_PAL.wood, [0, mid(0.07, 1.55), 0.44], 5),
+      cyl([0.52, 0.52, 0.05], ARENA_PAL.woodLight, [0, mid(0.62, 0.05), 0], 10),
+      cyl([0.44, 0.44, 0.05], ARENA_PAL.woodLight, [0, mid(1.24, 0.05), 0], 10),
     ],
-    shell: ringShell(0.62, 0.46, 0.06, 1.5, ARENA_PAL.wall, 10, 4, 67),
+    shell: ringShell(0.66, 0.42, 0.07, 1.55, ARENA_PAL.wall, 10, 4, 67),
   };
 }
 
@@ -426,17 +514,19 @@ export function millModel(accent: number): ArenaModel {
  * 民居：小一号的方屋 + 双坡顶 + 烟囱 + 一扇窗。
  * 剪影：**比兵营矮、比兵营方**，屋顶多一根烟囱。不出兵也不产金，给兵营当后勤。
  */
-export function houseModel(): ArenaModel {
+export function houseModel(accent: number): ArenaModel {
   return {
     static: [
       plinth([1.2, 0.06, 1.02], ARENA_PAL.stoneDark),
       box([0.28, 0.42, 0.06], ARENA_PAL.wood, [0, mid(0.06, 0.42), 0.46]),
       box([0.36, 0.05, 0.07], ARENA_PAL.woodLight, [0, 0.5, 0.46]),
       box([0.22, 0.2, 0.05], ARENA_PAL.stoneDark, [-0.32, 0.38, 0.45]),
-      prism([1.3, 0.44, 1.04], ARENA_PAL.roof, [0, 0.72, 0]),
+      prism([1.3, 0.44, 1.04], roofOf(accent), [0, 0.72, 0]),
+      box([1.32, 0.06, 0.11], ridgeOf(accent), [0, mid(1.14, 0.06), 0]),
       box([1.32, 0.05, 0.09], ARENA_PAL.roofDark, [0, mid(1.14, 0.05), 0]),
-      // 烟囱：和兵营区分开的那一根
+      // 烟囱：和兵营区分开的那一根；烟囱帽用阵营色
       box([0.16, 0.55, 0.16], ARENA_PAL.stone, [-0.38, mid(0.78, 0.55), -0.28]),
+      box([0.2, 0.05, 0.2], ridgeOf(accent), [-0.38, mid(1.33, 0.05), -0.28]),
       // 屋内：内衬 + 两根柱 + 一根横梁
       box([0.94, 0.66, 0.68], ARENA_PAL.inside, [0, mid(0.06, 0.66), 0]),
       cyl([0.03, 0.035, 0.66], ARENA_PAL.wood, [-0.3, mid(0.06, 0.66), 0.24], 5),
@@ -464,7 +554,7 @@ export type ArenaModelName = keyof typeof ARENA_MODELS;
  *
  * 上一版把旗挂在 z 为负的那面 —— 那是背对镜头的墙，所以旗子总像"埋进楼里"。
  * 这一版全部放在**镜头这一侧**（z 为正）或屋顶/垛口上：
- * - 核心：前墙、檐口下面（竖旗从杆上垂下，正是他要的"挂在墙上、从上往下"）
+ * - 大本营：前墙、檐口下面（竖旗从杆上垂下，正是他要的"挂在墙上、从上往下"）
  * - 兵营：屋脊两端的任意一端（他点名"放在顶上"）
  * - 箭塔：右前角垛口顶上，旗面在锥顶外侧，不穿屋顶
  * - 炮塔：台座右前角的地面上（炮管转一圈也扫不到这么远）

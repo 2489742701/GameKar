@@ -33,6 +33,8 @@ export class GameLoop {
   private accumulator = 0;
   private time = 0;
   private fps = 60;
+  /** 暂停时逻辑不推进，但 `onFrame` 照常 —— 菜单背后的场景还要渲染 */
+  private paused = false;
 
   constructor(options: GameLoopOptions) {
     this.opts = options;
@@ -42,6 +44,30 @@ export class GameLoop {
 
   get running(): boolean {
     return this.handle !== null;
+  }
+
+  /** 现在是不是暂停中（开始菜单打开时是 true）。 */
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * 暂停逻辑（开始菜单用）。
+   *
+   * 暂停的是 `onSimStep`，**不是渲染**：菜单背后那幅战场要一直在（浮尘会飘、相机手动手感还在），
+   * 只是"时间不走"—— 否则玩家在读说明的 30 秒里，对面 AI 已经推平了他的大本营。
+   */
+  pause(): void {
+    this.paused = true;
+    this.accumulator = 0;
+  }
+
+  /** 恢复：丢掉暂停期间的积压，别一开打就补算几十步。 */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.accumulator = 0;
+    this.lastMs = performance.now();
   }
 
   start(): void {
@@ -75,11 +101,16 @@ export class GameLoop {
 
     this.accumulator += clamped;
     let steps = 0;
-    while (this.accumulator >= this.fixedDt && steps < this.maxSubSteps) {
-      this.accumulator -= this.fixedDt;
-      this.time += this.fixedDt;
-      steps++;
-      this.opts.onSimStep?.(this.fixedDt);
+    // 暂停时只渲染不推进：`time` 也不涨，回放/确定性才不会被"读说明的 30 秒"污染
+    if (!this.paused) {
+      while (this.accumulator >= this.fixedDt && steps < this.maxSubSteps) {
+        this.accumulator -= this.fixedDt;
+        this.time += this.fixedDt;
+        steps++;
+        this.opts.onSimStep?.(this.fixedDt);
+      }
+    } else {
+      this.accumulator = 0;
     }
     // 补算到顶说明机器跟不上，丢弃积压而不是越积越多
     if (steps === this.maxSubSteps) this.accumulator = 0;
