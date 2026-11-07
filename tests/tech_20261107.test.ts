@@ -71,8 +71,8 @@ describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () =
     expect(w.hasBuilt('blue', 'barracks')).toBe(true);
     const seen = seenAfterRerolls(w);
     expect([...seen].some((id) => ['archers', 'knights', 'spearmen'].includes(id))).toBe(true);
-    for (const id of TECH.flyerCards) expect(seen.has(id)).toBe(false);
-    expect(w.techHint('blue')).toBe('需要齿轮工厂解锁空军');
+    for (const id of TECH.factoryCards) expect(seen.has(id)).toBe(false);
+    expect(w.techHint('blue')).toBe('需要齿轮工厂解锁空军与攻城车');
     // 拆掉兵营 ⇒ 立刻重新上锁
     w.buildings.delete(b.id);
     expect(w.hasBuilt('blue', 'barracks')).toBe(false);
@@ -85,12 +85,12 @@ describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () =
     built(w, 'gearFactory', 10, 6);
     expect(w.hasBuilt('blue', 'gearFactory')).toBe(true);
     // 判据锁：三架都解锁（不赌抽卡运气）
-    for (const id of TECH.flyerCards) {
+    for (const id of TECH.factoryCards) {
       expect(w.techAllows('blue', cardById(id)), `${id} 前置应满足`).toBe(true);
     }
     // 统计锁：刷新多轮至少出现过一架（保底会占手牌格，别断言每张都出现）
     const seen = seenAfterRerolls(w, 30);
-    expect(TECH.flyerCards.some((id) => seen.has(id))).toBe(true);
+    expect(TECH.factoryCards.some((id) => seen.has(id))).toBe(true);
     expect(w.techHint('blue')).toBeNull();
   });
 

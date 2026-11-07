@@ -583,10 +583,14 @@ export const TECH = {
   militia: 'militia',
   /** 兵营解锁全部地面军队（除民兵） */
   barracks: 'barracks',
-  /** 齿轮工厂解锁三架飞行器 */
+  /** 齿轮工厂解锁三架飞行器 + 两台攻城车 */
   gearFactory: 'gearFactory',
-  /** 需要齿轮工厂的卡 */
-  flyerCards: ['balloon', 'airscrew', 'bomber'] as string[],
+  /**
+   * 需要齿轮工厂的卡（2026-11-07 用户："移动火炮和移动弓弩，也是需要建造工厂
+   * 才能后置使用"）。原名 `flyerCards` 只装三架飞行器，名字已经不覆盖了 ——
+   * 改叫 `factoryCards`，判据只留这一张表，别在别处另写一份。
+   */
+  factoryCards: ['balloon', 'airscrew', 'bomber', 'mobileCannon', 'ballista'] as string[],
 };
 
 export const BUILDING_SPECS = {

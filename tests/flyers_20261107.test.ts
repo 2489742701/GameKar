@@ -2,10 +2,17 @@
  * 2026-11-07 设计文档 A–E 节的锁：发牌裁量 / 三架独立飞行器 / 飞行越障 /
  * 扑翼轰炸机的「直冲 → 投弹 → 出界消失 / 被击毁」四条路径。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld, type ArenaUnit } from '@arena/ArenaWorld';
-import { CARDS, FIELD, cardById } from '@arena/config';
+import { CARDS, FIELD, TECH, cardById } from '@arena/config';
+import { FLYER_STYLE, flyerYaw } from '@arena/visuals/flyers';
 import { unitDef } from '@game/data/units';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const readSrc = (p: string) => readFileSync(join(ROOT, p), 'utf8');
 
 function run(w: ArenaWorld, seconds: number, each?: () => void): void {
   const steps = Math.round(seconds / 0.05);
@@ -155,5 +162,81 @@ describe('飞行越障与扑翼轰炸机（P-056 C/E 节）', () => {
     run(w, 0.1);
     expect(w.units.some((u) => u.id === b.id)).toBe(false);
     expect(w.leftField.has(b.id)).toBe(false);
+  });
+});
+
+/**
+ * 2026-11-07 中午追加（用户："滑翔机甚至头没有对前，是歪过来滑的；
+ * 所有飞行单位飞行高度太小、大小也太小，尤其热气球可以更大一点；
+ * 移动火炮和移动弓弩也需要建造工厂才能使用"）。
+ */
+describe('机头朝向（局部 +Z → 逻辑 aim）', () => {
+  /** 局部 +Z (0,0,1) 绕 Y 转 yaw 后在 XZ 平面上的方向。 */
+  const forward = (yaw: number): [number, number] => [Math.sin(yaw), Math.cos(yaw)];
+
+  it('四个方向都对得上：+X / -X / +Z / -Z 与任意角', () => {
+    for (const aim of [0, Math.PI, Math.PI / 2, -Math.PI / 2, 0.7]) {
+      const [fx, fz] = forward(flyerYaw(aim));
+      expect(fx, `aim=${aim} 的 x`).toBeCloseTo(Math.cos(aim), 6);
+      expect(fz, `aim=${aim} 的 z`).toBeCloseTo(Math.sin(aim), 6);
+    }
+  });
+
+  it('反证：抄攻城车那套 -aim 会整体歪 90°（就是原来那个 bug）', () => {
+    const [sx, sz] = forward(-0); // 攻城车公式在 aim=0 时的朝向
+    expect(sx).toBeCloseTo(0, 6);
+    expect(sz).toBeCloseTo(1, 6); // 机身朝 +Z，兵却往 +X 走
+    const [fx, fz] = forward(flyerYaw(0));
+    expect(fx).toBeCloseTo(1, 6);
+    expect(fz).toBeCloseTo(0, 6);
+  });
+
+  it('装配锁：flying 分支真的设了 rotation.y，开局那一下也给对', () => {
+    const app = readSrc('src/arena/ArenaApp.ts');
+    expect(app).toContain('entry.obj.rotation.y = flyerYaw(aim)');
+    expect(app).toContain('g.rotation.y = flyerYaw(');
+    expect(app).not.toContain('FLY_HEIGHT'); // 写死的旧高度不该回来
+  });
+});
+
+describe('飞行高度与体型', () => {
+  it('高度明显高于原来的 1.25 格，又没高到脱离战场', () => {
+    expect(FLYER_STYLE.height).toBeGreaterThan(2);
+    expect(FLYER_STYLE.height).toBeLessThan(4);
+  });
+
+  it('三架都变大，热气球最大（用户点名）', () => {
+    const s = FLYER_STYLE.scale;
+    expect(s.airscrew).toBeGreaterThan(0.8);
+    expect(s.bomber).toBeGreaterThan(0.34);
+    expect(s.balloon).toBeGreaterThan(1.2);
+    expect(s.balloon).toBeGreaterThan(s.airscrew);
+    expect(s.balloon).toBeGreaterThan(s.bomber);
+  });
+
+  it('影子跟着体型走，热气球最大', () => {
+    expect(FLYER_STYLE.shadow.balloon).toBeGreaterThan(1.2);
+    expect(FLYER_STYLE.shadow.balloon).toBeGreaterThanOrEqual(FLYER_STYLE.shadow.airscrew);
+  });
+});
+
+describe('工厂前置：攻城车也要齿轮工厂', () => {
+  it('factoryCards 收齐三架飞行器 + 两台攻城车', () => {
+    expect(TECH.factoryCards).toEqual([
+      'balloon', 'airscrew', 'bomber', 'mobileCannon', 'ballista',
+    ]);
+    for (const id of TECH.factoryCards) expect(cardById(id), `${id} 得在卡池里`).toBeTruthy();
+  });
+
+  it('没工厂：两张攻城车都被拦；建好工厂才放行', () => {
+    const w = new ArenaWorld({ seed: 209 });
+    for (const id of ['mobileCannon', 'ballista']) {
+      expect(w.techAllows('blue', cardById(id)), `${id} 不该无前置可用`).toBe(false);
+    }
+    const b = w['place']('blue', 'gearFactory', 10, 6, 700);
+    b.build = 1;
+    for (const id of ['mobileCannon', 'ballista']) {
+      expect(w.techAllows('blue', cardById(id)), `${id} 建厂后该解锁`).toBe(true);
+    }
   });
 });

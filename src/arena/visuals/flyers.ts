@@ -13,6 +13,30 @@
  */
 import * as THREE from 'three';
 
+/**
+ * 飞行单位的**高度与体型**（2026-11-07 用户："所有飞行单位的飞行高度太小了，
+ * 它们的大小也太小了，可以稍微大一点。尤其是热气球可以更大一点"）。
+ *
+ * 原来 `FLY_HEIGHT=1.25` 格 —— 比民居（约 3 格）还矮，俯视下看着像贴地滑。
+ * 现在 2.6 格，明显浮在屋顶线上方；体型倍率也集中在这张表，
+ * `ArenaApp` 只读它，不在三处各写一个数。热气球给最大倍率。
+ */
+export const FLYER_STYLE = {
+  height: 2.6,
+  scale: { balloon: 1.35, airscrew: 1.05, bomber: 0.45 },
+  shadow: { balloon: 1.5, airscrew: 1.2, bomber: 1.45 },
+} as const;
+
+/**
+ * 机头朝向：模型的前方是**局部 +Z**（扑翼机的前桨在 z=+3.95、燕尾在 z=-3.8），
+ * 而逻辑层 `u.aim = atan2(dz, dx)` 是 XZ 平面角（0 = 朝 +X）。
+ * `R_y(θ)` 把 +Z 转到 `(sin θ, cos θ)`，要等于 `(cos aim, sin aim)` ⇒ `θ = π/2 − aim`。
+ *
+ * ⚠️ 别抄攻城车那套 `rotation.y = -aim`：车头是沿 **+X** 建的（炮口 x=+0.72），
+ * 两个模型的前向轴差 90°，混用就会"歪过来滑"（2026-11-07 用户抓到的 bug）。
+ */
+export const flyerYaw = (aim: number): number => Math.PI / 2 - aim;
+
 export interface FlyerModel {
   group: THREE.Group;
   /** 每帧转动的转子（螺旋帆 / 前螺旋桨） */
@@ -101,7 +125,7 @@ export function makeBalloon(accent: number): FlyerModel {
   }
   const flag = tri(new THREE.Vector3(0, 1.92, 0), new THREE.Vector3(0.34, 1.8, 0), new THREE.Vector3(0, 1.7, 0), d);
   g.add(flag);
-  g.scale.setScalar(0.85);
+  g.scale.setScalar(FLYER_STYLE.scale.balloon);
   return { group: g, mats: collectMats(g) };
 }
 
@@ -133,7 +157,7 @@ export function makeAirscrew(accent: number): FlyerModel {
       new THREE.Vector3(0.9 * Math.cos(th), y, 0.9 * Math.sin(th)), 0.018, d, 5));
   }
   g.add(rotor);
-  g.scale.setScalar(0.8);
+  g.scale.setScalar(FLYER_STYLE.scale.airscrew);
   return { group: g, rotor, rotorAxis: 'y', mats: collectMats(g) };
 }
 
@@ -190,6 +214,6 @@ export function makeBomber(accent: number): FlyerModel {
     rotor.add(blade);
   }
   g.add(rotor);
-  g.scale.setScalar(0.34); // 原翼展 9 格 → 约 3 格
+  g.scale.setScalar(FLYER_STYLE.scale.bomber); // 原翼展 9 格 → 约 4 格
   return { group: g, rotor, rotorAxis: 'z', wings, mats: collectMats(g) };
 }

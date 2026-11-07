@@ -569,7 +569,8 @@ export class ArenaWorld {
       return cache.get(key)!;
     }
     if (card.id === TECH.militia) return true;
-    if (TECH.flyerCards.includes(card.id)) return this.hasBuilt(side, 'gearFactory');
+    // 飞行器 + 攻城车都要齿轮工厂（同一张表，见 config.TECH.factoryCards）
+    if (TECH.factoryCards.includes(card.id)) return this.hasBuilt(side, 'gearFactory');
     return this.hasBuilt(side, 'barracks');
   }
 
@@ -577,7 +578,7 @@ export class ArenaWorld {
   techHint(side: Side): string | null {
     if (!this.buildingRoom(side)) return '场地已满 · 只发军队';
     if (!this.hasBuilt(side, 'barracks')) return '需要军营解锁军队';
-    if (!this.hasBuilt(side, 'gearFactory')) return '需要齿轮工厂解锁空军';
+    if (!this.hasBuilt(side, 'gearFactory')) return '需要齿轮工厂解锁空军与攻城车';
     return null;
   }
 

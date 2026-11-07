@@ -36,7 +36,7 @@ import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
 import { Confetti } from './visuals/confetti';
 import { makeShadow } from './visuals/shadow';
-import { makeAirscrew, makeBalloon, makeBomber } from './visuals/flyers';
+import { FLYER_STYLE, flyerYaw, makeAirscrew, makeBalloon, makeBomber } from './visuals/flyers';
 import { buildingSpinKey, spinOf } from './visuals/spin';
 import { WallShell } from './shell';
 import { makeBanner, type Banner } from './props';
@@ -132,8 +132,7 @@ const SINK_SECONDS = 3.4;
 const SINK_DUST_SECONDS = 2.6;
 /** 受击泛白/闪白的目标色（往这个白 lerp，别直接设——原色才恢复得回来） */
 const FLASH_WHITE = new THREE.Color(1, 1, 1);
-/** 飞行器离地高度（格）与尸体/残骸停留时间（秒） */
-const FLY_HEIGHT = 1.25;
+/** 飞行器离地高度搬到 visuals/flyers.ts 的 FLYER_STYLE，与体型倍率同表 */
 const CORPSE_SECONDS = 2.6;
 const FLYER_IDS = new Set(['balloon', 'airscrew', 'bomber']);
 /** 触屏拖放：影子落在手指前方（屏幕上方）这么多 CSS 像素，免得手指盖住预览 */
@@ -1247,7 +1246,14 @@ export class ArenaApp {
       if (entry.flying) {
         // 悬浮 + 轻微起伏/侧晃；转子转、扑翼机机翼颤动；影子仍留在地上
         const t = this.lastFrame.time;
-        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + FLY_HEIGHT + Math.sin(t * 1.5 + u.id) * 0.1, u.z);
+        entry.obj.position.set(u.x, this.groundY(u.x, u.z) + FLYER_STYLE.height + Math.sin(t * 1.5 + u.id) * 0.1, u.z);
+        /**
+         * 机头对准逻辑层的 aim（2026-11-07 用户："滑翔机甚至头没有对前，是歪过来滑的"）。
+         * 旧版这一支**只设了 rotation.z（侧晃），从来没设 rotation.y** ⇒ 机体恒朝局部 +Z，
+         * 而兵是往 +X 走的，看起来就是横着漂。公式见 flyers.ts 的 flyerYaw()。
+         */
+        const aim = u.aim ?? (u.side === 'blue' ? 0 : Math.PI);
+        entry.obj.rotation.y = flyerYaw(aim);
         entry.obj.rotation.z = Math.sin(t * 1.2 + u.id) * 0.02;
         if (entry.rotor) {
           if (entry.rotorAxis === 'z') entry.rotor.rotation.z += dt * 5.5;
@@ -1393,9 +1399,13 @@ export class ArenaApp {
       : u.defId === 'airscrew' ? makeAirscrew(accent)
         : makeBomber(accent);
     const g = model.group;
-    g.position.set(u.x, this.groundY(u.x, u.z) + FLY_HEIGHT, u.z);
+    // 开局就给对朝向，别等第一帧 syncUnits 才转过来（出兵那一瞬间会闪一下歪的）
+    g.rotation.y = flyerYaw(u.aim ?? (u.side === 'blue' ? 0 : Math.PI));
+    g.position.set(u.x, this.groundY(u.x, u.z) + FLYER_STYLE.height, u.z);
     this.scene.add(g);
-    const shadow = makeShadow(1.0, 0.75);
+    // 影子跟着体型放大：热气球最大，别还是原来那个小椭圆
+    const shadowSize = FLYER_STYLE.shadow[u.defId as keyof typeof FLYER_STYLE.shadow] ?? 1.2;
+    const shadow = makeShadow(shadowSize, shadowSize * 0.75);
     shadow.position.set(u.x, this.groundY(u.x, u.z) + 0.02, u.z);
     this.scene.add(shadow);
     return {
