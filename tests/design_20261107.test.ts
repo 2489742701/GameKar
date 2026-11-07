@@ -68,10 +68,14 @@ describe('机位与竖屏（P-054 D 节）', () => {
    * 2026-11-07 傍晚用户："视野不要搞得那么复杂，点一下就切换的，切换到我方视角也不对"
    * ⇒ 1v1 只剩「斜视 / 正对」两档，「我方」删掉。这条锁跟着改成"两档且没有'我方'"。
    */
-  it('两档机位（斜视 / 正对），「我方」那档已按用户口径删掉', () => {
-    expect(VIEW_PRESETS).toHaveLength(2);
-    expect(VIEW_PRESETS.map((v) => v.name)).toEqual(['斜视', '正对']);
+  it('默认仍是斜视 / 正对（「我方」按用户口径删掉），后面挂他自选的四档', () => {
+    expect(VIEW_PRESETS).toHaveLength(6);
+    expect(VIEW_PRESETS.slice(0, 2).map((v) => v.name)).toEqual(['斜视', '正对']);
     expect(VIEW_PRESETS.some((v) => v.name === '我方')).toBe(false);
+    for (let i = 1; i <= 4; i++) {
+      const shot = VIEW_PRESETS.find((v) => v.name === `自选 ${i}`)!;
+      expect(shot.center, `自选 ${i} 必须带绝对中心格`).toBeDefined();
+    }
   });
 
   it('竖屏：导演把缩放拉近、中心往蓝方挪（同一 fitZoom 对比横屏）', () => {

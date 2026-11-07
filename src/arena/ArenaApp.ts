@@ -16,6 +16,10 @@ import { hashString, Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
 import { Renderer, loadQuality, pickQuality, saveQuality, type QualityPreset } from '@engine/render/Renderer';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { TILT_SHIFT_SHADER, loadTilt, saveTilt } from './visuals/tiltShift';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
@@ -266,6 +270,10 @@ export class ArenaApp {
    * 手机上反而自动降档 —— 现在三档可选、存在 localStorage，调试面板里能现场切。
    */
   private qualityPreset: QualityPreset = loadQuality();
+  /** 微缩景深强度 0~1，默认关（0）：关的时候完全跳过后期 composer */
+  private tiltAmount = loadTilt();
+  private composer?: EffectComposer;
+  private tiltPass?: ShaderPass;
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
   private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
@@ -369,6 +377,16 @@ export class ArenaApp {
     const r = this.map.size.rows;
     this.rig.setBounds({ field: { cols: c, rows: r } });
     this.lighting = new LightingRig(this.scene, { shadowMapSize: 1024 });
+    /**
+     * 微缩景深后期（2026-11-07 深夜）。RenderPass 画原画面，ShaderPass 做
+     * "中间清晰 / 上下模糊 + 提饱和" 的移轴效果。amount=0 时 draw() 直接走
+     * renderer.render，composer 一帧都不跑 —— 不开这个功能零开销。
+     */
+    this.composer = new EffectComposer(this.renderer.instance);
+    this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
+    this.tiltPass = new ShaderPass(TILT_SHIFT_SHADER);
+    this.tiltPass.uniforms['amount']!.value = this.tiltAmount;
+    this.composer.addPass(this.tiltPass);
 
     // 场地底盘：不然 16×26 之外全是黑洞，看着像地图没加载完
     const apron = new THREE.Mesh(
@@ -495,12 +513,14 @@ export class ArenaApp {
     this.viewport.observe((v) => {
       const quality = pickQuality(v.cssWidth * v.cssHeight, v.dpr, this.qualityPreset);
       this.renderer.resize(v.cssWidth, v.cssHeight, v.dpr, quality);
+      this.syncPostFx(v.cssWidth, v.cssHeight);
       this.rig.resize(v.cssWidth, v.cssHeight);
       this.fitCamera(v.cssWidth, v.cssHeight);
       this.lighting.follow(this.rig);
     });
     const s = this.viewport.snapshot;
     this.renderer.resize(s.cssWidth, s.cssHeight, s.dpr, pickQuality(s.cssWidth * s.cssHeight, s.dpr, this.qualityPreset));
+    this.syncPostFx(s.cssWidth, s.cssHeight);
     this.rig.resize(s.cssWidth, s.cssHeight);
     this.fitCamera(s.cssWidth, s.cssHeight);
     this.lighting.follow(this.rig);
@@ -964,8 +984,14 @@ export class ArenaApp {
     this.stepCorpses(info.delta);
     this.fx.step(info.delta);
     this.dustLayer.update(info.delta);
-    this.director.update(info.delta, this.rig, this.fitZoom, this.fieldCenter());
-    this.renderer.render(this.scene, this.rig.camera);
+    // 用户自选机位带绝对中心格（调试面板读到的 col/row）；普通档仍用场地中心 + bias
+    const shot = this.director.current;
+    const center = shot.center
+      ? cellToWorld(pos(shot.center.col, shot.center.row))
+      : this.fieldCenter();
+    this.director.update(info.delta, this.rig, this.fitZoom, center);
+    if (this.tiltAmount > 0.001 && this.composer) this.composer.render(info.delta);
+    else this.renderer.render(this.scene, this.rig.camera);
   }
 
   /**
@@ -2025,6 +2051,26 @@ export class ArenaApp {
     return { x: col, z: this.world.field.rows / 2 };
   }
 
+  /** 后期缓冲跟着视口/DPR 走，shader 的 texel 才知道一个像素有多大。 */
+  private syncPostFx(cssW: number, cssH: number): void {
+    if (!this.composer || !this.tiltPass) return;
+    const pr = this.renderer.instance.getPixelRatio();
+    this.composer.setPixelRatio(pr);
+    this.composer.setSize(cssW, cssH);
+    (this.tiltPass.uniforms['resolution']!.value as THREE.Vector2).set(cssW * pr, cssH * pr);
+  }
+
+  /** 调试面板现场调微缩景深：0 = 关（直出，无后期开销），1 = 最糊。 */
+  setTilt(amount: number): void {
+    this.tiltAmount = Math.min(1, Math.max(0, amount));
+    saveTilt(this.tiltAmount);
+    if (this.tiltPass) this.tiltPass.uniforms['amount']!.value = this.tiltAmount;
+  }
+
+  get tilt(): number {
+    return this.tiltAmount;
+  }
+
   /** 调试面板现场切画质：立刻重设后备缓冲与阴影，并存进 localStorage。 */
   setQualityPreset(preset: QualityPreset): void {
     this.qualityPreset = preset;
@@ -2046,6 +2092,7 @@ export class ArenaApp {
       drawCalls: this.renderer.drawCalls,
       triangles: this.renderer.triangles,
       quality: this.qualityPreset,
+      tilt: this.tiltAmount,
       dpr: this.viewport.snapshot.dpr,
     };
   }

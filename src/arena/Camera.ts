@@ -19,15 +19,20 @@ export interface ViewPreset {
   pitch: number;
   /** 相机中心往蓝方（自家）挪几格：负值 = 从自家望向敌方 */
   centerBias?: number;
+  /**
+   * **绝对镜头中心**（调试面板里那两个 `center col / row`）。
+   * 用户在 PC 上调机位时给的是格子坐标，不是"相对中场的偏移" ——
+   * 有这个字段就直接用它，没有才回落到 `centerBias` + 场地中心。
+   */
+  center?: { col: number; row: number };
 }
 
 /**
  * 静止机位。
  *
- * **2026-11-07 傍晚砍到两档**：用户原话"你的视野不要搞得那么复杂，点一下就切换的，
- * 切换到我方视角也不对" —— 「我方」那一档（低俯角 + 拉近 + 偏蓝方）直接删掉，
- * 剩斜视 / 正对两个"换个角度整片战场"的档，按钮点一下循环。
- * 要精调机位走 F2 调试面板，调好把机位 ID 发回来，再定成新档。
+ * 「我方」那档按用户要求删了（"切换到我方视角也不对"），只剩斜视 / 正对两个默认档；
+ * 深夜他又在 PC 调试面板里自己调了四档、把机位 ID 发回来，原样加在后面 ——
+ * 复杂不复杂由他定，按钮仍是点一下循环一档。
  *
  * 自动巡视仍是默认关，镜头不会自己跑（2026-10-27 用户拍板）。
  */
@@ -35,6 +40,19 @@ export const VIEW_PRESETS: ViewPreset[] = [
   // 默认是**斜视**（用户 2026-10-27：更偏向从自己这边斜着看整片战场）
   { name: '斜视', zoomFactor: 1, yaw: 20, pitch: 44 },
   { name: '正对', zoomFactor: 0.96, yaw: 0, pitch: 46 },
+  /**
+   * 用户自己在 PC 调试面板里调好、复制回来的四档（2026-11-07 深夜）。
+   * 名字用「自选 N」，参数与机位 ID 原样记在注释里 —— 以后报 ID 就能对上是哪一档。
+   * `center` 是他在面板上读到的镜头中心格，不是相对偏移，别改回 centerBias。
+   */
+  // slot1 cam-11hqr6  yaw 306 · pitch 25 · zoom 1.00 · center 23.0, 5.0
+  { name: '自选 1', zoomFactor: 1.0, yaw: 306, pitch: 25, center: { col: 23, row: 5 } },
+  // slot2 cam-10ae8n  yaw 59 · pitch 33 · zoom 0.73 · center 6.0, 9.0
+  { name: '自选 2', zoomFactor: 0.73, yaw: 59, pitch: 33, center: { col: 6, row: 9 } },
+  // slot3 cam-109tzg  yaw 56 · pitch 20 · zoom 0.62 · center 0.0, 0.0
+  { name: '自选 3', zoomFactor: 0.62, yaw: 56, pitch: 20, center: { col: 0, row: 0 } },
+  // slot4 cam-11ct8j  yaw 278 · pitch 20 · zoom 0.53 · center 44.0, 1.0
+  { name: '自选 4', zoomFactor: 0.53, yaw: 278, pitch: 20, center: { col: 44, row: 1 } },
 ];
 
 /**

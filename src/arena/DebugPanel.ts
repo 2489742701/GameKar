@@ -55,6 +55,7 @@ export class DebugPanel {
   private readonly zoomInput: HTMLInputElement;
   private readonly colInput: HTMLInputElement;
   private readonly rowInput: HTMLInputElement;
+  private readonly tiltInput: HTMLInputElement;
   private readonly idText = make('code', 'dbg__id');
   private readonly log = make('textarea', 'dbg__log');
   private readonly slotsBox = make('div', 'dbg__slots');
@@ -86,6 +87,8 @@ export class DebugPanel {
     this.zoomInput = this.slider('缩放 zoom', 0.5, 1.4, 0.01, DEFAULT_SHOT.zoom);
     this.colInput = this.slider('中心 col', 0, fs.cols, 0.25, fs.cols / 2);
     this.rowInput = this.slider('中心 row', 0, fs.rows, 0.25, fs.rows / 2);
+    /** 微缩景深（移轴）：0 = 关，1 = 最糊。中间清晰带 + 上下模糊 + 提饱和 = 玩具模型感 */
+    this.tiltInput = this.slider('微缩景深', 0, 1, 0.05, this.app.tilt, (v) => this.app.setTilt(v));
 
     const record = make('button', 'dbg__btn', '存这一档');
     record.addEventListener('click', () => this.recordSlot());
@@ -162,6 +165,7 @@ export class DebugPanel {
       this.zoomInput.parentElement!,
       this.colInput.parentElement!,
       this.rowInput.parentElement!,
+      this.tiltInput.parentElement!,
       make('div', 'dbg__row', [this.idText, record]),
       make('div', 'dbg__label', '我调的机位（发我这个）'),
       this.slotsBox,
@@ -187,7 +191,14 @@ export class DebugPanel {
      */
   }
 
-  private slider(label: string, min: number, max: number, step: number, value: number): HTMLInputElement {
+  private slider(
+    label: string,
+    min: number,
+    max: number,
+    step: number,
+    value: number,
+    onInput?: (value: number) => void,
+  ): HTMLInputElement {
     const input = make('input', 'dbg__range');
     input.type = 'range';
     input.min = String(min);
@@ -196,6 +207,11 @@ export class DebugPanel {
     input.value = String(value);
     const readout = make('span', 'dbg__v num');
     input.addEventListener('input', () => {
+      if (onInput) {
+        onInput(Number(input.value));
+        this.paintReadouts();
+        return;
+      }
       this.app.director.userTouched();
       this.apply();
     });
@@ -225,11 +241,15 @@ export class DebugPanel {
   }
 
   private paintReadouts(): void {
-    this.labelOf.get(this.yawInput)!.textContent = this.yawInput.value;
-    this.labelOf.get(this.pitchInput)!.textContent = this.pitchInput.value;
-    this.labelOf.get(this.zoomInput)!.textContent = Number(this.zoomInput.value).toFixed(2);
-    this.labelOf.get(this.colInput)!.textContent = Number(this.colInput.value).toFixed(1);
-    this.labelOf.get(this.rowInput)!.textContent = Number(this.rowInput.value).toFixed(1);
+    for (const [input, readout] of this.labelOf) {
+      const v = Number(input.value);
+      readout.textContent =
+        input === this.zoomInput || input === this.tiltInput
+          ? v.toFixed(2)
+          : input === this.colInput || input === this.rowInput
+            ? v.toFixed(1)
+            : input.value;
+    }
   }
 
   private syncSliders(shot: CameraShot): void {
@@ -399,11 +419,16 @@ export class DebugPanel {
     const row = String(Math.round(c.row * 4) / 4);
     if (this.colInput.value !== col) this.colInput.value = col;
     if (this.rowInput.value !== row) this.rowInput.value = row;
+    if (this.tiltInput.value !== String(this.app.tilt)) this.tiltInput.value = String(this.app.tilt);
     this.paintReadouts();
     const t = this.app.telemetry;
+    // 后期接管后 renderer.info 只剩最后一个全屏 quad，别把 1 drawCall 当真实读数报出来
+    const sceneInfo =
+      t.tilt > 0
+        ? '场景计数 —（后期接管）'
+        : `${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面`;
     this.perfText.textContent =
-      `${t.fps} fps · ${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面 · ` +
-      `dpr ${t.dpr} · 画质 ${t.quality}`;
+      `${t.fps} fps · ${sceneInfo} · dpr ${t.dpr} · 画质 ${t.quality} · 微缩 ${t.tilt.toFixed(2)}`;
     for (const [key, btn] of this.qualityBtns) {
       btn.dataset['on'] = String(key === t.quality);
     }
