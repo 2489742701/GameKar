@@ -19,7 +19,8 @@ import { Renderer, loadQuality, pickQuality, saveQuality, type QualityPreset } f
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { TILT_SHIFT_SHADER, loadTilt, saveTilt } from './visuals/tiltShift';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { TILT_SHIFT_SHADER, loadDim, loadTilt, saveDim, saveTilt } from './visuals/tiltShift';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
@@ -288,6 +289,12 @@ export class ArenaApp {
   private qualityPreset: QualityPreset = loadQuality();
   /** 微缩景深强度 0~1，默认关（0）：关的时候完全跳过后期 composer */
   private tiltAmount = loadTilt();
+  /**
+   * 昼夜氛围压暗 0~1，默认 0（白天）。**和景深完全解耦**：
+   * 用户 2026-11-08 明确"景深不该让画面变暗，但变暗要留着"，后续
+   * 「10 分钟一大局从早打到晚」的时间轴只要调 `setDim(t)` 即可。
+   */
+  private dimAmount = loadDim();
   private composer?: EffectComposer;
   private tiltPass?: ShaderPass;
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
@@ -395,13 +402,25 @@ export class ArenaApp {
     this.lighting = new LightingRig(this.scene, { shadowMapSize: 1024 });
     /**
      * 微缩景深后期（2026-11-07 深夜）。RenderPass 画原画面，ShaderPass 做
-     * "中间清晰 / 上下模糊 + 提饱和" 的移轴效果。amount=0 时 draw() 直接走
-     * renderer.render，composer 一帧都不跑 —— 不开这个功能零开销。
+     * "中间清晰 / 上下模糊 + 提饱和" 的移轴效果。两者都关时 draw() 直接走
+     * renderer.render，composer 一帧都不跑 —— 不开这两个功能零开销。
+     *
+     * **OutputPass 不能删**（2026-11-08）：渲染器是 ACESFilmic + sRGB 直出，
+     * 而 composer 的 RenderPass 渲到线性 render target，若最后不补一次
+     * 色调映射 + 色彩编码，输出的就是没编码的线性值 —— 实测整幅平均亮度
+     * 0.275 → 0.138，一开后期画面直接暗掉一半。这不是"效果"，是链路缺了一环。
      */
     this.composer = new EffectComposer(this.renderer.instance);
     this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
+    // 顺序很重要：先 OutputPass 完成色调映射 + sRGB 编码，再让风格化 pass 在**显示空间**工作。
+    // 实测两种顺序都还残留约 +10% 的「直出 → 后期」链路差异（three 的线性 render target
+    // 与直出 clearColor 路径不同，未定位到具体一行，读数表见 tiltShift.ts），但前置这版更干净：
+    //   · 景深相对 composer 空转的亮度差 −0.31% → **−0.02%**；
+    //   · dim=1 的压暗 −34% → **−45%**（显示空间乘 0.45，符合「压到 45%」的直觉）。
+    this.composer.addPass(new OutputPass());
     this.tiltPass = new ShaderPass(TILT_SHIFT_SHADER);
     this.tiltPass.uniforms['amount']!.value = this.tiltAmount;
+    this.tiltPass.uniforms['dim']!.value = this.dimAmount;
     this.composer.addPass(this.tiltPass);
 
     // 场地底盘：不然 16×26 之外全是黑洞，看着像地图没加载完
@@ -1007,7 +1026,9 @@ export class ArenaApp {
       ? cellToWorld(pos(shot.center.col, shot.center.row))
       : this.fieldCenter();
     this.director.update(info.delta, this.rig, this.fitZoom, center);
-    if (this.tiltAmount > 0.001 && this.composer) this.composer.render(info.delta);
+    // 景深和昼夜压暗都关着才直出；只要有一个开着就走 composer（OutputPass 会补色彩编码）
+    const postFx = this.tiltAmount > 0.001 || this.dimAmount > 0.001;
+    if (postFx && this.composer) this.composer.render(info.delta);
     else this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -2132,7 +2153,7 @@ export class ArenaApp {
     (this.tiltPass.uniforms['resolution']!.value as THREE.Vector2).set(cssW * pr, cssH * pr);
   }
 
-  /** 调试面板现场调微缩景深：0 = 关（直出，无后期开销），1 = 最糊。 */
+  /** 调试面板现场调微缩景深：0 = 关，1 = 最糊。**不改画面亮度**。 */
   setTilt(amount: number): void {
     this.tiltAmount = Math.min(1, Math.max(0, amount));
     saveTilt(this.tiltAmount);
@@ -2141,6 +2162,21 @@ export class ArenaApp {
 
   get tilt(): number {
     return this.tiltAmount;
+  }
+
+  /**
+   * 调试面板现场调昼夜压暗：0 = 白天（不改画面），1 = 最暗。
+   * 这一条是给后续「10 分钟一大局，从早打到晚」的时间轴留的入口 ——
+   * 到时把 `setDim(t)` 接到 `world.elapsed / MATCH 总时长` 上，白天仍是零后期开销。
+   */
+  setDim(amount: number): void {
+    this.dimAmount = Math.min(1, Math.max(0, amount));
+    saveDim(this.dimAmount);
+    if (this.tiltPass) this.tiltPass.uniforms['dim']!.value = this.dimAmount;
+  }
+
+  get dim(): number {
+    return this.dimAmount;
   }
 
   /** 调试面板现场切画质：立刻重设后备缓冲与阴影，并存进 localStorage。 */
@@ -2165,6 +2201,7 @@ export class ArenaApp {
       triangles: this.renderer.triangles,
       quality: this.qualityPreset,
       tilt: this.tiltAmount,
+      dim: this.dimAmount,
       dpr: this.viewport.snapshot.dpr,
     };
   }

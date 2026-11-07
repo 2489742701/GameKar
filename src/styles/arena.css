@@ -1710,4 +1710,40 @@
   .ahud__end__btn {
     min-height: 36px;
   }
+
+  /* 调试面板：P-077 多了第七根「氛围压暗」滑杆后，390px 高的横屏把
+   * 「复制全部机位 / 性能读数」挤到屏幕外，按钮被切一半又看不出能滚。
+   * 面板本体已有 overflow-y:auto，这里再收掉说明文字、压矮导出框和行距，
+   * 让调机位真正要用的控件一屏全露（PC 高屏不受影响）。 */
+  .dbg {
+    gap: 2px;
+  }
+
+  .dbg__hint {
+    display: none;
+  }
+
+  .dbg__row {
+    min-height: 18px;
+    gap: 4px;
+  }
+
+  .dbg__label {
+    margin-top: 1px;
+    font-size: 9px;
+  }
+
+  .dbg__slots .dbg__empty {
+    display: none;
+  }
+
+  .dbg__export {
+    min-height: 30px;
+    max-height: 48px;
+  }
+
+  .dbg__perf {
+    font-size: 10px;
+    padding: 2px 5px;
+  }
 }

@@ -56,6 +56,7 @@ export class DebugPanel {
   private readonly colInput: HTMLInputElement;
   private readonly rowInput: HTMLInputElement;
   private readonly tiltInput: HTMLInputElement;
+  private readonly dimInput: HTMLInputElement;
   private readonly idText = make('code', 'dbg__id');
   private readonly log = make('textarea', 'dbg__log');
   private readonly slotsBox = make('div', 'dbg__slots');
@@ -89,6 +90,12 @@ export class DebugPanel {
     this.rowInput = this.slider('中心 row', 0, fs.rows, 0.25, fs.rows / 2);
     /** 微缩景深（移轴）：0 = 关，1 = 最糊。中间清晰带 + 上下模糊 + 提饱和 = 玩具模型感 */
     this.tiltInput = this.slider('微缩景深', 0, 1, 0.05, this.app.tilt, (v) => this.app.setTilt(v));
+    /**
+     * 昼夜氛围压暗（2026-11-08 用户："变暗可以保存，后续要加夕阳和夜晚"）。
+     * 和景深分开两根滑杆：景深开到底也不掉亮度；这根才是管曝光的。
+     * 后续 10 分钟大局的时间轴接 `setDim(t)`，这里先给手动入口。
+     */
+    this.dimInput = this.slider('氛围压暗·昼夜', 0, 1, 0.05, this.app.dim, (v) => this.app.setDim(v));
 
     const record = make('button', 'dbg__btn', '存这一档');
     record.addEventListener('click', () => this.recordSlot());
@@ -166,6 +173,7 @@ export class DebugPanel {
       this.colInput.parentElement!,
       this.rowInput.parentElement!,
       this.tiltInput.parentElement!,
+      this.dimInput.parentElement!,
       make('div', 'dbg__row', [this.idText, record]),
       make('div', 'dbg__label', '我调的机位（发我这个）'),
       this.slotsBox,
@@ -244,7 +252,7 @@ export class DebugPanel {
     for (const [input, readout] of this.labelOf) {
       const v = Number(input.value);
       readout.textContent =
-        input === this.zoomInput || input === this.tiltInput
+        input === this.zoomInput || input === this.tiltInput || input === this.dimInput
           ? v.toFixed(2)
           : input === this.colInput || input === this.rowInput
             ? v.toFixed(1)
@@ -420,15 +428,16 @@ export class DebugPanel {
     if (this.colInput.value !== col) this.colInput.value = col;
     if (this.rowInput.value !== row) this.rowInput.value = row;
     if (this.tiltInput.value !== String(this.app.tilt)) this.tiltInput.value = String(this.app.tilt);
+    if (this.dimInput.value !== String(this.app.dim)) this.dimInput.value = String(this.app.dim);
     this.paintReadouts();
     const t = this.app.telemetry;
     // 后期接管后 renderer.info 只剩最后一个全屏 quad，别把 1 drawCall 当真实读数报出来
-    const sceneInfo =
-      t.tilt > 0
-        ? '场景计数 —（后期接管）'
-        : `${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面`;
+    const postFx = t.tilt > 0 || t.dim > 0;
+    const sceneInfo = postFx
+      ? '场景计数 —（后期接管）'
+      : `${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面`;
     this.perfText.textContent =
-      `${t.fps} fps · ${sceneInfo} · dpr ${t.dpr} · 画质 ${t.quality} · 微缩 ${t.tilt.toFixed(2)}`;
+      `${t.fps} fps · ${sceneInfo} · dpr ${t.dpr} · 画质 ${t.quality} · 微缩 ${t.tilt.toFixed(2)} · 压暗 ${t.dim.toFixed(2)}`;
     for (const [key, btn] of this.qualityBtns) {
       btn.dataset['on'] = String(key === t.quality);
     }

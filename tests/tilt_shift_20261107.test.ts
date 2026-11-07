@@ -35,8 +35,9 @@ describe('微缩景深', () => {
     expect(TILT_SHIFT_SHADER.uniforms.resolution.value.x).toBe(1);
   });
 
-  it('关的时候直接 renderer.render，一帧后期都不跑', () => {
-    expect(app).toContain('if (this.tiltAmount > 0.001 && this.composer) this.composer.render(info.delta);');
+  it('两个旋钮都关的时候直接 renderer.render，一帧后期都不跑', () => {
+    expect(app).toContain('const postFx = this.tiltAmount > 0.001 || this.dimAmount > 0.001;');
+    expect(app).toContain('if (postFx && this.composer) this.composer.render(info.delta);');
     expect(app).toContain('else this.renderer.render(this.scene, this.rig.camera);');
     expect(app).toContain('private syncPostFx(');
   });
