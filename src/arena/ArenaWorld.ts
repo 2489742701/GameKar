@@ -33,8 +33,11 @@ import {
   SUPPLY,
   TOWER,
   UNIT,
+  armySupplyOf,
+  buildingPopOf,
   cardById,
   type ArenaCard,
+  type BuildingKind,
   type FieldSpec,
 } from './config';
 
@@ -525,7 +528,7 @@ export class ArenaWorld {
   }
 
   /** 完工（build>=1）才算科技解锁；施工中的楼不干活（项目红线）。 */
-  hasBuilt(side: Side, kind: 'barracks' | 'gearFactory'): boolean {
+  hasBuilt(side: Side, kind: Extract<BuildingKind, 'barracks' | 'gearFactory' | 'orcLair'>): boolean {
     for (const b of this.buildings.values()) {
       if (b.side === side && b.kind === kind && b.hp > 0 && b.build >= 1) return true;
     }
@@ -571,14 +574,17 @@ export class ArenaWorld {
     if (card.id === TECH.militia) return true;
     // 飞行器 + 攻城车都要齿轮工厂（同一张表，见 config.TECH.factoryCards）
     if (TECH.factoryCards.includes(card.id)) return this.hasBuilt(side, 'gearFactory');
+    // 兽人军队要兽人巢穴（2026-11-07 用户新增建筑）
+    if (TECH.orcCards.includes(card.id)) return this.hasBuilt(side, 'orcLair');
     return this.hasBuilt(side, 'barracks');
   }
 
-  /** HUD 小标：场地 > 兵营 > 工厂，按解锁顺序给下一句提示。 */
+  /** HUD 小标：场地 > 兵营 > 工厂 > 兽人巢穴，按解锁顺序给下一句提示。 */
   techHint(side: Side): string | null {
     if (!this.buildingRoom(side)) return '场地已满 · 只发军队';
     if (!this.hasBuilt(side, 'barracks')) return '需要军营解锁军队';
     if (!this.hasBuilt(side, 'gearFactory')) return '需要齿轮工厂解锁空军与攻城车';
+    if (!this.hasBuilt(side, 'orcLair')) return '需要兽人巢穴解锁兽人军队';
     return null;
   }
 
@@ -727,7 +733,9 @@ export class ArenaWorld {
     if (card.kind === 'building') {
       this.place(p.side, card.building!, col, row, BUILDING_SPECS[card.building!].hp);
     } else {
-      this.spawnSquad(p.side, card.squad ?? [], col, row, false, card.breadPerMan ?? 1);
+      // 人口 / 口粮从卡面判据的同一张表取，别在这里重写一份
+      const sup = armySupplyOf(card);
+      this.spawnSquad(p.side, card.squad ?? [], col, row, false, sup.breadPerMan, sup.popPerMan);
     }
   }
 
@@ -809,8 +817,10 @@ export class ArenaWorld {
     row: number,
     /** true = 兵营自动出的兵：不占人口（用户 2026-11-06），面包照吃 */
     fromBarracks = false,
-    /** 民兵自带干粮：每人只吃 0.5 面包（默认 1） */
+    /** 民兵自带干粮：每人只吃 0.5 面包（默认 1）；兽人吃 2 */
     breadPerMan = 1,
+    /** 每人占几格人口（默认 1）；民兵 / 兽人 = 0，兵营自动兵在 fromBarracks 里处理 */
+    popPerMan = SUPPLY.unitPop,
   ): void {
     let i = 0;
     for (const part of squad) {
@@ -838,6 +848,8 @@ export class ArenaWorld {
           healIn: part.unitId === 'mobileCannon' ? undefined : unitDef(part.unitId).special?.kind === 'heal' ? unitDef(part.unitId).special!.every : undefined,
           bombIn: this.bomberOf(part.unitId) ? BOMBER.interval * 0.5 : undefined,
           breadCost: breadPerMan,
+          // 民兵 / 兽人不占人口；兵营自动兵沿用 fromBarracks 的 0
+          popCost: fromBarracks ? 0 : popPerMan,
         });
         i++;
       }
@@ -1849,22 +1861,20 @@ export class ArenaWorld {
       if (b.kind === 'house') {
         popMax += SUPPLY.housePop;
         pop += SUPPLY.housePopCost;
-      } else if (b.kind === 'mill') {
-        pop += SUPPLY.buildingPop;
-        breadMax += SUPPLY.millBread;
       } else {
-        pop += SUPPLY.buildingPop;
+        // 建筑占用按种类读同一张表：磨坊 1、箭塔 1、炮塔 2……
+        pop += buildingPopOf(b.kind);
+        if (b.kind === 'mill') breadMax += SUPPLY.millBread;
       }
     }
 
-    let popEaters = 0;
     let bread = 0;
     for (const u of this.units) {
       if (u.side !== side || u.hp <= 0) continue;
       bread += (u.breadCost ?? 1) * SUPPLY.unitBread;
-      if (!u.fromBarracks) popEaters++;
+      // 兵营自动兵 / 民兵 / 兽人不占人口（popCost=0）；其余每兵 1 格
+      pop += u.popCost ?? (u.fromBarracks ? 0 : SUPPLY.unitPop);
     }
-    pop += popEaters * SUPPLY.unitPop;
 
     return { pop, popMax, bread, breadMax };
   }
@@ -1886,7 +1896,7 @@ export class ArenaWorld {
     const s = this.supplyOf(side);
     if (card.kind === 'building') {
       const isHouse = card.building === 'house';
-      const cost = isHouse ? SUPPLY.housePopCost : SUPPLY.buildingPop;
+      const cost = isHouse ? SUPPLY.housePopCost : buildingPopOf(card.building!);
       const maxAfter = s.popMax + (isHouse ? SUPPLY.housePop : 0);
       // 民居看的是加容器之后的真上限；其它建筑还要给军队留出保留槽
       const budget = maxAfter - (isHouse ? 0 : SUPPLY.armyReserve);
@@ -1898,10 +1908,12 @@ export class ArenaWorld {
       return null;
     }
     const n = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
-    if (s.pop + n * SUPPLY.unitPop > s.popMax) {
+    const supply = armySupplyOf(card);
+    // 民兵 / 兽人 popPerMan=0 ⇒ 跳过人口检查，但面包照算（兽人还是双倍）
+    if (supply.popPerMan > 0 && s.pop + n * supply.popPerMan > s.popMax) {
       return `人口不够（${s.pop}/${s.popMax}，先盖民居）`;
     }
-    if (s.bread + n * (card.breadPerMan ?? 1) * SUPPLY.unitBread > s.breadMax) {
+    if (s.bread + n * supply.breadPerMan * SUPPLY.unitBread > s.breadMax) {
       return `面包不够（${s.bread}/${s.breadMax}，先盖磨坊）`;
     }
     return null;

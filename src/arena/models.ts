@@ -645,6 +645,40 @@ export function gearFactoryModel(accent: number): ArenaModel {
   };
 }
 
+/**
+ * **兽人巢穴**（2026-11-07 用户新增）：矮石窟 + 兽皮坡顶 + 洞口两侧一对獠牙 +
+ * 斜插的骨刺。剪影刻意比民居矮胖、比兵营野，一眼能分出"这不是人住的楼"。
+ *
+ * 只要花钱 + 有空位就能盖，不需要民居 / 磨坊（`needsStaffing` 不列它），
+ * 但解锁兽人军队要等**完工**，和兵营 / 齿轮工厂同一条科技法律。
+ */
+export function orcLairModel(accent: number): ArenaModel {
+  const tusk = 0xd9cda8;
+  const out: Node[] = [
+    plinth([1.36, 0.08, 1.16], ARENA_PAL.stoneDark),
+    box([1.2, 0.7, 1.0], ARENA_PAL.wallDark, [0, mid(0.08, 0.7), 0]),
+    // 兽皮坡顶 + 屋脊（阵营色，蓝红两版一眼分敌我）
+    prism([1.32, 0.4, 1.1], roofOf(accent), [0, 0.78, 0]),
+    box([1.36, 0.06, 0.12], ridgeOf(accent), [0, mid(1.18, 0.06), 0]),
+    // 洞口：暗内衬 + 门楣
+    box([0.5, 0.52, 0.06], ARENA_PAL.inside, [0, mid(0.08, 0.52), 0.53]),
+    box([0.6, 0.07, 0.08], ARENA_PAL.wood, [0, 0.62, 0.55]),
+    // 一对獠牙（cone 尖朝上，绕 Z 各歪一点）
+    { ...cone(0.1, 0.46, tusk, [-0.42, 0.78, 0.54], 8), rot: [0, 0, 0.24] },
+    { ...cone(0.1, 0.46, tusk, [0.42, 0.78, 0.54], 8), rot: [0, 0, -0.24] },
+    // 斜插的骨刺，让剪影不那么方
+    { ...box([0.07, 0.5, 0.07], tusk, [-0.5, 1.06, -0.28]), rot: [0, 0, 0.55] },
+    { ...box([0.07, 0.44, 0.07], tusk, [0.52, 1.02, -0.3]), rot: [0, 0, -0.6] },
+    // 两侧石墩
+    box([0.18, 0.26, 0.3], ARENA_PAL.stone, [-0.62, mid(0.08, 0.26), 0.1]),
+    box([0.18, 0.26, 0.3], ARENA_PAL.stone, [0.62, mid(0.08, 0.26), 0.1]),
+  ];
+  return {
+    static: out,
+    shell: boxShell(1.2, 1.0, 0.08, 0.7, ARENA_PAL.wall, 3, 2, 91),
+  };
+}
+
 /** 名字 → 造模型。视图层只读这张表；`accent` 是阵营色。 */
 export const ARENA_MODELS = {
   core: coreModel,
@@ -654,6 +688,7 @@ export const ARENA_MODELS = {
   mill: millModel,
   house: houseModel,
   gearFactory: gearFactoryModel,
+  orcLair: orcLairModel,
 } as const;
 
 export type ArenaModelName = keyof typeof ARENA_MODELS;
@@ -689,4 +724,6 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   // 旗杆整根从砖墙里长出来 —— 用户看到的"穿模"里最扎眼的一处。
   // 新模型屋脊 1.52×2.2 ≈ 3.34 格、烟囱顶 1.87×2.2 ≈ 4.11 格，旗立在屋脊侧。
   gearFactory: { x: 1.05, z: 0.2, base: 3.35, pole: 1.1 },
+  // 兽人巢穴屋脊 1.18×2.2 ≈ 2.6 格，旗立在侧后方骨刺旁
+  orcLair: { x: 0.92, z: -0.1, base: 2.55, pole: 0.9 },
 };

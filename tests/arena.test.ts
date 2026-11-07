@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld, type ArenaUnit } from '@arena/ArenaWorld';
 import { chooseCard, wishList } from '@arena/ai';
-import { BARRACKS, BUILD, CARDS, CORE, ECONOMY, FIELD, HAND, MATCH, NO_BUILD, REROLL, RUIN, SUPPLY, UNIT, cardById } from '@arena/config';
+import { BARRACKS, BUILD, BUILDING_POP, CARDS, CORE, ECONOMY, FIELD, HAND, MATCH, NO_BUILD, REROLL, RUIN, SUPPLY, UNIT, cardById } from '@arena/config';
 
 function run(world: ArenaWorld, seconds: number, each?: (t: number) => void): void {
   const steps = Math.round(seconds / 0.05);
@@ -172,7 +172,8 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
 describe('兵：会往前走、会互相打', () => {
   it('场上只有对面大本营时，兵会朝它移动', () => {
     const world = new ArenaWorld({ seed: 9 });
-    give(world, 'orcs'); // 4 费
+    // 用民兵：无科技前置、不占人口、6 人只吃 3 面包（兽人现在要巢穴且吃双份）
+    give(world, 'militia');
     world.playCard('blue', 0, 6, 7);
     const unit = world.units.find((u) => u.side === 'blue')!;
     const x0 = unit.x;
@@ -945,8 +946,9 @@ describe('手牌与敌方 AI', () => {
     for (let i = 0; i < 4; i++) instant(world, 'blue', 'house', 1 + i * 3, 17, 220);
     for (let slot = 0; slot < HAND.size; slot++) {
       const before = world.hand[slot]!.id;
-      // 落在自己半场的一块空地上
-      const cell = { col: 4 + slot * 3, row: 4 };
+      // 落在自己半场的一块空地上。行列**都错开**：卡池里现在有 4×3 的齿轮工厂，
+      // 只按 col 每 3 格排会让它的第 4 列压到下一张牌的落点（seed 3 实测撞过）。
+      const cell = { col: 2 + slot * 3, row: 2 + slot * 4 };
       expect(world.playCard('blue', slot, cell.col, cell.row).ok).toBe(true);
       run(world, HAND.refillSeconds + 0.3);
       const ids = world.hand.map((c) => c?.id);
@@ -1579,7 +1581,7 @@ describe('人口 / 面包：容器，不是随时间涨的收入', () => {
     expect(w.supplyOf('blue')).toEqual(before);
   });
 
-  it('民居 +2 人口上限，自己不占人口；塔和兵营各占 2', () => {
+  it('民居 +2 人口上限、自己不占；箭塔 1 / 兵营 2（2026-11-07 新表）', () => {
     const w = new ArenaWorld({ seed: 73 });
     w.auto.red = false;
     instant(w, 'blue', 'house', 4, 4, 220);
@@ -1587,25 +1589,25 @@ describe('人口 / 面包：容器，不是随时间涨的收入', () => {
     instant(w, 'blue', 'arrowTower', 8, 4, 520);
     instant(w, 'blue', 'barracks', 12, 4, 420);
     const s = w.supplyOf('blue');
-    expect(s.pop).toBe(4);
+    expect(s.pop).toBe(BUILDING_POP.arrowTower + BUILDING_POP.barracks); // 1 + 2 = 3
     expect(s.popMax).toBe(8);
   });
 
-  it('磨坊 +2 面包上限，但它要占 2 人口', () => {
+  it('磨坊 +2 面包上限，只占 1 人口', () => {
     const w = new ArenaWorld({ seed: 74 });
     w.auto.red = false;
     instant(w, 'blue', 'mill', 4, 4, 300);
-    expect(w.supplyOf('blue')).toEqual({ pop: 2, popMax: 6, bread: 0, breadMax: SUPPLY.baseBread + SUPPLY.millBread });
+    expect(w.supplyOf('blue')).toEqual({ pop: BUILDING_POP.mill, popMax: 6, bread: 0, breadMax: SUPPLY.baseBread + SUPPLY.millBread });
   });
 
   it('人口满了盖塔会被拒，理由里点出「人口」', () => {
     const w = new ArenaWorld({ seed: 75 });
     w.auto.red = false;
     w.gold.blue = 20;
-    // 6 点人口 → 3 栋楼就满
-    instant(w, 'blue', 'mill', 4, 4, 300);
-    instant(w, 'blue', 'mill', 8, 4, 300);
-    instant(w, 'blue', 'mill', 12, 4, 300);
+    // 炮塔每座 2 人口 ⇒ 3 座正好把基础 6 点吃满（磨坊/箭塔现在只占 1）
+    instant(w, 'blue', 'cannonTower', 4, 4, 300);
+    instant(w, 'blue', 'cannonTower', 8, 4, 300);
+    instant(w, 'blue', 'cannonTower', 12, 4, 300);
     expect(w.supplyOf('blue').pop).toBe(6);
     give(w, 'arrowTower');
     const res = w.playCard('blue', 0, 6, 12);
@@ -1890,11 +1892,13 @@ describe('兵营的兵不占人口（2026-11-06）', () => {
     });
     expect(seen.size, '60 秒产线至少吐 5 个（面包 3+2=5 封顶）').toBeGreaterThanOrEqual(5);
     const sup = w.supplyOf('blue');
-    // 占用只数楼：兵营 2 + 磨坊 2 + 民居 0 = 4，人口读数不该被兵顶上去
-    expect(sup.pop).toBe(4);
+    // 占用只数楼：兵营 2 + 磨坊 1 + 民居 0 = 3（磨坊 2026-11-07 改成只占 1），
+    // 人口读数不该被兵顶上去
+    const buildingOnly = BUILDING_POP.barracks + BUILDING_POP.mill + BUILDING_POP.house;
+    expect(sup.pop).toBe(buildingOnly);
     const alive = [...w.units].filter((u) => u.side === 'blue' && u.hp > 0).length;
     expect(sup.bread, '面包照吃：活着的兵每个吃 1').toBe(Math.min(sup.breadMax, alive));
-    expect(w.summary().supply.blue.pop).toBe(4);
+    expect(w.summary().supply.blue.pop).toBe(buildingOnly);
   });
 
   it('反证：卡牌兵仍占人口 —— 例外只给兵营自己', () => {
@@ -1917,12 +1921,16 @@ describe('兵营的兵不占人口（2026-11-06）', () => {
  * 民居不在此列（先加容器再看占用，防死锁）；军队卡就是保留槽的主人。
  */
 describe('槽位制衡：建筑最多占 上限−2（P-042）', () => {
-  /** 一个"建筑名额顶死"的场：磨坊 2 人口 + 箭塔 2 人口 = 4/6，只剩保留槽 */
+  /**
+   * 一个"建筑名额顶死"的场：炮塔 2 + 兵营 2 = 4/6，只剩保留槽。
+   * 2026-11-07 磨坊/箭塔降到 1 人口后，原来的「磨坊+箭塔」凑不出 4 了，
+   * 改用两座 2 人口的楼，锁的还是同一条「−armyReserve」规则。
+   */
   function packed(seed = 171): ArenaWorld {
     const w = new ArenaWorld({ seed });
     w.auto.red = false;
-    instant(w, 'blue', 'mill', 2, 6, 300);
-    instant(w, 'blue', 'arrowTower', 9, 6, 520);
+    instant(w, 'blue', 'cannonTower', 2, 6, 300);
+    instant(w, 'blue', 'barracks', 9, 6, 520);
     return w;
   }
 
@@ -1943,9 +1951,10 @@ describe('槽位制衡：建筑最多占 上限−2（P-042）', () => {
     expect(w.supplyOf('blue').popMax).toBe(8);
   });
 
-  it('军队不受限：2 人小队照样放（保留槽就是留给它的）', () => {
+  it('军队不受限：民兵照样放（保留槽就是留给它的）', () => {
     const w = packed();
-    give(w, 'orcs');
+    // 民兵无前置、不占人口、6 人只吃 3 面包；兽人现在要巢穴且吃双份，别拿它当通用军队
+    give(w, 'militia');
     w.gold.blue = 20;
     expect(w.playCard('blue', 0, 6, 14).ok).toBe(true);
   });

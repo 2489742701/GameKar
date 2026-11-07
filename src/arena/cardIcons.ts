@@ -185,6 +185,14 @@ export const CARD_ICON: Record<string, string> = {
     <circle cx="12" cy="11" r="3.6" fill="#0e0b08"/>
     <path fill="currentColor" d="M18.5 17h2v5h-2v-5Z"/>
   </svg>`,
+
+  /** 兽人巢穴：石窟拱门 + 一对獠牙 + 骨刺（2026-11-07 新增建筑） */
+  orcLair: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M3 21v-9a9 9 0 0 1 18 0v9h-4v-8a5 5 0 0 0-10 0v8H3Z"/>
+    <path fill="currentColor" d="M5.5 2.5 8 8.4 5 7.6l.5-5.1Zm13 0L16 8.4l3-.8-.5-5.1Z"/>
+    <path fill="currentColor" d="M11 0h2v3.2h-2V0Z"/>
+    <rect x="9.5" y="14" width="5" height="7" rx="2.5" fill="#0e0b08"/>
+  </svg>`,
 };
 
 /** 取一张卡的图标；卡池里新加卡但忘了画图时退回一个空框，不要崩。 */

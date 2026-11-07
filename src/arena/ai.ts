@@ -25,7 +25,11 @@
  * ③ 两次刷新之间留冷却，不会把钱刷光。
  */
 
-import { AI, ECONOMY, REROLL, SUPPLY, type ArenaCard, type BuildingKind } from './config';
+import {
+  AI, ECONOMY, REROLL, SUPPLY,
+  armySupplyOf, buildingPopOf,
+  type ArenaCard, type BuildingKind,
+} from './config';
 
 /** 容器读数（从 `ArenaWorld.supplyOf()` 来，视图与 AI 读同一份，别自己算）。 */
 export interface SupplyView {
@@ -73,12 +77,14 @@ export function canPlay(card: ArenaCard, s?: SupplyView): boolean {
   if (!s) return true;
   if (card.kind === 'building') {
     if (card.building === 'house') return true;
-    return s.pop + SUPPLY.buildingPop <= s.popMax - SUPPLY.armyReserve;
+    // 建筑人口按种类读表（磨坊/箭塔 1、炮塔 2……），与落牌判据同源
+    return s.pop + buildingPopOf(card.building!) <= s.popMax - SUPPLY.armyReserve;
   }
   const n = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
+  const supply = armySupplyOf(card);
   return (
-    s.pop + n * SUPPLY.unitPop <= s.popMax &&
-    s.bread + n * (card.breadPerMan ?? 1) * SUPPLY.unitBread <= s.breadMax
+    (supply.popPerMan === 0 || s.pop + n * supply.popPerMan <= s.popMax) &&
+    s.bread + n * supply.breadPerMan * SUPPLY.unitBread <= s.breadMax
   );
 }
 

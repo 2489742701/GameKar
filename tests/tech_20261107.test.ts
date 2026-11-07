@@ -9,7 +9,7 @@ function run(w: ArenaWorld, seconds: number): void {
   for (let i = 0; i < Math.round(seconds / 0.05); i++) w.update(0.05);
 }
 
-function built(w: ArenaWorld, kind: 'barracks' | 'gearFactory', col = 6, row = 6) {
+function built(w: ArenaWorld, kind: 'barracks' | 'gearFactory' | 'orcLair', col = 6, row = 6) {
   const b = w['place']('blue', kind, col, row, 9999);
   b.build = 1;
   return b;
@@ -39,7 +39,7 @@ describe('民兵集结（设计文档 B 节）', () => {
     expect(card.breadPerMan).toBe(0.5);
   });
 
-  it('开局就能出：6 人口 + 3 面包正好压满基础容器（不多吃一份）', () => {
+  it('开局就能出：0 人口 + 3 面包正好压满基础容器（2026-11-07 民兵改成不占人口）', () => {
     const w = new ArenaWorld({ seed: 301 });
     w.auto.red = false;
     w.gold.blue = 20;
@@ -48,11 +48,12 @@ describe('民兵集结（设计文档 B 节）', () => {
     expect(w.playCard('blue', 0, 6, 9).ok).toBe(true);
     const s = w.supplyOf('blue');
     expect(w.units.filter((u) => u.side === 'blue')).toHaveLength(6);
-    expect(s.pop).toBe(6);
+    expect(s.pop).toBe(0);
     expect(s.bread).toBe(3);
     expect(s.breadMax).toBe(3);
-    // 每个兵都记了半份口粮（兵营兵不受影响）
+    // 每个兵都记了半份口粮与零人口（兵营兵不受影响）
     expect(w.units.every((u) => u.side !== 'blue' || u.breadCost === 0.5)).toBe(true);
+    expect(w.units.every((u) => u.side !== 'blue' || u.popCost === 0)).toBe(true);
   });
 });
 
@@ -91,6 +92,9 @@ describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () =
     // 统计锁：刷新多轮至少出现过一架（保底会占手牌格，别断言每张都出现）
     const seen = seenAfterRerolls(w, 30);
     expect(TECH.factoryCards.some((id) => seen.has(id))).toBe(true);
+    // 2026-11-07 又加了兽人巢穴这一级解锁：工厂建好只走到"该盖巢穴了"
+    expect(w.techHint('blue')).toBe('需要兽人巢穴解锁兽人军队');
+    built(w, 'orcLair', 14, 10);
     expect(w.techHint('blue')).toBeNull();
   });
 
@@ -198,7 +202,7 @@ describe('齿轮工厂 4×3（设计文档 C 节）', () => {
   });
 
   it('卡池 25 张；工厂不需要后勤配给', () => {
-    expect(CARDS).toHaveLength(25);
+    expect(CARDS).toHaveLength(26);
     const w = new ArenaWorld({ seed: 307 });
     const b = built(w, 'gearFactory');
     expect(w.isStaffed(b.id)).toBe(true); // 被动科技，不挂「缺民居」

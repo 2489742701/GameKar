@@ -28,7 +28,9 @@ export function labelOf(b: ArenaBuilding): string {
           ? '民居'
           : b.kind === 'gearFactory'
             ? '齿轮工厂'
-            : '防御塔';
+            : b.kind === 'orcLair'
+              ? '兽人巢穴'
+              : '防御塔';
 }
 
 /**

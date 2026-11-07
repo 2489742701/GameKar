@@ -101,7 +101,8 @@ export const BUILD = {
     arrowTower: 3.4,
     cannonTower: 3.8,
     barracks: 4.2,
-  } as Record<'house' | 'mill' | 'arrowTower' | 'cannonTower' | 'barracks', number>,
+    orcLair: 3.6,
+  } as Record<'house' | 'mill' | 'arrowTower' | 'cannonTower' | 'barracks' | 'orcLair', number>,
 };
 
 /**
@@ -128,8 +129,11 @@ export const SUPPLY = {
   /** 民居提供的人口 / 磨坊提供的面包 */
   housePop: 2,
   millBread: 2,
-  /** 建筑占用的人口：塔/兵营/磨坊各 2；民居自己是容器，不占 */
-  buildingPop: 2,
+  /**
+   * 建筑占用的人口**按建筑种类**读 `BUILDING_POP`（2026-11-07 用户调整：
+   * 磨坊 1、箭塔 1、炮塔 2）。这里不再放一个统一数字 ——
+   * 判据、卡面 SVG、AI 评估必须读同一张表，不能各写一个 2。
+   */
   housePopCost: 0,
   /** 每个兵吃多少 */
   unitPop: 1,
@@ -339,7 +343,7 @@ export interface ArenaCard {
   /** 花多少金 */
   cost: number;
   /** 建筑卡：模型与规格 */
-  building?: 'barracks' | 'arrowTower' | 'cannonTower' | 'mill' | 'house' | 'gearFactory';
+  building?: BuildingKind;
   /** 军队卡：出哪几种、各几个 */
   squad?: { unitId: string; count: number }[];
   /** 每个兵吃几份面包（默认 1）。民兵自带干粮只吃 0.5，6 人才装得进基础 3 面包 */
@@ -356,6 +360,12 @@ export interface ArenaCard {
  *   建筑再 +2、军队 −1~2，把差价进一步拉开（配合"兵营兵不占人口"，
  *   军队便宜了玩家更敢出兵，建筑涨价让每一栋楼都要想清楚再盖）。
  */
+/**
+ * 兽人巢穴（2026-11-07 用户新增）：只要花钱 + 有空位就能盖，不需要民居 / 磨坊 / 兵营。
+ * 放在卡池**之前**，卡的 `cost` 直接读它 —— 判据只留一个数字。
+ */
+export const ORC_LAIR = { hp: 520, cost: 12 };
+
 export const CARDS: ArenaCard[] = [
   {
     id: 'barracks',
@@ -464,7 +474,7 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'orcs',
     name: '兽人',
-    blurb: '两个兽人，血厚、冲撞会把对面顶开。',
+    blurb: '两个兽人，血厚、冲撞会把对面顶开。需兽人巢穴；不占人口，但吃双份面包。',
     kind: 'squad',
     cost: 7,
     squad: [{ unitId: 'orc', count: 2 }],
@@ -490,7 +500,7 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'orcsBig',
     name: '兽人大队',
-    blurb: '四个兽人。冲撞能把一整排人顶散。',
+    blurb: '四个兽人。冲撞能把一整排人顶散。需兽人巢穴；不占人口，但吃双份面包。',
     kind: 'squad',
     cost: 11,
     squad: [{ unitId: 'orc', count: 4 }],
@@ -547,7 +557,7 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'militia',
     name: '民兵集结',
-    blurb: '4 民兵 + 2 弓箭手：攻防低，但人多、便宜、自带干粮。',
+    blurb: '4 民兵 + 2 弓箭手：攻防低，但人多、便宜、自带干粮，而且不占人口。',
     kind: 'squad',
     cost: 5,
     squad: [{ unitId: 'militia', count: 4 }, { unitId: 'archer', count: 2 }],
@@ -560,6 +570,14 @@ export const CARDS: ArenaCard[] = [
     kind: 'building',
     cost: 16,
     building: 'gearFactory',
+  },
+  {
+    id: 'orcLair',
+    name: '兽人巢穴',
+    blurb: '只要花钱就能盖。盖好解锁全部兽人军队：兽人不占人口，但每人要吃双份面包。',
+    kind: 'building',
+    cost: ORC_LAIR.cost,
+    building: 'orcLair',
   },
 ];
 
@@ -577,6 +595,8 @@ export const cardById = (id: string): ArenaCard => {
 /** 齿轮工厂：第一栋 4×3 建筑（解锁空军），血厚一点、被动科技不配民居。 */
 export const GEAR_FACTORY = { hp: 700 };
 
+/** `ORC_LAIR` 定义在卡池之前（卡的 cost 要读它），这里不再重复声明。 */
+
 /** 科技前置（2026-11-07 设计文档 A 节）：唯一默认军队卡 + 解锁者 */
 export const TECH = {
   /** 无前置、永远在卡池 */
@@ -591,6 +611,9 @@ export const TECH = {
    * 改叫 `factoryCards`，判据只留这一张表，别在别处另写一份。
    */
   factoryCards: ['balloon', 'airscrew', 'bomber', 'mobileCannon', 'ballista'] as string[],
+  /** 兽人巢穴解锁全部兽人军队（2026-11-07 用户新增建筑） */
+  orcLair: 'orcLair',
+  orcCards: ['orcs', 'orcsBig'] as string[],
 };
 
 export const BUILDING_SPECS = {
@@ -600,12 +623,56 @@ export const BUILDING_SPECS = {
   mill: { cols: 3, rows: 3, hp: MILL.hp },
   house: { cols: 3, rows: 3, hp: HOUSE.hp },
   gearFactory: { cols: 4, rows: 3, hp: GEAR_FACTORY.hp },
+  orcLair: { cols: 3, rows: 3, hp: ORC_LAIR.hp },
 } as const;
 
 /** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */
 export const BUILDING_SCALE = 2.2;
 
 export type BuildingKind = keyof typeof BUILDING_SPECS;
+
+/**
+ * **建筑占用人口表**（2026-11-07 用户："磨坊只需要扣一个人口，加两个面包……
+ * 箭塔占用 1 个人口，炮塔占用两个人口"）。
+ *
+ * 这是判据的**唯一来源**：`ArenaWorld.supplyOf / supplyBlocked`、
+ * `ai.canPlay`、卡面 `supplyRows` 的 SVG 图标数量全读它，
+ * 谁也不许自己写一个 2。
+ */
+export const BUILDING_POP: Record<BuildingKind, number> = {
+  house: 0,       // 自己是容器
+  mill: 1,        // 加 2 面包，只扣 1 人口
+  arrowTower: 1,  // 箭塔 1
+  cannonTower: 2, // 炮塔 2
+  barracks: 2,
+  gearFactory: 2,
+  orcLair: 2,
+};
+
+export const buildingPopOf = (kind: BuildingKind): number => BUILDING_POP[kind] ?? 2;
+
+/**
+ * **军队卡的人口 / 口粮**（2026-11-07 用户："兽人军队不占用人口，但是需要双倍的面包……
+ * 民兵集结不占用人口"）。
+ *
+ * 和建筑表一样是唯一来源：落牌校验、卡面 SVG、出兵时写进单位的 `popCost / breadCost`
+ * 都从这里取，避免"卡面画 1 个面包、实际吃 2 个"这种假读数。
+ */
+export interface ArmySupply {
+  /** 每个兵占几份人口（0 = 不占） */
+  popPerMan: number;
+  /** 每个兵吃几份面包 */
+  breadPerMan: number;
+}
+
+export function armySupplyOf(card: ArenaCard): ArmySupply {
+  if (card.kind === 'building') return { popPerMan: 0, breadPerMan: 0 };
+  // 民兵：不占人口，自带干粮仍只吃 0.5 份/人（6 人才装得进基础 3 面包）
+  if (card.id === TECH.militia) return { popPerMan: 0, breadPerMan: card.breadPerMan ?? 0.5 };
+  // 兽人：不占人口，但每人吃双份面包
+  if (TECH.orcCards.includes(card.id)) return { popPerMan: 0, breadPerMan: 2 };
+  return { popPerMan: SUPPLY.unitPop, breadPerMan: card.breadPerMan ?? 1 };
+}
 
 /** 扑翼轰炸机（2026-11-07 设计文档 E 节）：一次性冲刺、下方投弹、飞出界消失。 */
 export const BOMBER = {
