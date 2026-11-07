@@ -17,10 +17,10 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
 
 describe('上限本身', () => {
-  it('默认 30；涨速仍是 2 秒/格、开局仍是 8', () => {
+  it('默认 30；涨速仍是 2 秒/格、开局 15（2026-11-07 傍晚从 8 提到 15）', () => {
     expect(ECONOMY.cap).toBe(30);
     expect(ECONOMY.tickSeconds).toBe(2);
-    expect(ECONOMY.start).toBe(8);
+    expect(ECONOMY.start).toBe(15);
   });
 
   it('实际涨到 30 就封顶（不是只改了显示数字）', () => {
@@ -35,10 +35,12 @@ describe('上限本身', () => {
     expect(w.summary().goldCap).toBe(30);
   });
 
-  it('开局 8 → 30 需要 44 秒（2 秒/格 × 22 格），涨速没被偷偷加快', () => {
+  it('开局 15 → 30 需要 30 秒（2 秒/格 × 15 格），涨速没被偷偷加快', () => {
     const w = new ArenaWorld({ seed: 2 });
     w.auto.red = false;
-    for (let i = 0; i < 43.9 / 0.05; i++) w.update(0.05);
+    const need = (ECONOMY.cap - ECONOMY.start) * ECONOMY.tickSeconds; // 15 × 2 = 30
+    expect(need).toBe(30);
+    for (let i = 0; i < (need - 0.1) / 0.05; i++) w.update(0.05);
     expect(w.gold.blue).toBeLessThan(30);
     for (let i = 0; i < 0.2 / 0.05; i++) w.update(0.05);
     expect(w.gold.blue).toBe(30);

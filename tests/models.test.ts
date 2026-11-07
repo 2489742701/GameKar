@@ -260,13 +260,13 @@ describe('磨坊的帆贴着木梁', () => {
  * 这条锁从**面片反推**壳的外轮廓，不另抄一份尺寸表 —— 壳一改，判据跟着改。
  * 只对 `boxShell` 的方楼成立（圆塔用 ringShell，半径口径不同，另有锁）。
  */
-describe('里子比外壳小一圈：墙片不许和本体共面', () => {
-  /** 板厚：和 models.ts 的 `PANEL_T` 同一个物理量 */
-  const PANEL_T = 0.06;
-  const EPS = 0.01;
-  /** 本体与内皮的最大允许间隙：再大就是"空壳里放了个小盒子" */
-  const MAX_GAP = 0.3;
+/** 板厚：和 models.ts 的 `PANEL_T` 同一个物理量 */
+const PANEL_T = 0.06;
+const EPS = 0.01;
+/** 本体与内皮的最大允许间隙：再大就是"空壳里放了个小盒子" */
+const MAX_GAP = 0.3;
 
+describe('里子比外壳小一圈：墙片不许和本体共面（方壳）', () => {
   interface Box {
     sx: number;
     sy: number;
@@ -319,7 +319,8 @@ describe('里子比外壳小一圈：墙片不许和本体共面', () => {
     return { halfX, halfZ, y0, y1 };
   }
 
-  const shellBuildings = ['core', 'barracks', 'house', 'gearFactory', 'orcLair'] as const;
+  // 兽人巢穴 2026-11-07 傍晚改成半圆地堡（ringShell），不在方壳这组里，见下面那条
+  const shellBuildings = ['core', 'barracks', 'house', 'gearFactory'] as const;
 
   it('本体盒落在壳的内皮以内（不吃进 0.06 的板厚），也没缩成一个点', () => {
     for (const name of shellBuildings) {
@@ -348,10 +349,8 @@ describe('里子比外壳小一圈：墙片不许和本体共面', () => {
    * 所以这组数只要有一条不越界，说明上面的阈值给松了、锁是自证的。
    */
   it('反证：旧写法（本体宽深照抄壳）代进同一组阈值 ⇒ 必须越界', () => {
-    const old: [keyof typeof ARENA_MODELS, number, number][] = [
-      ['gearFactory', 1.56, 1.04],
-      ['orcLair', 1.2, 1.0],
-    ];
+    // 巢穴现在是圆壳，反证在下面圆壳那条里；这里只剩工厂这一个方壳受害者
+    const old: [keyof typeof ARENA_MODELS, number, number][] = [['gearFactory', 1.56, 1.04]];
     for (const [name, w, d] of old) {
       const shell = shellOf(name);
       const maxX = shell.halfX - PANEL_T - EPS;
@@ -359,5 +358,75 @@ describe('里子比外壳小一圈：墙片不许和本体共面', () => {
       expect(w / 2, `${name} 旧写法的半宽竟然还在阈值内`).toBeGreaterThanOrEqual(maxX);
       expect(d / 2, `${name} 旧写法的半深竟然还在阈值内`).toBeGreaterThanOrEqual(maxZ);
     }
+  });
+});
+
+/**
+ * 圆壳楼（`ringShell`）的同一条法律：**里子半径必须小于壳的内半径**。
+ *
+ * 兽人巢穴改成"半圆地堡"之后，筒身是一圈 12 段的圆壳，判据不能再拿宽深算 ——
+ * 从面片反推半径（`ringShell` 把面片中心放在 `r - t/2`，所以 `r = |中心| + t/2`），
+ * 本体取"与壳高度带重叠过半、底面半径最大"的圆柱。
+ */
+describe('里子比外壳小一圈（圆壳）', () => {
+  function ringOf(name: keyof typeof ARENA_MODELS) {
+    const panels = ARENA_MODELS[name]('blue' as never).shell as unknown as {
+      x: number; y: number; z: number; h: number; t: number; yaw: number;
+    }[];
+    let r = 0;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    let skewed = 0;
+    let rightCount = 0;
+    for (const p of panels) {
+      // 圆壳的 yaw 是 π/2 − a，一圈里总有落在斜角上的那几片；方壳则**全部**是直角。
+      // 所以判据是"至少有一片不是直角"（只看一片会撞上恰好是直角的那个）
+      const right = [0, Math.PI / 2, Math.PI, -Math.PI / 2].some((a) => Math.abs(p.yaw - a) < 1e-6);
+      if (!right) skewed++;
+      else rightCount++;
+      r = Math.max(r, Math.hypot(p.x, p.z) + p.t / 2);
+      y0 = Math.min(y0, p.y - p.h / 2);
+      y1 = Math.max(y1, p.y + p.h / 2);
+    }
+    expect(skewed, `${String(name)} 的壳全是直角，是方壳不是圆壳`).toBeGreaterThan(0);
+    expect(rightCount, `${String(name)} 的壳一片直角都没有？`).toBeGreaterThan(-1);
+    return { r, y0, y1 };
+  }
+
+  function innerCylinderOf(name: keyof typeof ARENA_MODELS, y0: number, y1: number) {
+    const nodes = ARENA_MODELS[name]('blue' as never).static as unknown as {
+      part: { kind: string; rBottom?: number; height?: number };
+      at?: [number, number, number];
+      rot?: [number, number, number];
+    }[];
+    const span = y1 - y0;
+    const cands = nodes
+      .filter((n) => n.part.kind === 'cyl' && !n.rot?.some((v) => Math.abs(v) > 1e-6) && n.at && n.part.height)
+      .map((n) => {
+        const h = n.part.height!;
+        const b = n.at![1] - h / 2;
+        const overlap = Math.min(b + h, y1) - Math.max(b, y0);
+        return { r: n.part.rBottom!, overlap };
+      })
+      .filter((c) => c.overlap > span * 0.5);
+    expect(cands.length, `${String(name)} 找不到内衬筒`).toBeGreaterThan(0);
+    return cands.sort((a, b) => b.r - a.r)[0]!;
+  }
+
+  it('兽人巢穴：内衬半径落在壳内皮以内，且没缩成一根柱子', () => {
+    const shell = ringOf('orcLair');
+    const body = innerCylinderInspect();
+    const maxR = shell.r - PANEL_T - EPS;
+    expect(body, '内衬半径顶到墙片了').toBeLessThan(maxR + 1e-9);
+    expect(body, '内衬缩得太狠，墙片掉光会看到一个大空壳').toBeGreaterThan(maxR - MAX_GAP);
+
+    function innerCylinderInspect() {
+      return innerCylinderOf('orcLair', shell.y0, shell.y1).r;
+    }
+  });
+
+  it('反证：把内衬改回和壳同半径（0.60）代进同一阈值 ⇒ 必须越界', () => {
+    const shell = ringOf('orcLair');
+    expect(0.6).toBeGreaterThanOrEqual(shell.r - PANEL_T - EPS);
   });
 });

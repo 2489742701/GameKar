@@ -335,6 +335,43 @@ function facesOf(node) {
     return out;
   }
 
+  // 半圆穹顶：底面在 0、顶在 h（锚点就是底面，同 prism / plinth，不要 lift）
+  if (p.kind === 'dome') {
+    const r = p.radius;
+    const h = p.height;
+    const seg = p.seg ?? 12;
+    const rings = 4;
+    for (let j = 0; j < rings; j++) {
+      const k0 = j / rings;
+      const k1 = (j + 1) / rings;
+      const r0 = r * Math.cos((k0 * Math.PI) / 2);
+      const r1 = r * Math.cos((k1 * Math.PI) / 2);
+      const y0 = h * Math.sin((k0 * Math.PI) / 2);
+      const y1 = h * Math.sin((k1 * Math.PI) / 2);
+      for (let i = 0; i < seg; i++) {
+        const a0 = (i / seg) * Math.PI * 2;
+        const a1 = ((i + 1) / seg) * Math.PI * 2;
+        const p00 = [Math.cos(a0) * r0, y0, Math.sin(a0) * r0];
+        const p01 = [Math.cos(a1) * r0, y0, Math.sin(a1) * r0];
+        const p10 = [Math.cos(a0) * r1, y1, Math.sin(a0) * r1];
+        const p11 = [Math.cos(a1) * r1, y1, Math.sin(a1) * r1];
+        // 绕序同 cyl 的侧带：[下一条, 当前下, 当前上, 上一条]
+        if (r1 > 0.001) pushQuad([p01, p00, p10, p11], node.color);
+        else pushQuad([p01, p00, [0, h, 0], [0, h, 0]], node.color);
+      }
+    }
+    // 底面封口：从下往上看是实心碗，不是空壳
+    for (let i = 0; i < seg; i++) {
+      const a0 = (i / seg) * Math.PI * 2;
+      const a1 = ((i + 1) / seg) * Math.PI * 2;
+      pushQuad(
+        [[0, 0, 0], [Math.cos(a0) * r, 0, Math.sin(a0) * r], [Math.cos(a1) * r, 0, Math.sin(a1) * r], [0, 0, 0]],
+        node.color,
+      );
+    }
+    return out;
+  }
+
   return out;
 }
 

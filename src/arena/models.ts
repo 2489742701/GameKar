@@ -35,6 +35,12 @@ export type Part =
   | { kind: 'cyl'; rTop: number; rBottom: number; height: number; seg?: number }
   | { kind: 'cone'; radius: number; height: number; seg?: number }
   | { kind: 'sphere'; radius: number; seg?: number }
+  /**
+   * 上半椭球（"扣在地上的碗"）：底面半径 `radius`、总高 `height`。
+   * **锚点在底面中心**（和 prism / plinth 一样），不是球心 —— 地堡要"贴地长出来"，
+   * 拿球心当锚点每次都得手算球心，是错位的来源。
+   */
+  | { kind: 'dome'; radius: number; height: number; seg?: number }
   | { kind: 'crystal'; radius: number; height: number }
   | { kind: 'plinth'; size: Vec3 };
 
@@ -161,6 +167,13 @@ const cone = (radius: number, height: number, color: number, at: Vec3 = [0, 0, 0
 
 const sphere = (radius: number, color: number, at: Vec3 = [0, 0, 0], seg = 1): Node => ({
   part: { kind: 'sphere', radius, seg },
+  color,
+  at,
+});
+
+/** 上半椭球：`at` 是**底面中心**（和 prism / plinth 一致）。兽人巢穴的穹顶用它。 */
+const dome = (radius: number, height: number, color: number, at: Vec3 = [0, 0, 0], seg = 12): Node => ({
+  part: { kind: 'dome', radius, height, seg },
   color,
   at,
 });
@@ -649,37 +662,68 @@ export function gearFactoryModel(accent: number): ArenaModel {
 }
 
 /**
- * **兽人巢穴**（2026-11-07 用户新增）：矮石窟 + 兽皮坡顶 + 洞口两侧一对獠牙 +
- * 斜插的骨刺。剪影刻意比民居矮胖、比兵营野，一眼能分出"这不是人住的楼"。
+ * **兽人巢穴**（2026-11-07 用户新增，同日傍晚改型）：**半圆地堡**。
+ *
+ * 用户第二轮原话："兽人巢穴设计特色化，要一个半圆地堡感。" 上一版是方盒子 +
+ * 人字坡顶（本质是个"矮民居"），换成"扣在地上的碗"才有兽人挖出来的土堡感：
+ *
+ * ```
+ *      穹顶 dome 0.62×0.46           ← 半圆顶，2.2 倍后 ≈1.36 格半径 / 2.02 格高
+ *      檐口箍（阵营色）              ← 盖住"筒身 ↔ 穹顶"的接缝，也是一眼分敌我的那道色
+ *      筒身（可掉落墙板 12×2 片）
+ *      暗内衬圆筒                    ← 墙板掉了能看见里面，不是实心块
+ *      圆形台基
+ * ```
+ *
+ * 门是**半圆拱**：一枚横放的圆盘（半径 0.22、厚 0.06）中心压在台基顶面附近，
+ * 下半被台基吃掉，露出来的正好是半圆 —— 不用另做"拱形"图元。
+ *
+ * 里子必须比外壳小一圈（用户同一天指出的共面问题）：内衬 r=0.52 对壳 r=0.60，
+ * 每边留 0.08 的缝，掉墙看得见洞。
  *
  * 只要花钱 + 有空位就能盖，不需要民居 / 磨坊（`needsStaffing` 不列它），
  * 但解锁兽人军队要等**完工**，和兵营 / 齿轮工厂同一条科技法律。
  */
 export function orcLairModel(accent: number): ArenaModel {
   const tusk = 0xd9cda8;
+  const SHELL_R = 0.6;
+  // 筒身 0.46 / 穹顶 0.36：筒身矮、穹顶一高就是"蘑菇"，地堡要**扁顶 + 高一点的墙**
+  // （墙也是可掉落面片，抬高了掉墙才看得出来）
+  const WALL_H = 0.46;
+  const DOME_H = 0.36;
+  // 夯土顶：比墙片（wall 浅米）沉一档，才像"从土里拱出来的"，不是一个白馒头
+  const DOME_C = mix(ARENA_PAL.wall, ARENA_PAL.wallDark, 0.62);
   const out: Node[] = [
-    plinth([1.36, 0.08, 1.16], ARENA_PAL.stoneDark),
-    // 同上：里子退到外壳内皮以内（1.2×1.0 → 1.0×0.8），别再写回和 shell 同尺寸
-    box([1.0, 0.7, 0.8], ARENA_PAL.wallDark, [0, mid(0.08, 0.7), 0]),
-    // 兽皮坡顶 + 屋脊（阵营色，蓝红两版一眼分敌我）
-    prism([1.32, 0.4, 1.1], roofOf(accent), [0, 0.78, 0]),
-    box([1.36, 0.06, 0.12], ridgeOf(accent), [0, mid(1.18, 0.06), 0]),
-    // 洞口：暗内衬 + 门楣
-    box([0.5, 0.52, 0.06], ARENA_PAL.inside, [0, mid(0.08, 0.52), 0.53]),
-    box([0.6, 0.07, 0.08], ARENA_PAL.wood, [0, 0.62, 0.55]),
-    // 一对獠牙（cone 尖朝上，绕 Z 各歪一点）
-    { ...cone(0.1, 0.46, tusk, [-0.42, 0.78, 0.54], 8), rot: [0, 0, 0.24] },
-    { ...cone(0.1, 0.46, tusk, [0.42, 0.78, 0.54], 8), rot: [0, 0, -0.24] },
-    // 斜插的骨刺，让剪影不那么方
-    { ...box([0.07, 0.5, 0.07], tusk, [-0.5, 1.06, -0.28]), rot: [0, 0, 0.55] },
-    { ...box([0.07, 0.44, 0.07], tusk, [0.52, 1.02, -0.3]), rot: [0, 0, -0.6] },
-    // 两侧石墩
-    box([0.18, 0.26, 0.3], ARENA_PAL.stone, [-0.62, mid(0.08, 0.26), 0.1]),
-    box([0.18, 0.26, 0.3], ARENA_PAL.stone, [0.62, mid(0.08, 0.26), 0.1]),
+    // 圆形台基：比筒身大 0.06，破一下"直上直下"的边
+    cyl([0.66, 0.66, 0.08], ARENA_PAL.stoneDark, [0, mid(0, 0.08), 0], 14),
+    // 暗内衬：r 0.52 < 壳 0.60，墙板掉了看见的是它（不是实心墙）
+    cyl([0.52, 0.52, WALL_H], ARENA_PAL.inside, [0, mid(0.08, WALL_H), 0], 14),
+    // 半圆穹顶：底面正好落在筒身顶上（0.08 + 0.38 = 0.46）
+    // 半径比筒身**小 0.02**：穹顶坐进去，筒身外皮（可掉落墙板）才露得出来 ——
+    // 反过来写成 0.62 会把整圈墙板罩在檐下，墙掉了玩家也看不见
+    dome(0.58, DOME_H, DOME_C, [0, 0.08 + WALL_H, 0], 14),
+    // 檐口箍：压住筒身与穹顶的接缝，阵营色 —— 远看那一圈就能认人
+    cyl([0.63, 0.63, 0.06], ridgeOf(accent), [0, 0.08 + WALL_H, 0], 14),
+    // 半圆拱门：横放圆盘，下半沉进台基 ⇒ 露出上半圆
+    // 圆盘必须**贴在墙外皮之外**（0.62 > 0.60），埋在墙里就整块被面片盖住了
+    { ...cyl([0.2, 0.2, 0.06], ARENA_PAL.inside, [0, 0.2, SHELL_R + 0.02], 12), rot: [Math.PI / 2, 0, 0] },
+    // 拱脚：把门洞下半补成直墙，免得看起来是"一个悬空的圆"
+    box([0.4, 0.2, 0.06], ARENA_PAL.inside, [0, mid(0.08, 0.2), SHELL_R + 0.02]),
+    // 门楣（木）+ 一对獠牙
+    box([0.54, 0.06, 0.1], ARENA_PAL.wood, [0, 0.42, SHELL_R + 0.03]),
+    { ...cone(0.07, 0.34, tusk, [-0.31, 0.46, SHELL_R + 0.03], 7), rot: [0, 0, 0.22] },
+    { ...cone(0.07, 0.34, tusk, [0.31, 0.46, SHELL_R + 0.03], 7), rot: [0, 0, -0.22] },
+    // 穹顶上斜插两根骨刺：剪影不至于变成一个光滑的半球
+    { ...box([0.06, 0.42, 0.06], tusk, [-0.42, 0.84, -0.2]), rot: [0, 0, 0.5] },
+    { ...box([0.06, 0.38, 0.06], tusk, [0.44, 0.8, -0.22]), rot: [0, 0, -0.55] },
+    // 两侧石墩：像地堡外的掩体
+    box([0.16, 0.22, 0.26], ARENA_PAL.stone, [-0.58, mid(0.08, 0.22), 0.18]),
+    box([0.16, 0.22, 0.26], ARENA_PAL.stone, [0.58, mid(0.08, 0.22), 0.18]),
   ];
   return {
     static: out,
-    shell: boxShell(1.2, 1.0, 0.08, 0.7, ARENA_PAL.wall, 3, 2, 91),
+    // 圆壳：筒身一圈 12 段 × 2 行 = 24 片，和方楼同一套掉落逻辑
+    shell: ringShell(SHELL_R, SHELL_R, 0.08, WALL_H, ARENA_PAL.wall, 12, 2, 91),
   };
 }
 
@@ -728,6 +772,7 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   // 旗杆整根从砖墙里长出来 —— 用户看到的"穿模"里最扎眼的一处。
   // 新模型屋脊 1.52×2.2 ≈ 3.34 格、烟囱顶 1.87×2.2 ≈ 4.11 格，旗立在屋脊侧。
   gearFactory: { x: 1.05, z: 0.2, base: 3.35, pole: 1.1 },
-  // 兽人巢穴屋脊 1.18×2.2 ≈ 2.6 格，旗立在侧后方骨刺旁
-  orcLair: { x: 0.92, z: -0.1, base: 2.55, pole: 0.9 },
+  // 兽人巢穴改半圆地堡后，穹顶顶 0.92×2.2 ≈ 2.02 格；旗插在穹顶侧面骨刺旁。
+  // 旧值 base 2.55 是给"屋脊 2.6 格"那版的，改型后会让旗悬在半空。
+  orcLair: { x: 0.92, z: -0.1, base: 1.4, pole: 0.95 },
 };

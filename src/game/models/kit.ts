@@ -30,6 +30,8 @@ export type Part =
   | { kind: 'cyl'; rTop: number; rBottom: number; height: number; seg?: number }
   | { kind: 'cone'; radius: number; height: number; seg?: number }
   | { kind: 'sphere'; radius: number; seg?: number }
+  /** 上半椭球：底面半径 + 总高，锚点在**底面中心**（兽人巢穴的半圆地堡顶）。 */
+  | { kind: 'dome'; radius: number; height: number; seg?: number }
   | { kind: 'crystal'; radius: number; height: number }
   | { kind: 'plinth'; size: Vec3 }
   /**
@@ -122,6 +124,8 @@ function partKey(part: Part): string {
       return `cone:${part.radius},${part.height},${part.seg ?? 8}`;
     case 'sphere':
       return `sphere:${part.radius},${part.seg ?? 8}`;
+    case 'dome':
+      return `dome:${part.radius},${part.height},${part.seg ?? 12}`;
     case 'crystal':
       return `crystal:${part.radius},${part.height}`;
     case 'flag':
@@ -231,6 +235,15 @@ export function geometryFor(part: Part): THREE.BufferGeometry {
     case 'sphere':
       geo = new THREE.IcosahedronGeometry(part.radius, part.seg ?? 1);
       break;
+    case 'dome': {
+      // 上半椭球：纬度切到 π/2（只留上半），再按 height/radius 竖向压扁。
+      // 锚点是**底面中心**，而 SphereGeometry 的上半球本来就从 y=0 起 —— 不用再平移。
+      const seg = part.seg ?? 12;
+      const g = new THREE.SphereGeometry(part.radius, seg, Math.max(2, Math.round(seg / 2)), 0, Math.PI * 2, 0, Math.PI / 2);
+      g.scale(1, part.height / part.radius, 1);
+      geo = g;
+      break;
+    }
     case 'crystal':
       geo = makeCrystal(part.radius, part.height);
       break;
@@ -550,6 +563,8 @@ function nodeSize(part: Part): Vec3 {
       return [part.radius * 2, part.height, part.radius * 2];
     case 'sphere':
       return [part.radius * 2, part.radius * 2, part.radius * 2];
+    case 'dome':
+      return [part.radius * 2, part.height, part.radius * 2];
     case 'crystal':
       return [part.radius * 2, part.height, part.radius * 2];
     case 'flag':
