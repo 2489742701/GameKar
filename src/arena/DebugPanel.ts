@@ -145,7 +145,7 @@ export class DebugPanel {
       make(
         'p',
         'dbg__hint',
-        '拖滑杆调机位（WSAD/QE、拖画面、滚轮也行）。满意点「存这一档」，调好几档后「复制全部机位」发我。',
+        'W/S 调俯仰、A/D 平移、Q/E 转向；也可拖滑杆 / 拖画面 / 滚轮。满意点「存这一档」，最后「复制全部机位」发我。',
       ),
       this.yawInput.parentElement!,
       this.pitchInput.parentElement!,

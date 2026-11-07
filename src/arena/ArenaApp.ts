@@ -618,23 +618,29 @@ export class ArenaApp {
   }
 
   /**
-   * 桌面视角键：W/S 前后、A/D 左右、Q/E 转朝向。每秒 10 格 / 90°。
+   * 桌面视角键（2026-11-07 深夜用户纠正："电脑的 W 和 S 是调整视角的上下俯视的"）。
    *
-   * 走的是和手指拖动同一个 `panByPixels`（内容跟手），所以"按住 W 画面往前推"
-   * 和"手指往下拖"是同一个手感，不用另写一套相机数学。
+   * | 键 | 作用 |
+   * | --- | --- |
+   * | **W / S** | **俯仰 pitch**：W 更俯视（俯角变大）、S 更平视（贴地看兵线），60°/秒 |
+   * | A / D | 左右平移，10 格/秒（仍是 `panByPixels`，和手指拖动同一个手感） |
+   * | Q / E | 转朝向 yaw，90°/秒 |
+   *
+   * 上一版把 W/S 当成"往前/往后平移"了 —— 那是把 WASD 当人物移动键，
+   * 而这里整组键是**调相机**的。俯仰的上下限由 `CameraRig.setPitch` 夹（6°~88°）。
    */
   private stepViewKeys(dt: number): void {
     if (this.keys.size === 0) return;
     const sec = Math.min(0.1, Math.max(0, dt));
     if (sec === 0) return;
+    const tilt = 60 * sec;
+    if (this.keys.has('w')) this.rig.setPitch(this.rig.pitch + tilt);
+    if (this.keys.has('s')) this.rig.setPitch(this.rig.pitch - tilt);
     const px = (10 / this.rig.worldPerPixel()) * sec;
     let dx = 0;
-    let dy = 0;
-    if (this.keys.has('w')) dy += px;
-    if (this.keys.has('s')) dy -= px;
     if (this.keys.has('a')) dx += px;
     if (this.keys.has('d')) dx -= px;
-    if (dx !== 0 || dy !== 0) this.rig.panByPixels(dx, dy);
+    if (dx !== 0) this.rig.panByPixels(dx, 0);
     const turn = 90 * sec;
     if (this.keys.has('q')) this.rig.rotateBy(-turn);
     if (this.keys.has('e')) this.rig.rotateBy(turn);
