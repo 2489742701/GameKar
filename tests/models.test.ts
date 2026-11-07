@@ -247,3 +247,117 @@ describe('磨坊的帆贴着木梁', () => {
     }
   });
 });
+
+/**
+ * **里子必须比外壳小一圈**（2026-11-07 用户实机，原话："后面新加的几个建筑
+ * （兽人房屋和工业工厂），外面的可掉落墙壁和里面穿模了。里面的里子应该是小一点的"）。
+ *
+ * 病灶：这两栋的**本体盒和 `boxShell` 传的宽深一模一样**（工厂 1.56×1.04、
+ * 巢穴 1.2×1.0）。外壳面片厚 0.06，外皮正好落在 ±w/2，而本体的表面也在 ±w/2
+ * ⇒ 两个面**共面**：实机上是墙面闪烁（z-fighting），墙板掉了本体还占着那块体积，
+ * "洞"是假的。老楼一直是缩进的（大本营 1.42→1.06、兵营 1.42→1.2、民居 1.14→0.94）。
+ *
+ * 这条锁从**面片反推**壳的外轮廓，不另抄一份尺寸表 —— 壳一改，判据跟着改。
+ * 只对 `boxShell` 的方楼成立（圆塔用 ringShell，半径口径不同，另有锁）。
+ */
+describe('里子比外壳小一圈：墙片不许和本体共面', () => {
+  /** 板厚：和 models.ts 的 `PANEL_T` 同一个物理量 */
+  const PANEL_T = 0.06;
+  const EPS = 0.01;
+  /** 本体与内皮的最大允许间隙：再大就是"空壳里放了个小盒子" */
+  const MAX_GAP = 0.3;
+
+  interface Box {
+    sx: number;
+    sy: number;
+    sz: number;
+    y0: number;
+    y1: number;
+  }
+
+  /** 静态件里所有**不旋转的盒子**（旋转的是骨刺/斜撑这类装饰，不参与本体判断）。 */
+  function boxesOf(name: keyof typeof ARENA_MODELS): Box[] {
+    const nodes = ARENA_MODELS[name]('blue' as never).static as unknown as {
+      part: { kind: string; size?: [number, number, number] };
+      at?: [number, number, number];
+      rot?: [number, number, number];
+    }[];
+    const out: Box[] = [];
+    for (const n of nodes) {
+      if (n.part.kind !== 'box' || !n.part.size || !n.at) continue;
+      if (n.rot && n.rot.some((r) => Math.abs(r) > 1e-6)) continue;
+      const [sx, sy, sz] = n.part.size;
+      out.push({ sx, sy, sz, y0: n.at[1] - sy / 2, y1: n.at[1] + sy / 2 });
+    }
+    return out;
+  }
+
+  /** 从面片反推方壳的外轮廓（x / z 半宽）与高度带。 */
+  function shellOf(name: keyof typeof ARENA_MODELS) {
+    const panels = ARENA_MODELS[name]('blue' as never).shell as unknown as {
+      x: number;
+      y: number;
+      z: number;
+      h: number;
+      t: number;
+      yaw: number;
+    }[];
+    let halfX = 0;
+    let halfZ = 0;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const p of panels) {
+      const c = Math.cos(p.yaw);
+      const s = Math.sin(p.yaw);
+      // 面片局部 +z 是板厚方向；世界侧向按 yaw 判：|cos|≈1 ⇒ 前后墙（吃 z），否则左右墙（吃 x）
+      if (Math.abs(c) > 0.9) halfZ = Math.max(halfZ, Math.abs(p.z) + p.t / 2);
+      else if (Math.abs(s) > 0.9) halfX = Math.max(halfX, Math.abs(p.x) + p.t / 2);
+      else throw new Error(`${String(name)} 不是方壳（yaw=${p.yaw}），这条锁只管 boxShell`);
+      y0 = Math.min(y0, p.y - p.h / 2);
+      y1 = Math.max(y1, p.y + p.h / 2);
+    }
+    return { halfX, halfZ, y0, y1 };
+  }
+
+  const shellBuildings = ['core', 'barracks', 'house', 'gearFactory', 'orcLair'] as const;
+
+  it('本体盒落在壳的内皮以内（不吃进 0.06 的板厚），也没缩成一个点', () => {
+    for (const name of shellBuildings) {
+      const shell = shellOf(name);
+      const span = shell.y1 - shell.y0;
+      // 本体 = 与壳高度带重叠过半、且水平面积最大的那个盒（楼板/檐口这类横条不算）
+      const inside = boxesOf(name).filter((b) => {
+        const overlap = Math.min(b.y1, shell.y1) - Math.max(b.y0, shell.y0);
+        return overlap > span * 0.5;
+      });
+      expect(inside.length, `${name} 找不到本体盒`).toBeGreaterThan(0);
+      const body = inside.sort((a, b) => b.sx * b.sz - a.sx * a.sz)[0]!;
+
+      const maxX = shell.halfX - PANEL_T - EPS;
+      const maxZ = shell.halfZ - PANEL_T - EPS;
+      expect(body.sx / 2, `${name} 里子宽 ${body.sx} 顶到墙片了（壳外宽 ${shell.halfX * 2}）`).toBeLessThan(maxX + 1e-9);
+      expect(body.sz / 2, `${name} 里子深 ${body.sz} 顶到墙片了（壳外深 ${shell.halfZ * 2}）`).toBeLessThan(maxZ + 1e-9);
+      expect(body.sx / 2, `${name} 里子缩得太狠，墙片掉光会看到一个大空壳`).toBeGreaterThan(maxX - MAX_GAP);
+      expect(body.sz / 2, `${name} 里子缩得太狠，墙片掉光会看到一个大空壳`).toBeGreaterThan(maxZ - MAX_GAP);
+    }
+  });
+
+  /**
+   * 反证：把两栋的旧写法代进**同一组阈值**，必须全部越界。
+   * 旧写法的本体宽深就是照抄 `boxShell` 的入参（工厂 1.56×1.04 / 巢穴 1.2×1.0），
+   * 所以这组数只要有一条不越界，说明上面的阈值给松了、锁是自证的。
+   */
+  it('反证：旧写法（本体宽深照抄壳）代进同一组阈值 ⇒ 必须越界', () => {
+    const old: [keyof typeof ARENA_MODELS, number, number][] = [
+      ['gearFactory', 1.56, 1.04],
+      ['orcLair', 1.2, 1.0],
+    ];
+    for (const [name, w, d] of old) {
+      const shell = shellOf(name);
+      const maxX = shell.halfX - PANEL_T - EPS;
+      const maxZ = shell.halfZ - PANEL_T - EPS;
+      expect(w / 2, `${name} 旧写法的半宽竟然还在阈值内`).toBeGreaterThanOrEqual(maxX);
+      expect(d / 2, `${name} 旧写法的半深竟然还在阈值内`).toBeGreaterThanOrEqual(maxZ);
+    }
+  });
+});

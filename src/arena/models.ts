@@ -573,7 +573,10 @@ export function gearFactoryModel(accent: number): ArenaModel {
     // ---- 厂房本体：全部收在 x ±0.86 / z ±0.60 内
     plinth([1.72, 0.07, 1.2], ARENA_PAL.stoneDark),
     box([1.64, 0.3, 1.12], ARENA_PAL.stone, [0, mid(0.07, 0.3), 0]),
-    box([1.56, 0.82, 1.04], ARENA_PAL.wallDark, [0, mid(0.37, 0.82), 0]),
+    // 里子比外壳**小一圈**（每边 0.10）：外壳面片只占 0.06 厚，里子必须退到内皮以内，
+    // 否则两者同面 —— 实机上就是墙面闪烁（z-fighting），墙板掉了也看不出"洞"。
+    // 老楼（民居 1.14→0.94、兵营 1.42→1.2、大本营 1.42→1.06）都是这个口径。
+    box([1.36, 0.82, 0.84], ARENA_PAL.wallDark, [0, mid(0.37, 0.82), 0]),
     // 木骨架：四角立柱 + 两道横箍
     ...[-0.7, 0.7].flatMap((x) => [
       box([0.08, 0.82, 0.07], ARENA_PAL.wood, [x, mid(0.37, 0.82), 0.53]),
@@ -656,7 +659,8 @@ export function orcLairModel(accent: number): ArenaModel {
   const tusk = 0xd9cda8;
   const out: Node[] = [
     plinth([1.36, 0.08, 1.16], ARENA_PAL.stoneDark),
-    box([1.2, 0.7, 1.0], ARENA_PAL.wallDark, [0, mid(0.08, 0.7), 0]),
+    // 同上：里子退到外壳内皮以内（1.2×1.0 → 1.0×0.8），别再写回和 shell 同尺寸
+    box([1.0, 0.7, 0.8], ARENA_PAL.wallDark, [0, mid(0.08, 0.7), 0]),
     // 兽皮坡顶 + 屋脊（阵营色，蓝红两版一眼分敌我）
     prism([1.32, 0.4, 1.1], roofOf(accent), [0, 0.78, 0]),
     box([1.36, 0.06, 0.12], ridgeOf(accent), [0, mid(1.18, 0.06), 0]),
