@@ -13,17 +13,28 @@ import { el } from '@ui/dom';
 import type { Sfx } from '@audio/sfx';
 import { createBannerEditor } from './bannerEditor';
 
+/** 菜单上的三个模式。`pve1` = 单人守城，`pve2` = 双人同屏守城。 */
+export type MenuMode = 'arena' | 'pve1' | 'pve2';
+
 export interface StartMenuOptions {
   seed: number;
-  /** 点「开始对战」：调用方负责 resume + 移除菜单 */
+  /**
+   * 当前所处的模式。**只影响"主按钮按哪个开始"和文案**，
+   * 不影响其它模式入口是否显示 —— 三个模式永远都能互相切（见下面的坑）。
+   */
+  mode?: MenuMode;
+  /** 点主按钮：调用方负责 resume + 移除菜单（= 继续当前模式） */
   onStart: () => void;
   /**
-   * 点「守城 PVE」：调用方负责跳到 PVE（重开一局）。
-   * 参数是**玩家人数**（1 单人 / 2 同屏双人）—— 两个入口共用这一个回调。
+   * 切到**另一个**模式（要重开一局，所以是跳转而不是原地切换）。
+   *
+   * 2026-11-07 实机踩的坑：上一版只有 `onPve(players)`，而且 PVE 模式下
+   * **整行 PVE 入口都不渲染**（"已经在里面了，别让人反复跳"）。结果玩家从
+   * 对战点进 PVE 之后，URL 一直停在 `?mode=pve`，「再来一局」又是 reload，
+   * **再也回不到普通对战** —— 用户看到的现象是"三个模式只剩一个开始守关"。
+   * 改成三个模式永远互相可切。
    */
-  onPve?: (players: number) => void;
-  /** 当前模式：PVE 时主按钮文案与副标题换一套（`?mode=pve` 直接进菜单时用） */
-  mode?: 'arena' | 'pve';
+  onSwitch?: (mode: MenuMode) => void;
   /** 音效开关（本地记住）。没传就不显示那个按钮 */
   sfx?: Sfx;
 }
@@ -66,40 +77,47 @@ export class StartMenu {
     this.bannerPanel = el('div', 'start__rules start__banner-panel');
 
     // ---- 标题
-    const pveMode = this.opts.mode === 'pve';
+    const mode: MenuMode = this.opts.mode ?? 'arena';
+    const inPve = mode !== 'arena';
     const title = el('div', 'start__title');
     title.append(
       el('h1', 'start__name', 'GAMEKAR'),
       el(
         'p',
         'start__sub',
-        pveMode ? '守城模式 · 守住三波' : '建筑战场 · 三分钟一局',
+        inPve ? '守城模式 · 五波守住大本营' : '建筑战场 · 三分钟一局',
       ),
     );
 
     // ---- 按钮
     const actions = el('div', 'start__actions');
-    const play = el('button', 'start__btn start__btn--primary', pveMode ? '开始守关' : '开始对战');
+    const play = el('button', 'start__btn start__btn--primary', inPve ? '开始守关' : '开始对战');
     play.type = 'button';
     play.addEventListener('click', () => this.opts.onStart());
 
     /**
-     * PVE 的两个入口（2026-11-07 用户："可以单人打，也可以多人打"）。
+     * 另外两个模式的入口（2026-11-07 修正）。
      *
-     * 放在对战下面**单独一行**，因为它是另一套玩法（场地更大、判据不同），
-     * 不是"对战的一个难度选项"—— 混在主按钮队列里玩家会以为点进去还是 1v1。
-     * PVE 模式下这一行不出现（已经在里面了，别让人反复跳）。
+     * 上一版是"PVE 模式下不显示 PVE 入口"，本意是别让人反复跳，
+     * 结果 PVE 的 URL 一旦进去就再也出不来 —— 菜单上只剩「开始守关」。
+     *
+     * 现在的规矩：**当前模式的按钮不重复出现，另外两个永远在**。
+     * 三个状态各对应一行，用户任何时候都能看见"还有哪两个模式可以玩"。
      */
-    let pveRow: HTMLDivElement | null = null;
-    if (!pveMode && this.opts.onPve) {
-      pveRow = el('div', 'start__row');
-      const solo = el('button', 'start__btn start__btn--pve', '守城 PVE');
-      solo.type = 'button';
-      solo.addEventListener('click', () => this.opts.onPve?.(1));
-      const duo = el('button', 'start__btn start__btn--pve', '双人同屏');
-      duo.type = 'button';
-      duo.addEventListener('click', () => this.opts.onPve?.(2));
-      pveRow.append(solo, duo);
+    const allModes: { key: MenuMode; label: string }[] = [
+      { key: 'arena', label: '普通对战' },
+      { key: 'pve1', label: '守城 PVE' },
+      { key: 'pve2', label: '双人同屏' },
+    ];
+    const others = allModes.filter((m) => m.key !== mode);
+
+    const modeRow = el('div', 'start__row');
+    for (const m of others) {
+      const btn = el('button', 'start__btn start__btn--pve', m.label);
+      btn.type = 'button';
+      btn.dataset['mode'] = m.key;
+      btn.addEventListener('click', () => this.opts.onSwitch?.(m.key));
+      modeRow.append(btn);
     }
 
     const help = el('button', 'start__btn', '玩法说明');
@@ -110,8 +128,7 @@ export class StartMenu {
     bannerBtn.type = 'button';
     bannerBtn.addEventListener('click', () => this.showBanner(true));
 
-    actions.append(play);
-    if (pveRow) actions.append(pveRow);
+    actions.append(play, modeRow);
     actions.append(help, bannerBtn);
 
     const foot = el('div', 'start__foot', `seed ${this.opts.seed} · 建筑协调经济 · v0.4`);

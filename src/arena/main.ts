@@ -121,7 +121,17 @@ hud = new ArenaHud(container, app, {
       hud?.say(res.reason ?? '刷新不了', 'warn');
     }
   },
+  /** 重开当前模式（URL 不动）。想换模式走下面的「回菜单」 */
   onRestart: () => location.reload(),
+  /**
+   * 回开始菜单：**必须把 search 清掉**。
+   * 只 `location.reload()` 的话 `?mode=pve` 会一直粘着，玩家永远回不到普通对战 ——
+   * 这正是上一版"三个模式只剩一个开始守关"的成因。
+   */
+  onMenu: () => {
+    sessionStorage.removeItem(AUTOSTART_KEY);
+    location.href = location.pathname;
+  },
 });
 
 hud.setViewStatus(app.director.status);
@@ -138,17 +148,22 @@ if (!skipMenu && !autoStart) {
   hud.el.style.visibility = 'hidden';
   const menu = new StartMenu(container, {
     seed: seedFromUrl(20261027),
-    mode,
+    // 当前模式只决定"主按钮开始的是哪一局"，另外两个模式的入口永远都在
+    mode: mode === 'pve' ? (players >= 2 ? 'pve2' : 'pve1') : 'arena',
     sfx: app.sfx,
     /**
-     * 「守城 PVE」/「双人同屏」：跳过去直接开打。
+     * 切模式 = 重开一局，所以走**跳转**而不是原地切。
      *
-     * 写一次性 autostart 标记再导航 —— reload 之后 `?mode=pve` 生效，
-     * 菜单不再弹（和"改完旗帜自动开打"走同一条通道）。
+     * 回普通对战时 `location.search = ''` 是必须的：`?mode=pve` 不主动清掉就会一直粘着，
+     * `location.reload()`（「再来一局」）永远回到 PVE —— 上一版就是这么把普通模式弄丢的。
      */
-    onPve: (n) => {
+    onSwitch: (m) => {
       sessionStorage.setItem(AUTOSTART_KEY, '1');
-      location.search = n >= 2 ? '?mode=pve&players=2' : '?mode=pve';
+      if (m === 'arena') {
+        location.search = '';
+      } else {
+        location.search = m === 'pve2' ? '?mode=pve&players=2' : '?mode=pve';
+      }
     },
     onStart: () => {
       // 浏览器只在**用户手势**里允许建 AudioContext，这一下是全场唯一的天然时机

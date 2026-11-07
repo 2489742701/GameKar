@@ -23,6 +23,11 @@ export interface ArenaHudOptions {
   /** `player` = 玩家槽下标（双人同屏时 0 或 1） */
   onSelectCard: (slot: number, player: number) => void;
   onRestart: () => void;
+  /**
+   * 结算面板的「回菜单」：清掉 `?mode=…` 回到开始菜单。
+   * 没有它，打完一局只能不断重开同一关 —— 换模式得去改 URL（2026-11-07 用户反馈）。
+   */
+  onMenu?: () => void;
   onCycleView: () => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
   onReroll: (player: number) => void;
@@ -183,30 +188,47 @@ export class ArenaHud {
     const settingsNote = make('p', 'ahud__settings__note', '改完存档，点「再来一局」就能带上新旗上场');
     this.settingsPanel.append(settingsHead, settingsNote, createBannerEditor());
     /**
-     * 座位按玩家数建：单人 1 个（DOM 与老版本一致），双人 2 个。
-     * 第二个座位挂在 `.ahud` 上绝对定位到屏幕顶部并旋转 180° ——
-     * 手机平放桌上，对面那位看到的手牌就是正的。
+     * 座位只给**玩家阵营**建（2026-11-07 实机纠错，用户："我甚至能看到敌方的卡牌和敌方的经济"）。
+     *
+     * 原来写的是 `Math.max(1, players.length)` —— 1v1 里 `players` 是
+     * `[蓝方玩家, 红方 AI]`，长度 2，于是**给红方 AI 也建了一套座位**：
+     * 屏幕顶部挂着敌方的手牌和金币条，等于把底牌全亮给玩家。
+     * 判断依据只能是"这个槽属于哪个阵营"，不是数组有多长。
+     *
+     * 单人局（1v1 / PVE 单人）恒 1 个座位，DOM 与老版本一致；
+     * 只有 PVE 双人（同阵营两个玩家）才会出现第二个。
      */
-    const playerCount = Math.max(1, this.app.world.players.length);
-    this.el.dataset['players'] = String(playerCount);
+    const seats = this.app.world.seatPlayers();
+    this.el.dataset['players'] = String(Math.max(1, this.app.world.seatCount));
     bottom.append(tools);
     const tops: HTMLElement[] = [];
-    for (let i = 0; i < playerCount; i++) {
-      const seat = this.buildSeat(i);
+    seats.forEach((p, order) => {
+      // 用槽自己的 id 当索引（`players` 数组下标），不要拿循环序数 ——
+      // 两者只在"红方也占槽"时才恰好相等，改一个就错位
+      const seat = this.buildSeat(p.id);
       this.seats.push(seat);
-      if (i === 0) bottom.append(seat.root);
+      if (order === 0) bottom.append(seat.root);
       else tops.push(seat.root);
-    }
+    });
     this.notice.dataset['hidden'] = '1';
     this.el.append(top, bottom, this.toast, this.notice, this.end, this.settingsPanel, this.big, ...tops);
     host.append(this.el);
     this.end.hidden = true;
-    this.end.append(
-      make('div', 'ahud__end__title', ''),
-      this.endSub,
-      make('button', 'ahud__end__btn', '再来一局'),
-    );
-    (this.end.lastChild as HTMLElement).addEventListener('click', () => this.opts.onRestart());
+    /**
+     * 结算面板两个出口（2026-11-07 用户："三个模式只变成开始守关"）：
+     * 「再来一局」重开当前模式（reload，URL 不动）；
+     * 「回菜单」把 `?mode=…` 清掉回开始菜单 —— 那里三个模式都能选。
+     * 上一版只有「再来一局」，打完一局就只能不断重开同一关。
+     */
+    const again = make('button', 'ahud__end__btn', '再来一局');
+    again.type = 'button';
+    again.addEventListener('click', () => this.opts.onRestart());
+    const toMenu = make('button', 'ahud__end__btn ahud__end__btn--ghost', '回菜单');
+    toMenu.type = 'button';
+    toMenu.addEventListener('click', () => this.opts.onMenu?.());
+    const endBtns = make('div', 'ahud__end__btns');
+    endBtns.append(again, toMenu);
+    this.end.append(make('div', 'ahud__end__title', ''), this.endSub, endBtns);
     this.setupCardDrag();
     this.refresh();
   }

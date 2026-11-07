@@ -175,6 +175,34 @@ describe('PVE 玩家槽：单人 1 个、双人 2 个（都在 blue）', () => {
     expect(w.players.map((p) => p.side)).toEqual(['blue', 'red']);
     expect(w.players[1]!.auto).toBe(true);
   });
+
+  /**
+   * **座位数 ≠ 玩家槽数**（2026-11-07 实机踩到的信息泄露）。
+   *
+   * HUD 一开始拿 `players.length` 当"要显示几套手牌"，于是 1v1 里
+   * `[蓝方, 红方AI]` 长度 2 ⇒ 给红方 AI 也建了一套座位，
+   * **敌方的手牌和金币直接摆在屏幕顶部**（用户："我甚至能看到敌方的卡牌和敌方的经济"）。
+   * 判据只能是"这个槽属于哪个阵营"。下面三条锁把三个模式一起钉住。
+   */
+  it('座位只算玩家阵营：1v1 里红方 AI 不占座位（不许露出敌方手牌与金币）', () => {
+    const w = new ArenaWorld();
+    expect(w.players).toHaveLength(2); // 槽有两个
+    expect(w.seatCount).toBe(1); // 座位只有一个
+    expect(w.seatPlayers().map((p) => p.side)).toEqual(['blue']);
+  });
+
+  it('座位数：PVE 单人 1 个、双人 2 个，且都是蓝方', () => {
+    const one = new ArenaWorld({ mode: 'pve', level: LEVEL.id, players: 1 });
+    expect(one.seatCount).toBe(1);
+    const two = new ArenaWorld({ mode: 'pve', level: LEVEL.id, players: 2 });
+    expect(two.seatCount).toBe(2);
+    expect(two.seatPlayers().map((p) => p.side)).toEqual(['blue', 'blue']);
+  });
+
+  it('反证：`players.length` 在 1v1 里是 2 —— 两个数不是一回事，别拿它当座位数', () => {
+    const w = new ArenaWorld();
+    expect(w.players.length).not.toBe(w.seatCount);
+  });
 });
 
 /**

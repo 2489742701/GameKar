@@ -525,8 +525,11 @@ export class ArenaApp {
      * 双人同屏时屏幕**上下各压着一套手牌**（2026-11-07），战场可视高度少掉约 130px。
      * 所以竖屏再退一点（+10%）：不然自家最下面那排楼正好被手牌盖住 ——
      * 那是玩家最需要盯着看的地方（大本营就在那儿）。
+     *
+     * 判据必须是 `seatCount`（玩家阵营有几个人），**不能是 `players.length`** ——
+     * 1v1 里 `players` 也长度 2（含红方 AI），那样 1v1 的视角会被白白缩小 10%。
      */
-    const seatCrowd = this.world.players.length > 1 ? 1.1 : 1;
+    const seatCrowd = this.world.seatCount > 1 ? 1.1 : 1;
     /**
      * 机位自带的 zoomFactor（「正对」是 0.96）会再乘一道 —— 不抵消的话
      * `rows × 1.02` 平白缩小 4%，战场两边各露半格看台。

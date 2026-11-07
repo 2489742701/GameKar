@@ -1135,9 +1135,23 @@
   z-index: 2;
 }
 
-/* 双人时共享顶栏要给上方那套手牌让位，不然波次条被压在卡牌底下 */
+/**
+ * 双人时共享顶栏**沉到底部手牌上方**（2026-11-07 实机纠错）。
+ *
+ * 一开始是反过来做的：给顶栏 `margin-top: 132px` 往下让位给上方手牌。
+ * 结果它正好落在战场最上面那一带 —— 而那里是**怪的出生走廊**，
+ * 玩家最需要盯着的地方。实机截图里怪从哪儿下来完全看不见。
+ * 底部手牌上方本来就有一百多像素的空底盘（相机按 rows 贴满，纵深够不着），
+ * 把这条读数放过去，两边都不挡。
+ */
 .ahud[data-players='2'] .ahud__top {
-  margin-top: 132px;
+  order: 2;
+  margin-top: auto;
+}
+
+.ahud[data-players='2'] .ahud__bottom {
+  order: 3;
+  margin-top: 6px;
 }
 
 /* 金币条 + 刷新挤一行：刷新是"花 5 金换一手牌"，跟钱绑在一起才顺手 */
@@ -1169,4 +1183,19 @@
 
 .ahud__seat--p1 .ahud__card:active {
   opacity: 1;
+}
+
+/* 结算面板的两个出口并排：再来一局（实心）+ 回菜单（描边） */
+.ahud__end__btns {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.ahud__end__btn--ghost {
+  background-image: none;
+  background-color: transparent;
+  color: var(--text);
+  border-color: var(--wood-3);
 }
