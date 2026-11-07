@@ -390,6 +390,8 @@ export class ArenaHud {
      * （每 1 金一道），数字在最上层 —— 攒一格亮一格，攒满整条泛金光。
      */
     const bank = make('div', 'ahud__bank');
+    // 刻度间距按上限算，别在 CSS 里写死 5%（cap 20 那版就是这么漏的）
+    bank.style.setProperty('--gold-tick', `${100 / ECONOMY.cap}%`);
     const goldText = make('b', 'ahud__bank__num', '8');
     const goldCap = make('span', 'ahud__bank__cap', `/${ECONOMY.cap}`);
     const goldFill = make('span', 'ahud__bank__fill');

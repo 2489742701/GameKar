@@ -25,7 +25,7 @@
  * ③ 两次刷新之间留冷却，不会把钱刷光。
  */
 
-import { AI, REROLL, SUPPLY, type ArenaCard, type BuildingKind } from './config';
+import { AI, ECONOMY, REROLL, SUPPLY, type ArenaCard, type BuildingKind } from './config';
 
 /** 容器读数（从 `ArenaWorld.supplyOf()` 来，视图与 AI 读同一份，别自己算）。 */
 export interface SupplyView {
@@ -277,13 +277,18 @@ export function chooseCard(view: AiView): number | null {
   if (affordable.length === 0) return null;
   if (top.kind === 'building') {
     /**
-     * 建筑值得等，但**不能无限等**：金币上限 20，攒到 16 还不花就是纯浪费。
+     * 建筑值得等，但**不能无限等**：快顶到金币上限还没花就是纯浪费。
      * 实测（2026-11-06）加了容器过滤之后 AI 变得过于保守：
      * 24 局剩余楼 39.9 栋、平均只拆 1.4 栋、双方 120 秒一个兵都没出 ——
      * 全在「攒钱等一张建筑卡」。钱快满时先出得起的军队推线，才叫强化。
+     *
+     * 阈值写成 `cap - 4`（2026-11-07 上限 20→30 时从写死的 16 改过来）：
+     * 上限 20 ⇒ 16，上限 30 ⇒ 26，保持"离封顶只差 4 金就别再攒"的原意。
+     * 写死 16 的话上限提到 30 之后 AI 仍在 16 金就乱花，等于把这次改上限
+     * 的一半意义吃掉。判据跟着 `ECONOMY.cap` 走，不另算一套账。
      */
     const army = affordable.filter((c) => c.kind !== 'building');
-    if (view.gold >= 16 && army.length > 0) {
+    if (view.gold >= ECONOMY.cap - 4 && army.length > 0) {
       let bestArmy = army[0]!;
       for (const c of army) if (rank(c) < rank(bestArmy)) bestArmy = c;
       return hand.indexOf(bestArmy);

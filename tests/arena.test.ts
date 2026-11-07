@@ -52,8 +52,8 @@ function give(world: ArenaWorld, cardId: string, side: 'blue' | 'red' = 'blue'):
   return card;
 }
 
-describe('金币：上限 20、按秒回、开局 8', () => {
-  it('开局 8，涨到 20 就停（2.5 秒一格 ⇒ 55 秒足够从 8 走到 20）', () => {
+describe('金币：上限读 ECONOMY.cap、按秒回、开局 8', () => {
+  it('开局 8，涨到上限就停（2 秒一格 ⇒ 55 秒足够从 8 走到上限）', () => {
     const world = new ArenaWorld({ seed: 1 });
     expect(world.gold.blue).toBe(ECONOMY.start);
     run(world, 55);
@@ -139,7 +139,7 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
 
   it('磨坊每 5 秒多给 2 金', () => {
     const world = new ArenaWorld({ seed: 5 });
-    world.gold.blue = 10; // 磨坊 8 费；留点余量，别一开盘就顶到上限 20
+    world.gold.blue = 10; // 磨坊 8 费；留点余量，别一开盘就顶到上限
     give(world, 'mill');
     world.playCard('blue', 0, 6, 11);
     // 先把磨坊垒完（施工期间不生金），再从头数 5 秒

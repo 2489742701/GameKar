@@ -244,7 +244,13 @@
   transition: width 0.45s ease;
 }
 
-/* 每 1 金一道刻度（cap = 20 ⇒ 5% 一格），压在填充上 —— 攒一格亮一格的读法就靠它 */
+/**
+ * 每 1 金一道刻度，压在填充上 —— 攒一格亮一格的读法就靠它。
+ *
+ * 格距**不能写死百分比**：cap=20 时是 5%，2026-11-07 改成 30 就该是 3.33%，
+ * 写死会把"一格"画成 1.5 金，读数变成假的。现在由 HUD 按
+ * `100 / ECONOMY.cap` 设进 `--gold-tick`（判据只有一处），这里只读变量。
+ */
 .ahud__bank::after {
   content: '';
   position: absolute;
@@ -252,9 +258,9 @@
   background: repeating-linear-gradient(
     90deg,
     transparent 0,
-    transparent calc(5% - 1px),
-    rgba(0, 0, 0, 0.38) calc(5% - 1px),
-    rgba(0, 0, 0, 0.38) 5%
+    transparent calc(var(--gold-tick, 5%) - 1px),
+    rgba(0, 0, 0, 0.38) calc(var(--gold-tick, 5%) - 1px),
+    rgba(0, 0, 0, 0.38) var(--gold-tick, 5%)
   );
   pointer-events: none;
 }
