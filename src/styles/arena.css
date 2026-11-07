@@ -12,13 +12,26 @@
 }
 
 .ahud__top {
-  display: flex;
+  /**
+   * 三段式（2026-11-07 晚用户："时间放在中间"）：
+   * 左右两列都是 `1fr`，中间 `auto` —— 只有等宽的两侧才能把时钟真正压在屏幕中线上。
+   * 原来 flex 的 space-between 会把时钟推到"左边三个读数的右边"，
+   * 读数一变多就偏，看起来像没居中。
+   */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  /* 2026-11-06：顶栏只留四样（人口/面包/时间/金币），三项分开撑满一行 */
-  justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
   pointer-events: auto;
+}
+
+.ahud__top > .ahud__clock {
+  justify-self: center;
+}
+
+.ahud__top > .ahud__tools {
+  justify-self: end;
 }
 
 .ahud__hp {
@@ -658,15 +671,22 @@
 .dbg {
   position: absolute;
   left: calc(var(--safe-left) + 8px);
-  top: calc(var(--safe-top) + 64px);
+  /* 上下都钉住（2026-11-07 晚）：只写 top + max-height:90vh 的话，
+   * 手机横屏下面板底边会落到屏幕外，「存这一档」永远点不到 ——
+   * 实测 1080 高的屏，top 72 + 90vh(972) = 1044，再加内边距就溢出了。 */
+  /* 横屏手机的 CSS 视口只有 ~390px 高（2400 物理宽 / 2.75 密度 → 873×393），
+   * 面板从 64px 起跳就只剩 317px，五根滑杆根本放不下 —— 实测「存这一档」被顶出屏幕。
+   * 所以贴着顶栏下方起、几乎顶到底，再把行距压紧（见 .dbg__row / gap）。 */
+  top: calc(var(--safe-top) + 8px);
+  bottom: calc(var(--safe-bottom) + 8px);
   width: min(340px, 92vw);
-  max-height: min(84vh, 680px);
+  max-height: none;
   overflow-y: auto;
-  padding: 10px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  z-index: 40;
+  gap: 4px;
+  z-index: 60;
   pointer-events: auto;
   scrollbar-width: thin;
 }
@@ -697,6 +717,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 20px;
   font-size: var(--fs-xs);
   color: var(--text-dim);
 }
@@ -799,6 +820,34 @@
 .dbg__empty {
   font-size: var(--fs-xs);
   color: var(--text-dim);
+}
+
+/* 可删项 / 账本的折叠区：默认收起，把上半截（调机位）留给一屏 */
+.dbg__fold {
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  padding-top: 4px;
+}
+
+.dbg__fold__sum {
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  padding: 2px 0;
+  list-style: none;
+}
+
+.dbg__fold__sum::marker,
+.dbg__fold__sum::-webkit-details-marker {
+  display: none;
+}
+
+.dbg__fold__sum::before {
+  content: '▸ ';
+  color: var(--gold);
+}
+
+.dbg__fold[open] > .dbg__fold__sum::before {
+  content: '▾ ';
 }
 
 .dbg__log {
@@ -945,11 +994,24 @@
  */
 .ahud__tools {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 6px;
   pointer-events: auto;
-  /* 视角清单是 absolute 定位的，靠这一行当锚点 */
-  position: relative;
+}
+
+/**
+ * 顶栏那一排（视角 / 设置 / 退出，2026-11-07 晚）。
+ * 手机上这三颗要挤进顶栏右列，所以比底部按钮矮一档、内边距也收一档；
+ * `align-self` 要重置 —— `.ahud__view` 原来写的是 `flex-end`（给底部行用的），
+ * 在顶栏会把按钮压到格子底边，看起来像掉了一截。
+ */
+.ahud__tools--top .ahud__view {
+  align-self: center;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /**
@@ -1121,13 +1183,20 @@
  * 战斗中由画布右键 / 长按空地叫出，浮在战场右下。
  */
 .ahud__settings {
+  /**
+   * **居中弹层**（2026-11-07 晚第三次改）。前两版都栽在同一件事上：
+   * 手机横屏的 CSS 视口只有 ~390px 高，`bottom: safe+150` 会顶出屏幕；
+   * 改成 `top+bottom` 又让 `__body` 的 `flex:1` 塌成 0（标签下面一片空，
+   * 「现在就托管」整行消失）。居中 + `max-height: 88vh` + body 自己封顶，
+   * 不依赖 safe-area 的具体数值，也不再跟 flex 抢高度。
+   */
   position: absolute;
-  right: calc(var(--safe-right) + 8px);
-  bottom: calc(var(--safe-bottom) + 150px);
-  z-index: 26;
-  width: min(400px, 92vw);
-  max-height: min(70vh, 560px);
-  /* 整体不滚，交给 .ahud__settings__body：标签栏和底部说明永远看得见 */
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 55;
+  width: min(420px, 92vw);
+  max-height: 88vh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1173,8 +1242,10 @@
 }
 
 .ahud__settings__body {
-  flex: 1 1 auto;
+  /* 不抢剩余高度（父容器是 auto 高度），只在自己太长时滚动 */
+  flex: 0 0 auto;
   min-height: 0;
+  max-height: 52vh;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1508,9 +1579,6 @@
     bottom: 208px;
   }
 
-  .ahud__settings {
-    bottom: calc(var(--safe-bottom) + 178px);
-  }
 
   .ahud__end__title {
     font-size: 20px;
@@ -1537,9 +1605,6 @@
     bottom: 164px;
   }
 
-  .ahud__settings {
-    bottom: calc(var(--safe-bottom) + 138px);
-  }
 }
 
 /* 手机横屏（高度 ≤ 520px）：战场本来就只剩一条，HUD 再占 160px 就什么都不剩了 */
@@ -1581,9 +1646,9 @@
     bottom: 140px;
   }
 
+  /* 居中弹层不按 bottom 定位；手机上只把最大高度再收一档 */
   .ahud__settings {
-    bottom: calc(var(--safe-bottom) + 112px);
-    max-height: min(62vh, 420px);
+    max-height: 82vh;
   }
 
   .ahud__end {

@@ -99,11 +99,6 @@ const app = await ArenaApp.boot({
     debug?.refresh();
   },
   /**
-   * 长按空地 = 叫出设置面板（手机上没有右键，长按就是它的等价物）。
-   * 桌面端另有 `contextmenu` 那条路，挂在 HUD 里（它才知道面板在哪）。
-   */
-  onRequestSettings: () => hud?.toggleSettings(true),
-  /**
    * 闲置自动托管接管时给一句提示：玩家最怕的是"怎么突然自己动起来了"。
    * 手动点开的那条路不提示（按钮自己会变成「托管 · 手」）。
    */
@@ -146,6 +141,12 @@ hud = new ArenaHud(container, app, {
     hud?.say(manual ? '已托管，再点一次「托管」交还给自己' : '控制权已交还给你');
     hud?.refresh();
   },
+  /**
+   * 顶栏「调试」按钮：开关相机面板。手机没有 F2，这是**唯一**能点到的入口
+   * （2026-11-07 用户："我的 debug 模式你也没给我准备好，我没办法调整摄像机"）。
+   * 面板本身是临时件，定稿机位后跟它一起删。
+   */
+  onToggleDebug: () => debug?.toggle(),
   onReroll: (player = 0) => {
     const res = app.rerollHand(player);
     if (res.ok) {

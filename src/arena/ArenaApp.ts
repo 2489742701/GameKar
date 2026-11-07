@@ -70,7 +70,6 @@ export interface ArenaAppOptions {
    * 为什么走回调而不是让 App 直接拿 HUD：App 是 three 那一层，不该认识设置面板；
    * 长按落在**建筑**上仍然是原来的"看血量"提示，只有落在空地才是叫设置。
    */
-  onRequestSettings?: () => void;
   /** 托管状态变了（HUD 用来提示"已自动托管，点屏幕拿回控制权"） */
   onAutoPilot?: (state: AutoPilotState) => void;
 }
@@ -910,7 +909,11 @@ export class ArenaApp {
     const cell = worldToCell(hit.x, hit.z);
     const b = this.buildingAtCell(cell);
     if (!b) {
-      this.opts.onRequestSettings?.();
+      /**
+       * 长按空地**不再**叫设置（2026-11-07 晚）。设置入口回到顶栏按钮，
+       * 长按这一个手势只留给两件事：选中牌时放牌、按到楼时看血量。
+       * 手势越少越不容易误触 —— 之前"长按想放牌结果弹出设置面板"就是这条造成的。
+       */
       return false;
     }
     const hp = `${Math.round(b.hp)}/${b.maxHp}`;

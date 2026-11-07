@@ -70,6 +70,11 @@ export interface ArenaHudOptions {
   onCycleView: () => void;
   /** 工具行「托管」按钮：切手动托管开/关（2026-11-07） */
   onToggleAuto: () => void;
+  /**
+   * 相机调试面板开关（可空）。传了才在顶栏长一个「调试」按钮 ——
+   * 手机没有 F2，而用户要自己调机位、把 ID 发回来，所以得有一个能点的入口。
+   */
+  onToggleDebug?: () => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
   onReroll: (player: number) => void;
 }
@@ -210,13 +215,22 @@ export class ArenaHud {
     this.clockOt.append('加时');
     this.clock.append(this.clockOt);
 
-    top.append(supply, this.clock);
+    /**
+     * 顶栏三段（2026-11-07 晚用户："设置不应该是在顶栏那边，关和视角、退出也应在顶栏上面显示，
+     * 时间放在中间"）：
+     *   左 = 人口 / 面包 / 民居；中 = 倒计时；右 = 视角 / 设置 / 退出。
+     * 时间居中不是"看起来差不多"，是 CSS grid 的 `1fr auto 1fr` —— 左右两列等宽，
+     * 中间那列才真正在屏幕中线上（原来 flex space-between 会被左边三个读数挤偏）。
+     */
 
     /**
      * 座位（2026-11-07 双人同屏）：每个玩家一套手牌 + 一条金币条。
      * 单人局只建 1 个，DOM 与老版本一致；双人时第二个座位整体转到屏幕顶部。
      */
     const bottom = make('div', 'ahud__bottom');
+    /** 顶栏那一排：视角 / 设置 / 退出（用户点名的三个） */
+    const topTools = make('div', 'ahud__tools ahud__tools--top');
+    /** 底部那一排：托管 + 调试（常用但不属于"顶栏三件套"） */
     const tools = make('div', 'ahud__tools');
     /**
      * 视角按钮（2026-11-07 傍晚定稿）：**点一下切一档**，不弹清单、不两段式。
@@ -247,7 +261,26 @@ export class ArenaHud {
     this.autoBtn = auto;
     auto.type = 'button';
     auto.addEventListener('click', () => this.opts.onToggleAuto());
-    tools.append(view, auto, quit);
+    /**
+     * 设置按钮（2026-11-07 晚用户："设置不应该是在顶栏那边"）。
+     *
+     * 中午那版按"游戏栏目不需要设置，右键可以"把按钮从工具行撤了，只留右键 / 长按空地。
+     * 用户实际用下来不认：右键是**隐藏入口**，手机长按空地又跟"长按放牌"抢手势。
+     * 现在恢复成顶栏的可见按钮，右键与长按照样能用（三条路都通，不是二选一）。
+     */
+    const settings = make('button', 'ahud__view ahud__settingsbtn', '设置');
+    settings.type = 'button';
+    settings.addEventListener('click', () => this.openSettings());
+    /** 相机调试入口（开发期）：手机没有 F2，得有个能点的。只在 dev / ?debug=1 时挂上 */
+    const debugBtn = this.opts.onToggleDebug ? make('button', 'ahud__view ahud__debugbtn', '调试') : null;
+    if (debugBtn && this.opts.onToggleDebug) {
+      debugBtn.type = 'button';
+      debugBtn.addEventListener('click', () => this.opts.onToggleDebug?.());
+    }
+    topTools.append(view, settings, quit);
+    tools.append(auto);
+    if (debugBtn) tools.append(debugBtn);
+    top.append(supply, this.clock, topTools);
     /**
      * 设置面板（2026-11-06 用户："这个设置能不能额外准备一个自定义设置里面给他处理"）：
      * 战斗中也能调花色 —— 只攒存档，**下一局生效**（「再来一局」= reload 读新档）。
@@ -291,13 +324,12 @@ export class ArenaHud {
     this.settingsPanel.append(settingsHead, tabs, body, this.settingsHint);
     this.selectSettingsTab(this.settingsTab);
     /**
-     * 右键 = 设置。`PointerInput` 在画布上已经 `preventDefault` 掉了浏览器菜单，
-     * 但那是"别弹系统菜单"，不会吃掉别的监听者，这里照收。
+     * 右键**不再**打开设置（2026-11-07 晚用户："为什么右键会打开设置啊？"）。
+     *
+     * 中午那版把设置按钮从工具行撤了、只留右键/长按，等于把最常用的入口藏进
+     * 一个没人会去试的手势里。现在入口回到顶栏「设置」按钮，这两条隐藏路径一起下掉 ——
+     * 右键在画布上就只表示"不弹系统菜单"（`PointerInput` 里的 preventDefault 仍保留）。
      */
-    this.app.stage.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      this.openSettings();
-    });
     /**
      * 座位只给**玩家阵营**建（2026-11-07 实机纠错，用户："我甚至能看到敌方的卡牌和敌方的经济"）。
      *
@@ -311,7 +343,7 @@ export class ArenaHud {
      */
     const seats = this.app.world.seatPlayers();
     this.el.dataset['players'] = String(Math.max(1, this.app.world.seatCount));
-    // 工具行（视角 / 退出）压在手牌上方；座位自己挂到同一列的下半截
+    // 顶栏那排（视角/设置/退出）已经挂进 top；底部这一排只剩托管与调试
     bottom.append(tools);
     const tops: HTMLElement[] = [];
     seats.forEach((p, order) => {

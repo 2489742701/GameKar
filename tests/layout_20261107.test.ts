@@ -87,15 +87,24 @@ describe('横屏宽卡 / 竖屏高卡', () => {
     expect(p).toContain('.ahud__card__need');
   });
 
-  it('底栈变高时 toast / 设置面板跟着抬（不压在手牌上）', () => {
+  /**
+   * 2026-11-07 晚：设置面板从"压在手牌上方、靠 bottom 抬"改成**居中弹层**，
+   * 所以它不再属于"跟着底栈抬"的那一族（toast 仍然要抬）。
+   * 这条锁顺便钉住"不许再用 bottom 给它定位" —— 那是把它挤成一条缝的元凶
+   * （top+bottom 同时生效时高度被夹死，手机上只剩标题那一行）。
+   */
+  it('底栈变高时 toast 跟着抬；设置面板是居中弹层，不再按 bottom 定位', () => {
     const p = media('(orientation: portrait)');
     expect(p).toContain('.ahud__toast');
-    expect(p).toContain('.ahud__settings');
     expect(p).toContain('.ahud__end__title');
     const short = media('(orientation: landscape) and (max-height: 520px)');
     expect(short).toContain('.ahud__toast');
-    expect(short).toContain('.ahud__settings');
     expect(short).toContain('.ahud__end');
     expect(short).toContain('.ahud__top');
+    const panel = css.slice(css.indexOf('.ahud__settings {'), css.indexOf('.ahud__settings__tabs'));
+    expect(panel).toContain('transform: translate(-50%, -50%)');
+    expect(panel).not.toMatch(/^\s*bottom:/m);
+    // 反证：媒体查询里也不许再给它补 bottom
+    expect(css).not.toMatch(/\.ahud__settings \{\s*bottom:/);
   });
 });

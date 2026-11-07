@@ -112,12 +112,20 @@ export class DebugPanel {
     this.log.readOnly = true;
     this.log.placeholder = '记下的东西会出现在这里，复制后发给我即可';
 
+    const foldBox = make('details', 'dbg__fold');
+    foldBox.append(
+      make('summary', 'dbg__fold__sum', '要删的东西 / 账本（点开）'),
+      featureBox,
+      this.log,
+      foot,
+    );
+
     this.el.append(
       head,
       make(
         'p',
         'dbg__hint',
-        '拖滑杆调机位（也可以游戏里用 WSAD / QE、右键拖动、滚轮）。满意就「存这一档」，调好几档后「复制全部机位」发给我。',
+        '拖滑杆调机位（WSAD/QE、拖画面、滚轮也行）。满意点「存这一档」，调好几档后「复制全部机位」发我。',
       ),
       this.yawInput.parentElement!,
       this.pitchInput.parentElement!,
@@ -128,11 +136,12 @@ export class DebugPanel {
       make('div', 'dbg__label', '我调的机位（发我这个）'),
       this.slotsBox,
       make('div', 'dbg__row', [copySlots, clearSlots]),
-      make('div', 'dbg__label', '可删项'),
-      featureBox,
-      make('div', 'dbg__label', '账本'),
-      this.log,
-      foot,
+      /**
+       * 可删项 + 账本收进折叠区（2026-11-07 晚）。
+       * 五根滑杆 + 槽位 + 8 条可删项 + 账本一屏放不下，手机上"存这一档"会被顶到屏幕外 ——
+       * 而这一轮真正要用的是上面那半截（调机位）。折叠默认收起，需要时再点开。
+       */
+      foldBox,
     );
     this.el.hidden = true;
     this.paintSlots();
