@@ -20,6 +20,34 @@ import { saveControls, type ControlPrefs } from './controls';
 
 
 
+/**
+ * 设置面板的三个「窗口」（2026-11-07 用户："设置栏目应该有多个窗口，
+ * 就是调不同的东西，而不是压在一起"）。
+ *
+ * 每页自带一句说明，写清**这一页的东西什么时候生效** —— 托管/方向是立刻生效
+ * 且常驻保存，花色是下一局生效。之前三样堆在一条滚动栏里，这句说明混在一起
+ * 反而谁都没说清。
+ */
+type SettingsTab = 'auto' | 'controls' | 'banner';
+
+const SETTINGS_TABS: { key: SettingsTab; label: string; hint: string }[] = [
+  {
+    key: 'auto',
+    label: '托管',
+    hint: '改完立刻生效并存在本机；自动托管点屏幕就交还，手动托管要再点一次才关。',
+  },
+  {
+    key: 'controls',
+    label: '方向',
+    hint: '改完立刻生效、存在本机，下次进游戏还是你选的方向。',
+  },
+  {
+    key: 'banner',
+    label: '旗帜',
+    hint: '改完存档；点「再来一局」带上新旗上场（花色下一局生效）。',
+  },
+];
+
 export interface ArenaHudOptions {
   /** `player` = 玩家槽下标（双人同屏时 0 或 1） */
   onSelectCard: (slot: number, player: number) => void;
@@ -96,8 +124,13 @@ export class ArenaHud {
   private lastUnstaffed = new Set<string>();
   private readonly toast = make('div', 'ahud__toast');
   private readonly end = make('div', 'ahud__end');
-  /** 自定义设置面板（花色编辑器 + 关闭按钮）；默认收起 */
+  /** 设置面板（2026-11-07 改成三页：托管 / 方向 / 旗帜）；默认收起 */
   private readonly settingsPanel: HTMLElement;
+  /** 当前打开的标签页；页面内记住，下次叫出设置还是这一页 */
+  private settingsTab: SettingsTab = 'auto';
+  private readonly settingsTabButtons: HTMLButtonElement[] = [];
+  private readonly settingsPanes = new Map<SettingsTab, HTMLElement>();
+  private settingsHint!: HTMLElement;
   /** 视角机位菜单（斜视 / 正对 / 我方 / 俯视）；默认收起 */
   private readonly viewMenu: HTMLElement;
   /** 已经退出过一次的手指：两段式「退出」的第二下才真走 */
@@ -248,24 +281,37 @@ export class ArenaHud {
     this.settingsPanel = make('div', 'ahud__settings');
     this.settingsPanel.hidden = true;
     const settingsHead = make('div', 'ahud__settings__head');
-    // 面板现在装两样东西（方向偏好 + 花色），标题别再写死成"你的旗帜"
     const settingsTitle = make('span', 'ahud__settings__title', '设置');
     const settingsClose = make('button', 'ahud__settings__close', '×');
     settingsClose.type = 'button';
     settingsClose.addEventListener('click', () => this.toggleSettings(false));
     settingsHead.append(settingsTitle, settingsClose);
-    const settingsNote = make(
-      'p',
-      'ahud__settings__note',
-      '游戏里右键（手机长按空地）随时叫出这一页 · 操作方向改完立刻生效并常驻；花色存档后下一局上场',
-    );
-    this.settingsPanel.append(
-      settingsHead,
-      settingsNote,
-      this.buildAutoOptions(),
-      this.buildControlOptions(),
-      createBannerEditor(),
-    );
+
+    // 一条标签栏 + 一块内容区：同一时刻只显示一页，不再把三类设置堆成一条长滚动栏
+    const tabs = make('div', 'ahud__settings__tabs');
+    const body = make('div', 'ahud__settings__body');
+    const content: Record<SettingsTab, HTMLElement> = {
+      auto: this.buildAutoOptions(),
+      controls: this.buildControlOptions(),
+      banner: createBannerEditor({ hint: '下一局生效' }),
+    };
+    for (const def of SETTINGS_TABS) {
+      const btn = make('button', 'ahud__settings__tab', def.label);
+      btn.type = 'button';
+      btn.dataset['tab'] = def.key;
+      btn.addEventListener('click', () => this.selectSettingsTab(def.key));
+      tabs.append(btn);
+      this.settingsTabButtons.push(btn);
+
+      const pane = make('div', 'ahud__settings__pane');
+      pane.dataset['pane'] = def.key;
+      pane.append(content[def.key]);
+      body.append(pane);
+      this.settingsPanes.set(def.key, pane);
+    }
+    this.settingsHint = make('p', 'ahud__settings__note ahud__settings__foot');
+    this.settingsPanel.append(settingsHead, tabs, body, this.settingsHint);
+    this.selectSettingsTab(this.settingsTab);
     /**
      * 右键 = 设置。`PointerInput` 在画布上已经 `preventDefault` 掉了浏览器菜单，
      * 但那是"别弹系统菜单"，不会吃掉别的监听者，这里照收。
@@ -543,13 +589,7 @@ export class ArenaHud {
     this.autoManualBtn = manualBtn;
     this.autoIdleDesc = idleDesc;
     this.autoManualDesc = manualDesc;
-    box.append(
-      make(
-        'p',
-        'ahud__settings__note',
-        '自动托管在你点屏幕 / 按键那一刻立刻交还控制权；手动托管要再点一次才关。',
-      ),
-    );
+    // 每页只留一句说明（在面板底部 __foot），这里不再重复写一段
     this.paintAuto();
     return box;
   }
@@ -618,7 +658,8 @@ export class ArenaHud {
         inverted: '张开 = 拉远，捏合 = 拉近',
       },
     ];
-    const status = make('p', 'ahud__settings__note', '改完立刻生效，存在本机；下次进游戏还是这个方向。');
+    // 平时留空（生效时机由面板底部 __foot 统一说明），只在点开关后给一句"已保存"反馈
+    const status = make('p', 'ahud__settings__note ahud__settings__status');
     for (const row of rows) {
       const line = make('div', 'ahud__opt');
       const txt = make('div', 'ahud__opt__txt');
@@ -636,7 +677,7 @@ export class ArenaHud {
         this.app.controls[row.key] = !this.app.controls[row.key];
         saveControls(this.app.controls);
         paint();
-        status.textContent = `已保存「${row.name}」· 立刻生效，下次进游戏还是这个方向`;
+        status.textContent = `已保存「${row.name}」· 立刻生效`;
       });
       txt.append(make('span', 'ahud__opt__name', row.name), desc);
       line.append(txt, btn);
@@ -647,10 +688,27 @@ export class ArenaHud {
     return box;
   }
 
+  /**
+   * 切标签页：只显示一页，其余 `hidden`；当前按钮点亮，底部说明跟着换。
+   * `settingsTab` 记住上次那一页，下次叫出设置不用重新找。
+   */
+  private selectSettingsTab(key: SettingsTab): void {
+    this.settingsTab = key;
+    for (const btn of this.settingsTabButtons) {
+      const on = btn.dataset['tab'] === key;
+      btn.dataset['on'] = String(on);
+      btn.setAttribute('aria-selected', String(on));
+    }
+    for (const [k, pane] of this.settingsPanes) pane.hidden = k !== key;
+    this.settingsHint.textContent =
+      SETTINGS_TABS.find((t) => t.key === key)?.hint ?? '';
+  }
+
   /** 设置面板开关。开着的时候战斗照跑（面板浮在上面，不挡逻辑）。 */
   toggleSettings(on?: boolean): void {
     const next = on ?? this.settingsPanel.hidden;
     this.settingsPanel.hidden = !next;
+    if (next) this.selectSettingsTab(this.settingsTab);
   }
 
   /**

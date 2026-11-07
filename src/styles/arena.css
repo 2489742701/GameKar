@@ -1086,7 +1086,9 @@
 
 /* ---------------------------------------------------------------- 自定义设置面板
  * 用户 2026-11-06："这个设置能不能额外准备一个自定义设置里面给他处理。"
- * 战斗中从「设置」按钮弹出，浮在战场右下；只攒存档，下一局生效。
+ * 2026-11-07 又要求："设置栏目应该有多个窗口，就是调不同的东西，而不是压在一起" ——
+ * 改成标签页：头 + 标签栏固定，只有内容区滚动，三类设置互不挤占。
+ * 战斗中由画布右键 / 长按空地叫出，浮在战场右下。
  */
 .ahud__settings {
   position: absolute;
@@ -1095,7 +1097,8 @@
   z-index: 26;
   width: min(400px, 92vw);
   max-height: min(70vh, 560px);
-  overflow-y: auto;
+  /* 整体不滚，交给 .ahud__settings__body：标签栏和底部说明永远看得见 */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1105,6 +1108,67 @@
   background: rgba(12, 8, 4, 0.94);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
   pointer-events: auto;
+}
+
+.ahud__settings__tabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--wood-1);
+}
+
+.ahud__settings__tab {
+  flex: 1;
+  min-height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--wood-6);
+  font: inherit;
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  cursor: pointer;
+  background: var(--wood-3);
+}
+
+.ahud__settings__tab:hover {
+  border-color: var(--wood-8);
+  color: var(--text);
+}
+
+.ahud__settings__tab[data-on='true'] {
+  border-color: var(--gold);
+  color: var(--gold-hi);
+  background: rgba(246, 220, 156, 0.14);
+}
+
+.ahud__settings__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.ahud__settings__pane[hidden] {
+  display: none;
+}
+
+/* 每页自带的分区标题下面那条分隔线，在"一页一件事"之后就成了多余的横线 */
+.ahud__settings__pane .ahud__opts {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.ahud__settings__foot {
+  flex: none;
+  padding-top: 7px;
+  border-top: 1px solid var(--wood-1);
+}
+
+/* 点开关后的临时反馈：平时留空但占住这一行，面板高度不跳 */
+.ahud__settings__status {
+  min-height: 15px;
+  margin: 3px 0 0;
 }
 
 .ahud__settings[hidden] {
