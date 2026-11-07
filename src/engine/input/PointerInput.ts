@@ -2,7 +2,8 @@
  * 指针手势层 —— 一套代码同时伺候手指与鼠标。
  *
  * 单指拖 = 平移，单指轻点 = 选中，双指捏合 = 缩放，双指旋转 = 转视角，
- * 鼠标滚轮 = 缩放，鼠标移动 = 悬停高亮。引擎只发事件，不认识"建筑"。
+ * 双指整体上下推 = 调俯仰角，鼠标滚轮 = 缩放，鼠标移动 = 悬停高亮。
+ * 引擎只发事件，不认识"建筑"。
  */
 
 export interface PointerHandlers {
@@ -12,6 +13,13 @@ export interface PointerHandlers {
   onLongPress?(x: number, y: number): void;
   onZoom?(factor: number, x: number, y: number): void;
   onRotate?(degrees: number, x: number, y: number): void;
+  /**
+   * 双指**整体**上下移动（px，正值 = 往下推）：调俯仰角用。
+   *
+   * 和缩放/旋转是三个正交量：两根手指一起平移时距离几乎不变、夹角几乎不变，
+   * 只有中心点在动 —— 所以同一手势里就能同时识别"捏合 / 拧 / 推"。
+   */
+  onTilt?(dy: number): void;
   onHover?(x: number, y: number): void;
 }
 
@@ -32,6 +40,8 @@ export class PointerInput {
   private dragging = false;
   private pinchDist = 0;
   private pinchAngle = 0;
+  /** 双指中心点的上一次 y（调俯仰角用；抬起来就归零，免得下次跳一下） */
+  private pinchCy = 0;
   private attached = false;
   private longPressTimer: number | null = null;
   private longPressFired = false;
@@ -93,6 +103,7 @@ export class PointerInput {
       const [a, b] = [...this.pointers.values()];
       this.pinchDist = Math.hypot(b!.x - a!.x, b!.y - a!.y);
       this.pinchAngle = Math.atan2(b!.y - a!.y, b!.x - a!.x);
+      this.pinchCy = (a!.y + b!.y) / 2;
       return;
     }
 
@@ -159,6 +170,14 @@ export class PointerInput {
       const deg = wrapAngleDegrees(angle - this.pinchAngle);
       if (Math.abs(deg) > 0.05) this.h.onRotate?.(deg, cx, cy);
     }
+    /**
+     * 双指整体上下推 = 调俯仰角。
+     * 留 0.8px 死区：捏合/拧动时中心点会抖一点，不设死区镜头会跟着喘。
+     */
+    const tilt = cy - this.pinchCy;
+    if (Math.abs(tilt) > 0.8) this.h.onTilt?.(tilt);
+    this.pinchCy = cy;
+
     this.pinchDist = dist;
     this.pinchAngle = angle;
     this.dragging = true;
@@ -177,6 +196,7 @@ export class PointerInput {
     if (this.pointers.size < 2) {
       this.pinchDist = 0;
       this.pinchAngle = 0;
+      this.pinchCy = 0;
     }
     if (!tracked) return;
 

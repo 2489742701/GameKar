@@ -243,8 +243,6 @@ export class ArenaApp {
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
   private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
-  /** 当前这一笔拖动是从场地上开始的吗（真=平移，假=转视角） */
-  private gestureFromField = true;
   private lastFrame: FrameInfo = { delta: 0, time: 0, fps: 60 };
 
   private constructor(opts: ArenaAppOptions, pack: DudePack | null) {
@@ -352,37 +350,21 @@ export class ArenaApp {
       onFrame: (info) => this.draw(info),
     });
 
-    // 手势起点在场地里还是黑区里：决定这次拖动是"平移"还是"转视角"
-    opts.canvas.addEventListener('pointerdown', (e) => {
-      const rect = opts.canvas.getBoundingClientRect();
-      const hit = this.rig.screenToGround(e.clientX - rect.left, e.clientY - rect.top);
-      // 光有"打到地面平面"不够：那条射线在场地外也照样命中（无穷大平面），
-      // 所以还要判格子是否在地图里 —— 否则黑区拖动也会被当成"在田里平移"。
-      const cell = hit ? worldToCell(hit.x, hit.z) : null;
-      this.gestureFromField = cell !== null && inBounds(cell, this.map.size);
-    });
-
+    // 2026-11-07：原来这里在 pointerdown 时打一条射线，判断手指落在场地内还是黑区，
+    // 决定"这次拖动是平移还是转视角"。现在单指一律平移、转视角交给双指，
+    // 这个判断没有读者了，删掉（顺带省掉每个 pointerdown 一次射线求交）。
     this.input = new PointerInput(opts.canvas, {
+      /**
+       * 单指拖动 = **平移**，不管手指落在战场上还是黑区里（2026-11-07 用户：
+       * "手机端点击任何地方都是移动"）。
+       *
+       * 上一版黑区拖动是"转视角"，结果玩家在手机上想挪一下地图，
+       * 稍微拖出场地边界镜头就开始转，很容易把视角甩歪 —— 而且他要转视角
+       * 本来就有双指手势，单指不该兼职两件事。
+       */
       onPan: (dx, dy) => {
         this.director.userTouched();
-        if (this.gestureFromField) {
-          this.rig.panByPixels(dx, dy);
-        } else if (this.world.mode === 'pve') {
-          /**
-           * PVE：**不转视角**。60×32 的长条场地一转就歪出画面、两侧防区被裁掉，
-           * 而且塔防的读图靠"正对防线"这个固定参照 —— 转视角只会让人迷路。
-           * 黑区拖动就当作平移（和场内一样），玩家想换角度看还有「视角」按钮。
-           */
-          this.rig.panByPixels(dx, dy);
-        } else {
-          // 黑色区域（场地之外）：拖动 = 上下左右转视角。
-          // 默认**正向**：往右拖视线往右、往下拖视线往下（两个轴一起翻，不是只翻一个）。
-          // invertOrbit 留给以后的设置开关，拨一下就整体回到旧方向。
-          const dir = this.director.invertOrbit ? -1 : 1;
-          // 灵敏度减半、俯角收窄到 36–62：自由拖拽不再"一甩就翻到背面"
-          this.rig.rotateBy(-dx * 0.13 * dir);
-          this.rig.setPitch(Math.min(62, Math.max(36, this.rig.pitch + dy * 0.12 * dir)));
-        }
+        this.rig.panByPixels(dx, dy);
       },
       onZoom: (factor, x, y) => {
         this.director.userTouched();
@@ -391,6 +373,15 @@ export class ArenaApp {
       onRotate: (deg) => {
         this.director.userTouched();
         this.rig.rotateBy(deg);
+      },
+      /**
+       * 双指整体上下推 = 调俯仰角（2026-11-07 用户："还有上下转……最大可以转到平行"）。
+       * 往上推 = 更俯视（看得见全场布局），往下拉 = 更平（贴近地面看兵线）。
+       * 上下限用 CameraRig 自己的 18~82：18° 已经很接近平行视角了。
+       */
+      onTilt: (dy) => {
+        this.director.userTouched();
+        this.rig.setPitch(this.rig.pitch - dy * 0.22);
       },
       onTap: (x, y) => this.handleTap(x, y),
       onLongPress: (x, y) => this.handleLongPress(x, y),
