@@ -30,6 +30,7 @@ import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResul
 import { AmbientDust } from './ambient';
 import { ArenaDirector, PVE_VIEW_PRESETS, type ViewPreset } from './Camera';
 import { loadControls, panDelta, pitchDelta, rotateDelta, zoomDelta } from './controls';
+import { AutoPilot, type AutoPilotState } from './autoPilot';
 import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
@@ -70,6 +71,8 @@ export interface ArenaAppOptions {
    * 长按落在**建筑**上仍然是原来的"看血量"提示，只有落在空地才是叫设置。
    */
   onRequestSettings?: () => void;
+  /** 托管状态变了（HUD 用来提示"已自动托管，点屏幕拿回控制权"） */
+  onAutoPilot?: (state: AutoPilotState) => void;
 }
 
 interface Corpse {
@@ -252,8 +255,16 @@ export class ArenaApp {
    * 下一次指针事件就是新方向，下次进游戏也还是这个方向。
    */
   readonly controls = loadControls();
+  /**
+   * 我方托管状态机。构造体里 `world` 一落地就建（不能用字段初始化器 ——
+   * 那时 `this.world` 还没赋值）。20Hz 的 `onSimStep` 每帧喂 dt，
+   * window 上的 pointerdown/keydown 喂 `activity()`。
+   */
+  readonly autoPilot: AutoPilot;
   /** 所有声音都从这里发：合成音，不加载素材（见 `@audio/sfx`） */
   readonly sfx = new Sfx();
+  /** window 捕获阶段统一的「玩家还在操作」信号 */
+  private readonly markActivity = (): void => this.autoPilot.activity();
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
   private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
@@ -270,6 +281,17 @@ export class ArenaApp {
       level: opts.level,
       players: opts.players,
     });
+    this.autoPilot = new AutoPilot(this.world, this.controls, opts.onAutoPilot);
+    /**
+     * 「玩家还在这儿」的判定只有一条：**任何指针按下 / 键盘按键**。
+     * 在 window 捕获阶段收，画布手势、卡牌点击、刷新、拖放、菜单按钮全都覆盖；
+     * 不用给每个交互点单独接一次，也不会漏掉 HUD 上的操作。
+     * 刻意不收 `pointermove`/`hover` —— 鼠标悬着不动不该算"人在操作"。
+     */
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pointerdown', this.markActivity, { capture: true });
+      window.addEventListener('keydown', this.markActivity);
+    }
 
     this.map = new TileMap({ cols: this.world.fieldSize.cols, rows: this.world.fieldSize.rows });
     this.ground = new GroundView(this.map);
@@ -364,6 +386,8 @@ export class ArenaApp {
     this.loop = new GameLoop({
       hz: 20,
       onSimStep: (dt) => {
+        // 先推进托管计时，再更新世界：状态一变这一帧就生效，不用多等一轮
+        this.autoPilot.step(dt);
         this.world.update(dt);
         this.opts.onState?.();
       },

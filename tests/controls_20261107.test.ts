@@ -43,12 +43,14 @@ function fakeStorage(): Storage {
 const prefs = (over: Partial<ControlPrefs> = {}): ControlPrefs => ({ ...DEFAULT_CONTROLS, ...over });
 
 describe('默认方向与反转开关', () => {
-  it('默认四项都不反转 —— 「默认方向」本身就是用户要的那一侧', () => {
+  it('默认四个方向都不反转、闲置自动托管默认开', () => {
     expect(DEFAULT_CONTROLS).toEqual({
       tiltInvert: false,
       panInvert: false,
       rotateInvert: false,
       zoomInvert: false,
+      // 用户："一般来说，玩家 5 秒钟未操作时就会自动托管" ⇒ 默认开
+      idleAuto: true,
     });
   });
 

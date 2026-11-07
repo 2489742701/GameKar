@@ -40,7 +40,7 @@ import {
 
 // 结构与'世界长什么样'在 ./types（这边只留 re-export，免得十几个文件的 import 全改）
 import { statsOf } from './types';
-import { decide, type AiView } from './ai';
+import { decide, placementBand, type AiView } from './ai';
 import { PVE_LEVELS, pveLevel, type PveLevel } from './pve/levels';
 import type { Wave } from './pve/waves';
 import type {
@@ -1684,22 +1684,46 @@ export class ArenaWorld {
     this.playCardOf(p, slot, cell.col, cell.row);
   }
 
-  /** AI 的落点：自己半场、不压楼。 */
+  /**
+   * AI 的落点：自己半场、不压楼，**按卡种分层**（2026-11-07 用户："经济类建筑放后面，
+   * 防御类建筑放前面"）。
+   *
+   * 上一版是整段 `[lo,hi]` 里纯随机 24 次，结果磨坊和箭塔混着盖 —— 塔缩在自家底线
+   * 拦不到人、磨坊顶到前线白挨打。`placementBand()` 给出这类牌该待的纵深带
+   * （t=0 自家底线 / t=1 最靠中场），这里按阵营把 t 翻成 col：
+   * 蓝方前线是 col 大的一端，红方是 col 小的一端。
+   *
+   * **先试理想带 18 次，整段被占满再退回全范围 8 次** —— 策略是偏好不是硬限制，
+   * 场地塞满时不能因为"挑位置"就把一张能出的牌烂在手里。
+   */
   private randomSpot(side: Side, card: ArenaCard): { col: number; row: number } | null {
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
-    for (let tries = 0; tries < 24; tries++) {
-      // 横版：红方落在右半边，蓝方（备用）落在左半边
-      // 禁建带要整段避开，而且**再多留一格**：建筑模型比占地宽（兵营 3.6 格 vs 占地 3 格），
-      // 贴着黄线盖会看起来"楼压进了黄区"（用户 2026-11-02 就是这么以为的，其实格子没压）
-      const margin = NO_BUILD.halfWidth + 2;
-      const lo = side === 'red' ? this.field.midCol + margin : 1;
-      const hi = side === 'red' ? this.field.cols - spec.cols - 1 : this.field.midCol - margin - spec.cols - 1;
-      if (hi < lo) return null;
-      const col = this.rng.int(lo, hi + 1);
-      const row = this.rng.int(1, this.field.rows - spec.rows - 1);
-      if (col + spec.cols > this.field.cols || row + spec.rows > this.field.rows) continue;
-      if (!this.cellIsFree(col, row, spec.cols, spec.rows)) continue;
-      return { col, row };
+    // 禁建带要整段避开，而且**再多留一格**：建筑模型比占地宽（兵营 3.6 格 vs 占地 3 格），
+    // 贴着黄线盖会看起来"楼压进了黄区"（用户 2026-11-02 就是这么以为的，其实格子没压）
+    const margin = NO_BUILD.halfWidth + 2;
+    const lo = side === 'red' ? this.field.midCol + margin : 1;
+    const hi = side === 'red' ? this.field.cols - spec.cols - 1 : this.field.midCol - margin - spec.cols - 1;
+    if (hi < lo) return null;
+
+    const span = hi - lo;
+    const band = placementBand(card);
+    const near = side === 'blue' ? lo + band.lo * span : hi - band.hi * span;
+    const far = side === 'blue' ? lo + band.hi * span : hi - band.lo * span;
+    const clampCol = (v: number): number => Math.min(hi, Math.max(lo, v));
+    const bandLo = clampCol(Math.floor(Math.min(near, far)));
+    const bandHi = clampCol(Math.ceil(Math.max(near, far)));
+
+    for (const [cLo, cHi, tries] of [
+      [bandLo, bandHi, 18],
+      [lo, hi, 8],
+    ] as const) {
+      for (let t = 0; t < tries; t++) {
+        const col = this.rng.int(cLo, cHi + 1);
+        const row = this.rng.int(1, this.field.rows - spec.rows - 1);
+        if (col + spec.cols > this.field.cols || row + spec.rows > this.field.rows) continue;
+        if (!this.cellIsFree(col, row, spec.cols, spec.rows)) continue;
+        return { col, row };
+      }
     }
     return null;
   }

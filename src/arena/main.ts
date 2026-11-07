@@ -103,6 +103,13 @@ const app = await ArenaApp.boot({
    * 桌面端另有 `contextmenu` 那条路，挂在 HUD 里（它才知道面板在哪）。
    */
   onRequestSettings: () => hud?.toggleSettings(true),
+  /**
+   * 闲置自动托管接管时给一句提示：玩家最怕的是"怎么突然自己动起来了"。
+   * 手动点开的那条路不提示（按钮自己会变成「托管 · 手」）。
+   */
+  onAutoPilot: (s) => {
+    if (s.active && !s.manual) hud?.say('闲置 5 秒 · 已自动托管；点一下屏幕就能拿回来');
+  },
 });
 
 /**
@@ -132,6 +139,12 @@ hud = new ArenaHud(container, app, {
   onPickView: (index: number) => {
     app.pickView(index);
     hud?.setViewStatus(app.director.status);
+  },
+  /** 工具行 / 设置面板共用这一条：切手动托管，按钮与开关由 refresh() 统一重画 */
+  onToggleAuto: () => {
+    const manual = app.autoPilot.toggleManual();
+    hud?.say(manual ? '已托管，再点一次「托管」交还给自己' : '控制权已交还给你');
+    hud?.refresh();
   },
   onReroll: (player = 0) => {
     const res = app.rerollHand(player);
@@ -207,7 +220,9 @@ if (!skipMenu && !autoStart) {
  */
 const autoParam = params.get('auto');
 if (autoParam === '1' || autoParam === 'blue') {
-  app.world.setAuto('blue', true);
+  // 走 AutoPilot 的手动档，而不是直接改 world：否则状态机下一帧按"玩家没操作"
+  // 把它算成 false，测试通道会莫名其妙地失效。
+  app.autoPilot.forceManual(true);
   hud?.say('我方托管已开（自动化测试用）');
 }
 

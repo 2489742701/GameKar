@@ -40,6 +40,8 @@ export interface ArenaHudOptions {
    * 斜视角，这些都可以设置"）。清单来自 `app.viewPresets`，这里只报下标。
    */
   onPickView: (index: number) => void;
+  /** 工具行「托管」按钮：切手动托管开/关（2026-11-07） */
+  onToggleAuto: () => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
   onReroll: (player: number) => void;
 }
@@ -111,6 +113,10 @@ export class ArenaHud {
   private readonly endSub = make('div', 'ahud__end__sub', '');
   private viewBtn!: HTMLButtonElement;
   private quitBtn!: HTMLButtonElement;
+  private autoBtn!: HTMLButtonElement;
+  /** 设置面板「托管」区的两个开关（工具行状态变了要一起重画） */
+  private autoIdleBtn!: HTMLButtonElement;
+  private autoManualBtn!: HTMLButtonElement;
   private toastTimer: number | null = null;
 
   constructor(
@@ -203,7 +209,16 @@ export class ArenaHud {
     this.quitBtn = quit;
     quit.type = 'button';
     quit.addEventListener('click', () => this.confirmQuit());
-    tools.append(view, quit);
+    /**
+     * 托管按钮（2026-11-07 用户："我们直接在那个'托管'上面点一下就可以托管"）。
+     * 常驻在工具行，三态分别写「托管 / 托管 · 自动 / 托管 · 手」，
+     * 状态和 AI 是否真的在打是同一个来源（autoPilot.state），不另算一遍。
+     */
+    const auto = make('button', 'ahud__view ahud__auto', '托管');
+    this.autoBtn = auto;
+    auto.type = 'button';
+    auto.addEventListener('click', () => this.opts.onToggleAuto());
+    tools.append(view, auto, quit);
     /**
      * 视角清单（浮在工具行上方，点一下就走）。
      * 条目在这里按 `app.viewPresets` 生成一次 —— 机位表是**每个模式一份**
@@ -244,7 +259,13 @@ export class ArenaHud {
       'ahud__settings__note',
       '游戏里右键（手机长按空地）随时叫出这一页 · 操作方向改完立刻生效并常驻；花色存档后下一局上场',
     );
-    this.settingsPanel.append(settingsHead, settingsNote, this.buildControlOptions(), createBannerEditor());
+    this.settingsPanel.append(
+      settingsHead,
+      settingsNote,
+      this.buildAutoOptions(),
+      this.buildControlOptions(),
+      createBannerEditor(),
+    );
     /**
      * 右键 = 设置。`PointerInput` 在画布上已经 `preventDefault` 掉了浏览器菜单，
      * 但那是"别弹系统菜单"，不会吃掉别的监听者，这里照收。
@@ -482,6 +503,74 @@ export class ArenaHud {
     });
   }
 
+  /** 设置面板「托管」区的两行说明（状态变了跟着换文案） */
+  private autoIdleDesc!: HTMLElement;
+  private autoManualDesc!: HTMLElement;
+
+  /**
+   * 「托管」设置区（2026-11-07 用户："在设置里面可以打开托管"）。
+   *
+   * 两个开关对应两条不同的路径，别合并成一个：
+   *  - **闲置自动**：`controls.idleAuto`，存 localStorage，点屏幕立刻交还控制权；
+   *  - **现在就托管**：`autoPilot.manual`，和工具行那颗按钮是同一个状态，常驻到再点一次。
+   */
+  private buildAutoOptions(): HTMLElement {
+    const box = make('div', 'ahud__opts');
+    box.append(make('div', 'ahud__opts__title', '托管'));
+    const row = (name: string, onClick: () => void): [HTMLButtonElement, HTMLElement] => {
+      const line = make('div', 'ahud__opt');
+      const txt = make('div', 'ahud__opt__txt');
+      const desc = make('span', 'ahud__opt__desc');
+      const btn = make('button', 'ahud__opt__btn');
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        onClick();
+        this.paintAuto();
+      });
+      txt.append(make('span', 'ahud__opt__name', name), desc);
+      line.append(txt, btn);
+      box.append(line);
+      return [btn, desc];
+    };
+    const [idleBtn, idleDesc] = row('闲置 5 秒自动托管', () => {
+      this.app.autoPilot.setIdleAuto(!this.app.controls.idleAuto);
+      saveControls(this.app.controls);
+    });
+    const [manualBtn, manualDesc] = row('现在就托管', () => this.opts.onToggleAuto());
+    this.autoIdleBtn = idleBtn;
+    this.autoManualBtn = manualBtn;
+    this.autoIdleDesc = idleDesc;
+    this.autoManualDesc = manualDesc;
+    box.append(
+      make(
+        'p',
+        'ahud__settings__note',
+        '自动托管在你点屏幕 / 按键那一刻立刻交还控制权；手动托管要再点一次才关。',
+      ),
+    );
+    this.paintAuto();
+    return box;
+  }
+
+  /** 工具行按钮 + 设置面板两个开关，全部读同一个 `autoPilot.state`。 */
+  private paintAuto(): void {
+    if (!this.autoBtn || !this.autoIdleBtn) return;
+    const s = this.app.autoPilot.state;
+    const label = s.manual ? '托管 · 手' : s.active ? '托管 · 自动' : '托管';
+    if (this.autoBtn.textContent !== label) this.autoBtn.textContent = label;
+    this.autoBtn.dataset['on'] = String(s.active);
+    this.autoIdleBtn.dataset['on'] = String(s.idleAuto);
+    this.autoIdleBtn.textContent = s.idleAuto ? '自动 · 开' : '自动 · 关';
+    this.autoIdleDesc.textContent = s.idleAuto
+      ? '5 秒没操作就交给 AI；点一下屏幕立刻拿回控制权'
+      : '关掉了，只在你手动点「托管」时才代打';
+    this.autoManualBtn.dataset['on'] = String(s.manual);
+    this.autoManualBtn.textContent = s.manual ? '手动 · 开' : '手动 · 关';
+    this.autoManualDesc.textContent = s.manual
+      ? '一直代打，直到再点一次（和工具行「托管」是同一个开关）'
+      : '自己打；点一下交给 AI 常驻代打';
+  }
+
   /**
    * 「操作 · 方向」四个开关（2026-11-07 用户："把操作反转之类的都设置好，
    * 可以常态化保存"）。
@@ -705,6 +794,7 @@ export class ArenaHud {
 
   /** 10Hz 由 App 的 onState 调；内容便宜，全量重画。 */
   refresh(): void {
+    this.paintAuto();
     const s = this.app.world.summary();
     // 每个座位各画各的：手牌、金币条、科技前置提示都是按玩家的
     for (const seat of this.seats) this.paintSeat(seat);

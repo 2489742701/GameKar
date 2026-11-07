@@ -115,6 +115,42 @@ export function wishList(count: (kind: BuildingKind | 'core') => number): string
   return out;
 }
 
+/**
+ * **落点纵深带**（2026-11-07 用户："AI 可以更智能一点，比如说它放建筑时，
+ * 经济类建筑放后面，防御类建筑放前面"）。
+ *
+ * `t ∈ [0,1]`：**0 = 自家底线，1 = 最靠近中场（前线）**。
+ * 这里刻意不写具体 col —— 蓝方前线是 col 大的一端、红方是 col 小的一端，
+ * 映射交给 `ArenaWorld.randomSpot` 按阵营翻，判据只留一份。
+ *
+ * 为什么军队也压前线：卡牌出的兵从落点出发自己推进，落得越靠前，
+ * 到对面楼下的时间越短；经济/科技建筑没有攻击、白挨打，该缩在后面。
+ */
+export interface PlacementBand {
+  lo: number;
+  hi: number;
+}
+
+export function placementBand(card: ArenaCard): PlacementBand {
+  if (card.kind !== 'building') return { lo: 0.65, hi: 1 };
+  switch (card.building) {
+    // 经济 / 被动科技：躲在自家底线那一侧
+    case 'house':
+    case 'mill':
+    case 'gearFactory':
+      return { lo: 0, hi: 0.4 };
+    // 防御塔：顶到最前面才拦得住
+    case 'arrowTower':
+    case 'cannonTower':
+      return { lo: 0.6, hi: 1 };
+    // 兵营要产兵，居中偏前，别和塔抢最前排
+    case 'barracks':
+      return { lo: 0.42, hi: 0.82 };
+    default:
+      return { lo: 0.2, hi: 0.8 };
+  }
+}
+
 /** 按容器读数重排愿望：建筑名额被保留槽顶住就先补民居，面包吃光就先补磨坊。 */
 export function constrainedWish(view: AiView): string[] {
   const base = wishList(view.count);
