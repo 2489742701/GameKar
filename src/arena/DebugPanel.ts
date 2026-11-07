@@ -58,6 +58,10 @@ export class DebugPanel {
   private readonly idText = make('code', 'dbg__id');
   private readonly log = make('textarea', 'dbg__log');
   private readonly slotsBox = make('div', 'dbg__slots');
+  /** 可见的导出框：剪贴板被浏览器拦住时，文本就摊在这里，选中即可 Ctrl+C */
+  private readonly exportBox = make('textarea', 'dbg__export');
+  private readonly copyStatus = make('span', 'dbg__copystatus');
+  private copySlotsBtn!: HTMLButtonElement;
   /** PC 调试：实时性能读数（卡不卡，一眼有数，不用猜"是不是渲染层"） */
   private readonly perfText = make('code', 'dbg__perf');
   private readonly qualityBtns = new Map<string, HTMLButtonElement>();
@@ -96,7 +100,11 @@ export class DebugPanel {
     }
 
     const copySlots = make('button', 'dbg__btn', '复制全部机位');
+    this.copySlotsBtn = copySlots;
     copySlots.addEventListener('click', () => this.copySlots());
+    /** 下载 .txt：PC 上最稳的一条路，完全不依赖剪贴板权限 */
+    const download = make('button', 'dbg__btn dbg__btn--ghost', '下载 .txt');
+    download.addEventListener('click', () => this.downloadSlots());
     const clearSlots = make('button', 'dbg__btn dbg__btn--ghost', '清空机位');
     clearSlots.addEventListener('click', () => {
       this.slots.length = 0;
@@ -114,6 +122,8 @@ export class DebugPanel {
 
     this.log.readOnly = true;
     this.log.placeholder = '记下的东西会出现在这里，复制后发给我即可';
+    this.exportBox.readOnly = true;
+    this.exportBox.placeholder = '存了机位后，这里会自动出现可复制的文本；复制失败就直接 Ctrl+C';
 
     /**
      * 画质三档（2026-11-07 深夜，PC 卡顿用）。PC 上老口径永远开 DPR 2，
@@ -155,7 +165,9 @@ export class DebugPanel {
       make('div', 'dbg__row', [this.idText, record]),
       make('div', 'dbg__label', '我调的机位（发我这个）'),
       this.slotsBox,
-      make('div', 'dbg__row', [copySlots, clearSlots]),
+      this.exportBox,
+      make('div', 'dbg__row', [copySlots, download, clearSlots]),
+      this.copyStatus,
       make('div', 'dbg__label', '性能（PC 上看这个）'),
       this.perfText,
       qualityRow,
@@ -241,6 +253,7 @@ export class DebugPanel {
   }
 
   private paintSlots(): void {
+    this.exportBox.value = this.slotText();
     this.slotsBox.textContent = '';
     if (this.slots.length === 0) {
       this.slotsBox.append(make('span', 'dbg__empty', '还没存。调好一档点「存这一档」。'));
@@ -259,21 +272,25 @@ export class DebugPanel {
     });
   }
 
+  private slotText(): string {
+    return this.slots.map((s, i) => this.slotLine(s, i)).join('\n');
+  }
+
   /**
-   * 复制兜底（PC 版重点）：`navigator.clipboard` 只在 https / localhost 可用，
-   * 直接双击 dist 里的 index.html（file://）会抛 NotAllowedError。
-   * 这时退回 textarea + execCommand('copy')，PC 上照样一按就复制走。
+   * **同步**复制（2026-11-07 深夜修）。
+   *
+   * 上一版的顺序是 `await navigator.clipboard.writeText()` → 失败后再 `execCommand`：
+   * clipboard 在非安全上下文会抛，而 **await 之后用户手势已经失效**，
+   * `execCommand('copy')` 必然返回 false。于是文本被塞进折叠区里的账本 textarea，
+   * 用户看到的就是"点了完全没反应"。
+   *
+   * 现在把 `execCommand` 放在点击回调的同步段里（手势还热着），clipboard API 只作补充。
    */
-  private async writeClipboard(text: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // 非安全上下文：走老接口
-    }
+  private syncCopy(text: string): boolean {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
     ta.style.opacity = '0';
     document.body.append(ta);
     ta.select();
@@ -281,16 +298,75 @@ export class DebugPanel {
     try {
       ok = document.execCommand('copy');
     } catch {
-      // 浏览器不让复制：下面会把文本摊在账本里，手动抄也行
+      // 浏览器不给复制：下面还有可见文本 + 下载
     }
     ta.remove();
     return ok;
   }
 
-  private async copySlots(): Promise<void> {
-    const text = this.slots.map((s, i) => this.slotLine(s, i)).join('\n');
-    if (await this.writeClipboard(text)) this.push('（已复制 ' + this.slots.length + ' 档机位）');
-    else this.log.value = text; // 兜底也没成：直接把文本放进账本，选中即复制
+  private flash(message: string, ok: boolean): void {
+    this.copyStatus.textContent = message;
+    this.copyStatus.dataset['ok'] = String(ok);
+    if (!this.copySlotsBtn) return;
+    this.copySlotsBtn.textContent = ok ? '已复制 ✓' : '复制失败 · 看下面';
+    window.setTimeout(() => {
+      if (this.copySlotsBtn) this.copySlotsBtn.textContent = '复制全部机位';
+    }, 2200);
+  }
+
+  /** 点「复制全部机位」：先同步复制，再给可见反馈；失败也有两条明路。 */
+  private copySlots(): void {
+    const text = this.slotText();
+    if (!text) {
+      this.flash('还没存机位，先点「存这一档」', false);
+      return;
+    }
+    this.exportBox.value = text;
+    this.log.value = text; // 账本也留一份，但它不再是唯一出口
+
+    if (this.syncCopy(text)) {
+      this.flash('已复制 ' + this.slots.length + ' 档机位 ✓', true);
+      this.selectExport();
+      return;
+    }
+    // 同步没成：异步 API 再试一次；无论成不成，按钮和状态都立刻有反馈
+    this.flash('正在试剪贴板…文本已在下方选中，按 Ctrl+C；或点「下载 .txt」', false);
+    this.selectExport();
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => { this.flash('已复制 ' + this.slots.length + ' 档机位 ✓（clipboard）', true); this.selectExport(); },
+        () => { this.flash('剪贴板被浏览器拦了：下方文本已选中，按 Ctrl+C；或点「下载 .txt」', false); this.selectExport(); },
+      );
+    }
+  }
+
+  /** 把导出框的文本全选上：光 focus/select 在部分 WebView 里不生效，选区手动兜一遍。 */
+  private selectExport(): void {
+    try {
+      this.exportBox.focus();
+      this.exportBox.setSelectionRange(0, this.exportBox.value.length);
+    } catch {
+      // textarea 不支持 setSelectionRange（极老 WebView）：至少文本是可见可手选的
+    }
+  }
+
+  /** 下载 .txt：PC 上一按就存成文件，绕开所有剪贴板权限。 */
+  private downloadSlots(): void {
+    const text = this.slotText();
+    if (!text) {
+      this.flash('还没存机位，先点「存这一档」', false);
+      return;
+    }
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gamekar-camera-shots.txt';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.flash('已下载 gamekar-camera-shots.txt', true);
   }
 
   private push(line: string): void {
@@ -299,7 +375,13 @@ export class DebugPanel {
   }
 
   private async copy(): Promise<void> {
-    if (!(await this.writeClipboard(this.log.value))) this.log.select();
+    const text = this.log.value;
+    if (this.syncCopy(text)) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      this.log.select();
+    }
   }
 
   /** 每帧由 main 调一次：手动拖了镜头之后，读数要跟着变。 */

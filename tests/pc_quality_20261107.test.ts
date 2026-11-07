@@ -55,13 +55,24 @@ describe('PC 调试面板', () => {
   });
 
   /**
-   * 反证：`navigator.clipboard` 在非安全上下文会抛，PC 上必须还有第二条路。
-   * 只写 `writeText` 的版本在 file:// 打开时"复制"按钮直接哑掉。
+   * 反证（2026-11-07 深夜实测）：上一版是 `await clipboard.writeText()` 失败后
+   * 才 `execCommand('copy')` —— **await 之后用户手势已失效**，后者必然 false，
+   * 文本被塞进折叠区里的账本，用户看到"点了完全没反应"。
+   *
+   * 现在必须：同步 execCommand 优先、按钮有反馈、导出框可见、还能下载 txt。
    */
-  it('复制有 file:// 兜底（execCommand / 摊进账本）', () => {
-    expect(panel).toContain('private async writeClipboard(');
-    expect(panel).toContain('document.execCommand(\'copy\')');
-    expect(panel).toContain('复制全部机位');
+  it('复制：同步路径优先 + 可见反馈 + 下载兜底', () => {
+    expect(panel).toContain('private syncCopy(');
+    expect(panel).toContain("document.execCommand('copy')");
+    expect(panel).toContain('private copySlots(): void'); // 不是 async，别再 await 后兜底
+    expect(panel).not.toContain('await this.writeClipboard(');
+    expect(panel).toContain("make('textarea', 'dbg__export')");
+    expect(panel).toContain('this.flash(');
+    expect(panel).toContain('下载 .txt');
+    expect(panel).toContain("a.download = 'gamekar-camera-shots.txt'");
+    // 导出框必须挂在面板可见区，不能塞进 <details> 折叠里
+    const append = panel.slice(panel.indexOf('this.el.append('), panel.indexOf('this.el.hidden = true'));
+    expect(append.indexOf('this.exportBox')).toBeLessThan(append.indexOf('foldBox'));
   });
 
   it('PC 版有一键 build + 起服务的脚本（不能双击 file://）', () => {

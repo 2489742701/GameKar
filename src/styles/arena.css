@@ -840,6 +840,36 @@
   outline-offset: 1px;
 }
 
+/* 机位导出：剪贴板被浏览器拦住时，文本就摊在这里（不藏在折叠区里） */
+.dbg__export {
+  width: 100%;
+  min-height: 44px;
+  max-height: 92px;
+  resize: vertical;
+  box-sizing: border-box;
+  font-family: var(--font-num);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--wood-1);
+  border-radius: 5px;
+  padding: 4px 6px;
+}
+
+.dbg__copystatus {
+  display: block;
+  min-height: 13px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.dbg__copystatus[data-ok='true'] {
+  color: #7fe09a;
+}
+
 /* 可删项 / 账本的折叠区：默认收起，把上半截（调机位）留给一屏 */
 .dbg__fold {
   border-top: 1px solid rgba(255, 255, 255, 0.09);
