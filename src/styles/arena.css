@@ -148,6 +148,25 @@
   color: #ffd2c9;
 }
 
+/**
+ * PVE 波次条（2026-11-07）：同一只时钟，换一套读数 ——
+ * 「2/5 波」+「下一波 23s」/「残余 7」。不加时态、不闪红，
+ * 只有守满时限前 30 秒走 `data-warn`（和 1v1 的告警同一套视觉语言）。
+ */
+.ahud__clock[data-pve='1'] .ahud__clock__num {
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+
+.ahud__clock[data-pve='1'] .ahud__clock__ot {
+  display: inline-block;
+  background: rgba(20, 32, 54, 0.92);
+  border: 1px solid rgba(122, 162, 222, 0.42);
+  color: #cfe0ff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 /* 后勤读数：`2/3` —— 三座要干活的楼里两座配齐了。缺一座就变红（那座塔不开火） */
 .ahud__staff {
   display: flex;
@@ -1086,4 +1105,68 @@
 @keyframes ahud-ot-blink {
   0%, 58% { opacity: 1; }
   59%, 100% { opacity: 0.3; }
+}
+
+/* ------------------------------------------------------------------ 座位（双人同屏）
+ *
+ * 2026-11-07：手牌 + 金币条 + 刷新按钮打成一个「座位」，按玩家数建 1 个或 2 个。
+ * 单人局只有 .ahud__seat（在底部），DOM 结构与老版本等价；
+ * PVE 双人时第二个座位 .ahud__seat--p1 整体转到屏幕顶部并翻转 180° ——
+ * 手机平放桌上，对面那位低头看到的手牌就是正的，不用绕到同一侧挤。
+ */
+.ahud__seat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.ahud__seat--p1 {
+  position: absolute;
+  top: calc(var(--safe-top) + 6px);
+  left: calc(var(--safe-left) + 8px);
+  right: calc(var(--safe-right) + 8px);
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 0;
+  /* 翻转而不是重新排一遍：扭转的只是视觉，DOM 顺序、事件、命中区域全都不变 */
+  transform: rotate(180deg);
+  pointer-events: auto;
+  z-index: 2;
+}
+
+/* 双人时共享顶栏要给上方那套手牌让位，不然波次条被压在卡牌底下 */
+.ahud[data-players='2'] .ahud__top {
+  margin-top: 132px;
+}
+
+/* 金币条 + 刷新挤一行：刷新是"花 5 金换一手牌"，跟钱绑在一起才顺手 */
+.ahud__bankrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.ahud__bankrow .ahud__bank {
+  flex: 1;
+  min-width: 0;
+}
+
+.ahud__bankrow .ahud__reroll {
+  flex: none;
+}
+
+/*
+ * 顶部那套手牌是**浮在战场上方**的，木纹底把怪的出生区挡了个严实（2026-11-07 实测）。
+ * 压到 0.88 让草地透出来 —— 还是看得清牌面，但不再像一块盖板。
+ * 只有双人时才有这一层，单人局完全不受影响。
+ */
+.ahud__seat--p1 .ahud__card,
+.ahud__seat--p1 .ahud__bankrow {
+  opacity: 0.88;
+}
+
+.ahud__seat--p1 .ahud__card:active {
+  opacity: 1;
 }

@@ -20,35 +20,52 @@ import { createBannerEditor } from './bannerEditor';
 
 
 export interface ArenaHudOptions {
-  onSelectCard: (slot: number) => void;
+  /** `player` = 玩家槽下标（双人同屏时 0 或 1） */
+  onSelectCard: (slot: number, player: number) => void;
   onRestart: () => void;
   onCycleView: () => void;
-  /** 花 5 金重抽全部手牌（保底民居） */
-  onReroll: () => void;
+  /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
+  onReroll: (player: number) => void;
 }
 
-export class ArenaHud {
-  readonly el = make('div', 'ahud');
-  /** 金币数字（住在底部的金币条里，2026-11-06 从顶栏挪下来了） */
-  private readonly goldText = make('b', 'ahud__bank__num', '8');
-  private readonly goldCap = make('span', 'ahud__bank__cap', `/${ECONOMY.cap}`);
-  private readonly goldFill = make('span', 'ahud__bank__fill');
-  private readonly bank = make('div', 'ahud__bank');
-  private readonly cards: HTMLButtonElement[] = [];
-  private readonly cardParts: {
+/**
+ * 一个"座位"的全部 UI 零件：手牌 4 格 + 一条金币条 + 一个刷新按钮。
+ *
+ * 为什么按座位建而不是写死一份（2026-11-07 双人同屏）：PVE 双人时两个人
+ * 各有各的金币和手牌，屏幕底下一套、屏幕顶上一套（旋转 180° 给对面的人看）。
+ * 单人局只建 1 个座位，DOM 与老版本完全一致。
+ */
+interface HudSeat {
+  player: number;
+  /** 这一家的整块容器（手牌 + 金币条 + 刷新），双人时第二家整体转 180° */
+  root: HTMLElement;
+  hand: HTMLElement;
+  cards: HTMLButtonElement[];
+  parts: {
     cost: HTMLElement;
     name: HTMLElement;
     kind: HTMLElement;
     art: HTMLElement;
     need: HTMLElement;
-  }[] = [];
+  }[];
+  bank: HTMLElement;
+  goldText: HTMLElement;
+  goldCap: HTMLElement;
+  goldFill: HTMLElement;
+  reroll: HTMLButtonElement;
+  /** 上一帧这一格是什么牌：用来识别"刚打出去"，播一下飞出动画 */
+  lastCardId: (string | null)[];
+  /** 每格正在播的飞出动画定时器：刷新手牌时要全部取消，否则会把新牌清成空白格 */
+  playTimers: (number | null)[];
+}
+
+export class ArenaHud {
+  readonly el = make('div', 'ahud');
+  /** 每个玩家一个座位（1v1 / PVE 单人 = 1 个，PVE 双人 = 2 个） */
+  private readonly seats: HudSeat[] = [];
   /** 人口 / 面包读数（容器，不是收入） */
   private readonly popText = make('b', 'ahud__supply__num', '');
   private readonly breadText = make('b', 'ahud__supply__num', '');
-  /** 上一帧这一格是什么牌：用来识别"刚打出去"，播一下飞出动画 */
-  private readonly lastCardId: (string | null)[] = [];
-  /** 每格正在播的飞出动画定时器：刷新手牌时要全部取消，否则会把新牌清成空白格 */
-  private readonly playTimers: (number | null)[] = [];
   /** 左上角的民居读数 */
   private readonly houseText = make('b', 'ahud__supply__num', '');
   /** 左上角三个胶囊：警告时对应那一个闪红 */
@@ -136,7 +153,76 @@ export class ArenaHud {
 
     top.append(supply, this.clock);
 
+    /**
+     * 座位（2026-11-07 双人同屏）：每个玩家一套手牌 + 一条金币条。
+     * 单人局只建 1 个，DOM 与老版本一致；双人时第二个座位整体转到屏幕顶部。
+     */
+    const bottom = make('div', 'ahud__bottom');
+    const view = make('button', 'ahud__view', '视角 · 全景');
+    this.viewBtn = view;
+    view.addEventListener('click', () => this.opts.onCycleView());
+    const tools = make('div', 'ahud__tools');
+    /**
+     * 设置面板（2026-11-06 用户："这个设置能不能额外准备一个自定义设置里面给他处理"）：
+     * 战斗中也能调花色 —— 只攒存档，**下一局生效**（「再来一局」= reload 读新档）。
+     * 面板默认收起；和开始菜单里的编辑器是同一份组件（bannerEditor.ts）。
+     */
+    const settingsBtn = make('button', 'ahud__view', '设置');
+    settingsBtn.type = 'button';
+    settingsBtn.addEventListener('click', () => this.toggleSettings());
+    this.settingsBtn = settingsBtn;
+    tools.append(view, settingsBtn);
+    this.settingsPanel = make('div', 'ahud__settings');
+    this.settingsPanel.hidden = true;
+    const settingsHead = make('div', 'ahud__settings__head');
+    const settingsTitle = make('span', 'ahud__settings__title', '自定义 · 你的旗帜');
+    const settingsClose = make('button', 'ahud__settings__close', '×');
+    settingsClose.type = 'button';
+    settingsClose.addEventListener('click', () => this.toggleSettings(false));
+    settingsHead.append(settingsTitle, settingsClose);
+    const settingsNote = make('p', 'ahud__settings__note', '改完存档，点「再来一局」就能带上新旗上场');
+    this.settingsPanel.append(settingsHead, settingsNote, createBannerEditor());
+    /**
+     * 座位按玩家数建：单人 1 个（DOM 与老版本一致），双人 2 个。
+     * 第二个座位挂在 `.ahud` 上绝对定位到屏幕顶部并旋转 180° ——
+     * 手机平放桌上，对面那位看到的手牌就是正的。
+     */
+    const playerCount = Math.max(1, this.app.world.players.length);
+    this.el.dataset['players'] = String(playerCount);
+    bottom.append(tools);
+    const tops: HTMLElement[] = [];
+    for (let i = 0; i < playerCount; i++) {
+      const seat = this.buildSeat(i);
+      this.seats.push(seat);
+      if (i === 0) bottom.append(seat.root);
+      else tops.push(seat.root);
+    }
+    this.notice.dataset['hidden'] = '1';
+    this.el.append(top, bottom, this.toast, this.notice, this.end, this.settingsPanel, this.big, ...tops);
+    host.append(this.el);
+    this.end.hidden = true;
+    this.end.append(
+      make('div', 'ahud__end__title', ''),
+      this.endSub,
+      make('button', 'ahud__end__btn', '再来一局'),
+    );
+    (this.end.lastChild as HTMLElement).addEventListener('click', () => this.opts.onRestart());
+    this.setupCardDrag();
+    this.refresh();
+  }
+
+  /**
+   * 建一个座位：4 张手牌 + 金币条 + 刷新按钮。
+   *
+   * 手势在这里只记「从哪一张按下」，真正的拖放状态机在 `setupCardDrag`
+   * （window 上收，因为指针会离开卡牌跨到画布）。两个座位共用一个状态机，
+   * 靠 `pointerId` 分出是谁的手指 —— 两人同时拖也不会互相踩。
+   */
+  private buildSeat(player: number): HudSeat {
+    const root = make('div', player === 0 ? 'ahud__seat' : 'ahud__seat ahud__seat--p1');
     const hand = make('div', 'ahud__hand');
+    const cards: HTMLButtonElement[] = [];
+    const parts: HudSeat['parts'] = [];
     for (let i = 0; i < HAND.size; i++) {
       const card = make('button', 'ahud__card');
       // 三块子节点**只建一次**：以前在 20Hz 的刷新里 replaceChildren，
@@ -150,59 +236,40 @@ export class ArenaHud {
       card.addEventListener('pointerdown', (e) => {
         // 拖放手势的起点（2026-11-06）：不在这里抢 click，位移超过阈值才进拖放模式
         if (e.pointerType === 'mouse' && e.button !== 0) return;
-        this.dragFrom = { slot: i, x: e.clientX, y: e.clientY, pointerType: e.pointerType };
+        this.dragFrom.set(e.pointerId, {
+          player,
+          slot: i,
+          x: e.clientX,
+          y: e.clientY,
+          pointerType: e.pointerType,
+        });
         // 触屏长按（180ms 没动）=「按住屏幕就有影子」，松手按影子落点放下；
         // <180ms 的点击仍是普通点击选牌，不误伤
         if (e.pointerType === 'touch') {
-          this.clearHoldTimer();
-          this.holdTimer = window.setTimeout(() => {
-            if (!this.dragFrom || this.dragging) return;
-            this.dragging = true;
-            this.app.beginCardDrag(this.dragFrom.slot);
-            this.app.moveCardDrag(this.dragFrom.x, this.dragFrom.y, 'touch');
-          }, 180);
+          this.clearHoldTimer(e.pointerId);
+          const pid = e.pointerId;
+          this.holdTimers.set(
+            pid,
+            window.setTimeout(() => {
+              const from = this.dragFrom.get(pid);
+              if (!from || this.dragging.has(pid)) return;
+              this.dragging.add(pid);
+              this.app.beginCardDrag(from.slot, from.player);
+              this.app.moveCardDrag(from.x, from.y, 'touch', from.player);
+            }, 180),
+          );
         }
       });
       card.addEventListener('click', () => {
         // 拖回卡牌/拖出去落牌后浏览器还会补一个 click —— 吃掉，别误选
         if (this.suppressCardClick) return;
-        this.opts.onSelectCard(i);
+        this.opts.onSelectCard(i, player);
       });
-      this.cards.push(card);
-      this.cardParts.push({ cost, name, kind, art, need });
+      cards.push(card);
+      parts.push({ cost, name, kind, art, need });
       hand.append(card);
     }
 
-    // 手牌成组贴底（之前三块直接摊在 flex 列里，space-between 把手牌顶到了屏幕正中）
-    const bottom = make('div', 'ahud__bottom');
-    const view = make('button', 'ahud__view', '视角 · 全景');
-    this.viewBtn = view;
-    view.addEventListener('click', () => this.opts.onCycleView());
-    const reroll = make('button', 'ahud__reroll', `刷新 · ${REROLL.cost} 金`);
-    reroll.type = 'button';
-    reroll.title = '重抽全部 4 张手牌，保底一张民居';
-    reroll.addEventListener('click', () => this.opts.onReroll());
-    const tools = make('div', 'ahud__tools');
-    /**
-     * 设置面板（2026-11-06 用户："这个设置能不能额外准备一个自定义设置里面给他处理"）：
-     * 战斗中也能调花色 —— 只攒存档，**下一局生效**（「再来一局」= reload 读新档）。
-     * 面板默认收起；和开始菜单里的编辑器是同一份组件（bannerEditor.ts）。
-     */
-    const settingsBtn = make('button', 'ahud__view', '设置');
-    settingsBtn.type = 'button';
-    settingsBtn.addEventListener('click', () => this.toggleSettings());
-    this.settingsBtn = settingsBtn;
-    tools.append(view, reroll, settingsBtn);
-    this.settingsPanel = make('div', 'ahud__settings');
-    this.settingsPanel.hidden = true;
-    const settingsHead = make('div', 'ahud__settings__head');
-    const settingsTitle = make('span', 'ahud__settings__title', '自定义 · 你的旗帜');
-    const settingsClose = make('button', 'ahud__settings__close', '×');
-    settingsClose.type = 'button';
-    settingsClose.addEventListener('click', () => this.toggleSettings(false));
-    settingsHead.append(settingsTitle, settingsClose);
-    const settingsNote = make('p', 'ahud__settings__note', '改完存档，点「再来一局」就能带上新旗上场');
-    this.settingsPanel.append(settingsHead, settingsNote, createBannerEditor());
     /**
      * 金币条（2026-11-06 用户）："能把那个金 20/20 移到卡牌下方，有点像《皇室战争》那样。
      * 就是下面有一个栏目，一点点加的那个能不能搞一下？"
@@ -210,38 +277,74 @@ export class ArenaHud {
      * 三层叠在一起：填充条在最底下（width = 金/cap），刻度线盖在填充上面
      * （每 1 金一道），数字在最上层 —— 攒一格亮一格，攒满整条泛金光。
      */
+    const bank = make('div', 'ahud__bank');
+    const goldText = make('b', 'ahud__bank__num', '8');
+    const goldCap = make('span', 'ahud__bank__cap', `/${ECONOMY.cap}`);
+    const goldFill = make('span', 'ahud__bank__fill');
     const bankIcon = make('span', 'ahud__bank__icon');
     bankIcon.innerHTML = COIN_ICON;
     const bankLabel = make('span', 'ahud__bank__label');
-    bankLabel.append(bankIcon, this.goldText, this.goldCap);
-    this.bank.append(this.goldFill, bankLabel);
-    bottom.append(tools, hand, this.bank);
-    this.notice.dataset['hidden'] = '1';
-    this.el.append(top, bottom, this.toast, this.notice, this.end, this.settingsPanel, this.big);
-    host.append(this.el);
-    this.end.hidden = true;
-    this.end.append(
-      make('div', 'ahud__end__title', ''),
-      this.endSub,
-      make('button', 'ahud__end__btn', '再来一局'),
-    );
-    (this.end.lastChild as HTMLElement).addEventListener('click', () => this.opts.onRestart());
-    for (let i = 0; i < HAND.size; i++) this.playTimers.push(null);
-    this.setupCardDrag();
-    this.refresh();
+    bankLabel.append(bankIcon, goldText, goldCap);
+    bank.append(goldFill, bankLabel);
+    /**
+     * 刷新按钮从上面的工具行挪到金币条右边（2026-11-07）：
+     * 它是"花 5 金换一手牌"，跟金币和手牌绑在一起才顺手；
+     * 更重要的是双人时**每家要各有一个**，放在工具行会打起来。
+     */
+    const reroll = make('button', 'ahud__reroll', `刷新 · ${REROLL.cost} 金`);
+    reroll.type = 'button';
+    reroll.title = '重抽全部 4 张手牌，保底一张民居';
+    reroll.addEventListener('click', () => this.opts.onReroll(player));
+    const bankRow = make('div', 'ahud__bankrow');
+    bankRow.append(bank, reroll);
+    root.append(hand, bankRow);
+    // 每格一个"飞出去"动画定时器槽，与手牌格数对齐（null = 没在播）
+    const playTimers: (number | null)[] = new Array<number | null>(HAND.size).fill(null);
+    return {
+      player,
+      root,
+      hand,
+      cards,
+      parts,
+      bank,
+      goldText,
+      goldCap,
+      goldFill,
+      reroll,
+      lastCardId: new Array<string | null>(HAND.size).fill(null),
+      playTimers,
+    };
   }
 
   // ---------------------------------------------------------------- 卡牌拖放
 
-  private dragFrom: { slot: number; x: number; y: number; pointerType: string } | null = null;
-  private dragging = false;
+  /**
+   * 正在按下的手指 / 鼠标，key = `pointerId`。
+   *
+   * 原来是一个 `dragFrom: {...} | null`（单指）。双人同屏时两个人会**同时**按住
+   * 各自的牌，单槽会被后者覆盖 —— 表现为"我拖着拖着影子突然跑到他那边去了"。
+   * 改成按 pointerId 分槽后，几条手势各走各的，互不干扰。
+   */
+  private readonly dragFrom = new Map<
+    number,
+    { player: number; slot: number; x: number; y: number; pointerType: string }
+  >();
+  /** 已经进了拖放模式（位移超过阈值）的那些 pointerId */
+  private readonly dragging = new Set<number>();
+  /** 触屏长按的定时器，同样按 pointerId 分 */
+  private readonly holdTimers = new Map<number, number>();
   private suppressCardClick = false;
-  private holdTimer: number | null = null;
 
-  private clearHoldTimer(): void {
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
+  private clearHoldTimer(pid?: number): void {
+    if (pid === undefined) {
+      for (const t of this.holdTimers.values()) window.clearTimeout(t);
+      this.holdTimers.clear();
+      return;
+    }
+    const t = this.holdTimers.get(pid);
+    if (t !== undefined) {
+      window.clearTimeout(t);
+      this.holdTimers.delete(pid);
     }
   }
 
@@ -254,34 +357,37 @@ export class ArenaHud {
    */
   private setupCardDrag(): void {
     window.addEventListener('pointermove', (e) => {
-      if (!this.dragFrom) return;
-      if (!this.dragging) {
-        if (Math.hypot(e.clientX - this.dragFrom.x, e.clientY - this.dragFrom.y) < 8) return;
-        this.dragging = true;
-        this.app.beginCardDrag(this.dragFrom.slot);
+      const from = this.dragFrom.get(e.pointerId);
+      if (!from) return;
+      if (!this.dragging.has(e.pointerId)) {
+        if (Math.hypot(e.clientX - from.x, e.clientY - from.y) < 8) return;
+        this.dragging.add(e.pointerId);
+        this.app.beginCardDrag(from.slot, from.player);
       }
-      this.clearHoldTimer();
-      this.app.moveCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse');
+      this.clearHoldTimer(e.pointerId);
+      this.app.moveCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse', from.player);
     });
     window.addEventListener('pointerup', (e) => {
-      if (!this.dragFrom) return;
-      if (this.dragging) {
+      const from = this.dragFrom.get(e.pointerId);
+      if (!from) return;
+      if (this.dragging.has(e.pointerId)) {
         const hit = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-        if (hit?.closest('.ahud__hand')) this.app.cancelCardDrag();
-        else this.app.dropCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse');
+        if (hit?.closest('.ahud__hand')) this.app.cancelCardDrag(from.player);
+        else this.app.dropCardDrag(e.clientX, e.clientY, e.pointerType || 'mouse', from.player);
         this.suppressCardClick = true;
         window.setTimeout(() => { this.suppressCardClick = false; }, 0);
       }
-      this.clearHoldTimer();
-      this.dragFrom = null;
-      this.dragging = false;
+      this.clearHoldTimer(e.pointerId);
+      this.dragFrom.delete(e.pointerId);
+      this.dragging.delete(e.pointerId);
     });
-    // 指针被系统取消（来电/切窗）：别把影子留在场上
-    window.addEventListener('pointercancel', () => {
-      if (this.dragging) this.app.cancelCardDrag();
-      this.clearHoldTimer();
-      this.dragFrom = null;
-      this.dragging = false;
+    // 指针被系统取消（来电/切窗）：只拆这一根，别把另一个人的影子也清了
+    window.addEventListener('pointercancel', (e) => {
+      const from = this.dragFrom.get(e.pointerId);
+      if (from && this.dragging.has(e.pointerId)) this.app.cancelCardDrag(from.player);
+      this.clearHoldTimer(e.pointerId);
+      this.dragFrom.delete(e.pointerId);
+      this.dragging.delete(e.pointerId);
     });
   }
 
@@ -296,6 +402,8 @@ export class ArenaHud {
 
   private readonly big = make('div', 'ahud__big');
   private overtimeSplashShown = false;
+  /** PVE：已经放过几波（用来抓"新一波来了"这个瞬间放中央大字） */
+  private lastWaveSeen = 0;
 
   /** 屏幕中央大字（进加时赛用）：闪 2.6 秒自动收。pointer-events 全关，纯排面。 */
   private showBig(text: string): void {
@@ -381,25 +489,36 @@ export class ArenaHud {
   /** 10Hz 由 App 的 onState 调；内容便宜，全量重画。 */
   refresh(): void {
     const s = this.app.world.summary();
-    // 科技前置 / 发牌裁量提示：判据与 draw()/reroll()/落牌校验同源（world.techHint）
-    const hand = this.el.querySelector('.ahud__hand');
-    if (hand) {
-      hand.setAttribute('data-no-room', String(!this.app.world.buildingRoom('blue')));
-      hand.setAttribute('data-hint', this.app.world.techHint('blue') ?? '');
-    }
-    // 金币条：数字 + 填充宽度一起走（判据只读 summary().gold，条不自己算账）。
-    // data-full 给整条泛金光 —— 满了就提醒玩家"该花出去了"。
-    this.goldText.textContent = String(s.gold);
-    this.goldCap.textContent = `/${ECONOMY.cap}`;
-    this.goldFill.style.width = `${Math.min(100, (s.gold / ECONOMY.cap) * 100)}%`;
-    this.bank.dataset['full'] = String(s.gold >= ECONOMY.cap);
+    // 每个座位各画各的：手牌、金币条、科技前置提示都是按玩家的
+    for (const seat of this.seats) this.paintSeat(seat);
 
-    // 倒计时：最后 30 秒变红（data-warn）；进加时切红色加时态（data-ot，2026-11-06）
-    const mm = Math.floor(s.timeLeft / 60);
-    const ss = s.timeLeft % 60;
-    this.clockNum.textContent = `${mm}:${String(ss).padStart(2, '0')}`;
-    this.clock.dataset['warn'] = String(s.timeLeft <= MATCH.warnSeconds);
-    this.clock.dataset['ot'] = String(s.overtime);
+    /**
+     * 倒计时 vs 波次条（2026-11-07）：
+     * PVE 里"3 分钟倒计时"毫无意义 —— 那一格改成显示**第几波 / 下一波还有几秒**，
+     * 全部放完之后切成"残余 N 只"（玩家最想知道的就是还剩多少没清）。
+     * 判据全部来自 `summary().pve`，UI 不自己算。
+     */
+    if (s.pve) {
+      const { wave, total, nextIn, alive, left, lastWaveOut } = s.pve;
+      this.clock.dataset['pve'] = '1';
+      if (lastWaveOut) {
+        this.clockNum.textContent = `${total}/${total} 波`;
+        this.clockOt.textContent = `残余 ${alive}`;
+      } else {
+        this.clockNum.textContent = `${Math.min(wave + 1, total)}/${total} 波`;
+        this.clockOt.textContent = `下一波 ${Math.ceil(nextIn)}s`;
+      }
+      // 守满时限前 30 秒告警（和 1v1 的"最后 30 秒变红"同一条视觉语言）
+      this.clock.dataset['warn'] = String(left <= MATCH.warnSeconds);
+      this.clock.dataset['ot'] = 'false';
+    } else {
+      const mm = Math.floor(s.timeLeft / 60);
+      const ss = s.timeLeft % 60;
+      this.clockNum.textContent = `${mm}:${String(ss).padStart(2, '0')}`;
+      this.clock.dataset['warn'] = String(s.timeLeft <= MATCH.warnSeconds);
+      this.clock.dataset['ot'] = String(s.overtime);
+      this.clock.dataset['pve'] = '0';
+    }
 
     // 进加时赛的**一次性**排面：屏幕中央「加时赛」大字闪 2.6 秒 + 两侧彩带
     // （2026-11-06 用户："屏幕中间会闪过加时赛两三秒……屏幕两边可以飞出彩带"）。
@@ -407,6 +526,26 @@ export class ArenaHud {
     if (s.overtime && s.outcome === 'playing' && !this.overtimeSplashShown) {
       this.overtimeSplashShown = true;
       this.showBig('加时赛');
+      this.app.confetti.burst();
+    }
+
+    /**
+     * 波次来袭的**一次性**排面（2026-11-07）：中央闪「第 N 波」。
+     *
+     * 只在 `wave` 这个读数**变了**的那一帧放，不看时间 ——
+     * 掉帧、快进、暂停再开都不会漏放或重放。
+     */
+    if (s.pve && s.outcome === 'playing' && s.pve.wave !== this.lastWaveSeen) {
+      this.lastWaveSeen = s.pve.wave;
+      if (s.pve.wave > 0) {
+        const elite = this.app.world.pve?.level.waves[s.pve.wave - 1]?.elite;
+        this.showBig(elite ? `第 ${s.pve.wave} 波 · 精英` : `第 ${s.pve.wave} 波`);
+        if (elite) this.app.confetti.burst();
+      }
+    }
+    // 守住全部波次：撒一次彩带（和加时赛的排面同一套，不新做特效）
+    if (s.pve && s.outcome === 'win' && !this.overtimeSplashShown) {
+      this.overtimeSplashShown = true;
       this.app.confetti.burst();
     }
 
@@ -429,14 +568,15 @@ export class ArenaHud {
 
     this.checkStaffing();
 
-    for (let i = 0; i < this.cards.length; i++) this.paintCard(i);
-
     if (s.outcome !== 'playing') {
       this.end.hidden = false;
       const title = this.end.firstElementChild as HTMLElement;
       title.dataset['outcome'] = s.outcome;
-      title.textContent =
-        s.outcome === 'win'
+      title.textContent = s.pve
+        ? s.outcome === 'win'
+          ? '守住了 —— 这关过了'
+          : '大本营被拆了 —— 失守'
+        : s.outcome === 'win'
           ? '红方大本营被拆了 —— 你赢了'
           : s.outcome === 'lose'
             ? '蓝方大本营被拆了 —— 这局输了'
@@ -451,6 +591,13 @@ export class ArenaHud {
 
   /** 结算面板第二行。数字一律从 summary 里取，不在这里重算。 */
   private reasonText(s: ReturnType<ArenaApp['world']['summary']>): string {
+    // PVE：写"守住几波 / 清掉多少 / 大本营剩多少"，不写 1v1 的积分
+    if (s.pve) {
+      const p = s.pve;
+      return s.reason === 'waves'
+        ? `${p.level} · ${p.total} 波全部守住 · 清掉 ${p.slain} 只 · 大本营剩 ${s.blueCore}`
+        : `${p.level} · 倒在第 ${Math.min(p.wave + 1, p.total)} 波 · 已清掉 ${p.slain} 只`;
+    }
     const minutes = MATCH.seconds / 60;
     // 2026-11-06 加时赛：常规时间打满不判，加时打满按**积分**判（存活楼数 → 剩血 → 拆楼）
     // ⇒ 文案写清"含加时"并把积分摆第一行。reason = 'overtime'（新）/ 'time'（旧存档兼容）。
@@ -469,27 +616,46 @@ export class ArenaHud {
   }
 
   /**
+   * 一个座位的全部读数：手牌提示、金币条、四张卡面。
+   * 判据一律取玩家槽（`world.players[i]`），UI 不自己算钱、也不算能不能造。
+   */
+  private paintSeat(seat: HudSeat): void {
+    const p = this.app.world.players[seat.player] ?? this.app.world.players[0]!;
+    // 科技前置 / 发牌裁量提示：判据与 draw()/reroll()/落牌校验同源（world.techHint）
+    seat.hand.setAttribute('data-no-room', String(!this.app.world.buildingRoom(p.side)));
+    seat.hand.setAttribute('data-hint', this.app.world.techHint(p.side) ?? '');
+    // 金币条：数字 + 填充宽度一起走。data-full 给整条泛金光 —— 满了提醒"该花出去了"。
+    seat.goldText.textContent = String(p.gold);
+    seat.goldCap.textContent = `/${ECONOMY.cap}`;
+    seat.goldFill.style.width = `${Math.min(100, (p.gold / ECONOMY.cap) * 100)}%`;
+    seat.bank.dataset['full'] = String(p.gold >= ECONOMY.cap);
+    for (let i = 0; i < seat.cards.length; i++) this.paintCard(seat, i);
+  }
+
+  /**
    * 只改文字与 data 属性 —— 不重建节点、也不 disabled。
    * disabled 会让点击彻底没反应，玩家只会觉得"点不到"；
    * 这里让点击永远有回应（打不了就说明原因）。
    */
-  private paintCard(slot: number): void {
-    const el = this.cards[slot]!;
-    const parts = this.cardParts[slot]!;
+  private paintCard(seat: HudSeat, slot: number): void {
+    const el = seat.cards[slot]!;
+    const parts = seat.parts[slot]!;
     // 正在播"飞出去"的这 260ms：别改它，让动画把旧牌面带走
     if (el.dataset['played'] === '1') return;
 
-    const card = this.app.world.hand[slot];
+    const p = this.app.world.players[seat.player] ?? this.app.world.players[0]!;
+    const card = p.hand[slot];
     const id = card ? card.id : null;
-    const last = this.lastCardId[slot] ?? null;
+    const last = seat.lastCardId[slot] ?? null;
 
     // 刚打出去：牌面再留 260ms 做飞出动画，然后变成**空白格**（不再显示"补牌中"）
     if (!card && last !== null) {
-      this.lastCardId[slot] = null;
+      seat.lastCardId[slot] = null;
       el.dataset['played'] = '1';
       el.dataset['selected'] = 'false';
-      if (this.playTimers[slot] !== null) window.clearTimeout(this.playTimers[slot]!);
-      this.playTimers[slot] = window.setTimeout(() => {
+      const old = seat.playTimers[slot];
+      if (old !== null && old !== undefined) window.clearTimeout(old);
+      seat.playTimers[slot] = window.setTimeout(() => {
         el.dataset['played'] = '0';
         el.dataset['empty'] = '1';
         el.dataset['affordable'] = 'true';
@@ -498,13 +664,15 @@ export class ArenaHud {
         parts.kind.textContent = '';
         parts.art.innerHTML = '';
         parts.need.textContent = '';
-        this.playTimers[slot] = null;
+        seat.playTimers[slot] = null;
       }, 260);
       return;
     }
-    this.lastCardId[slot] = id;
+    seat.lastCardId[slot] = id;
 
-    el.dataset['selected'] = String(this.app.selectedSlot === slot);
+    el.dataset['selected'] = String(
+      this.app.selectedSlot === slot && this.app.selectedPlayer === p.id,
+    );
     if (!card) {
       // 空白格：没有数字、没有名字、没有倒计时 —— 就是"这张牌已经打出去了"
       el.dataset['empty'] = '1';
@@ -518,7 +686,7 @@ export class ArenaHud {
     }
     el.dataset['empty'] = '0';
     el.dataset['kind'] = card.kind === 'building' ? 'build' : 'army';
-    el.dataset['affordable'] = String(this.app.world.gold.blue >= card.cost);
+    el.dataset['affordable'] = String(p.gold >= card.cost);
     parts.cost.textContent = String(card.cost);
     parts.name.textContent = card.name;
     // 移动火炮是**军队**（'siege' 只是模型差异），不再单独标'工程'
@@ -532,7 +700,7 @@ export class ArenaHud {
     // 判据读 `supplyBlocked` 的理由文本（和出牌被拒同一条路，不另算一套账），
     // 玩家看着牌面就知道"为什么造不出来"，不用点出去被拒了才明白。
     parts.need.innerHTML = supplyRowsHtml(card);
-    const why = this.app.world.supplyBlocked('blue', card);
+    const why = this.app.world.supplyBlocked(p.side, card);
     el.dataset['short'] = why ? (why.includes('面包') ? 'bread' : 'pop') : '';
   }
 
@@ -541,13 +709,15 @@ export class ArenaHud {
    * 不然 260ms 后旧定时器会把刚发下来的新牌清成空白格。
    */
   rerollHand(): void {
-    for (let i = 0; i < this.cards.length; i++) {
-      const timer = this.playTimers[i];
-      if (timer !== null) window.clearTimeout(timer);
-      this.playTimers[i] = null;
-      this.lastCardId[i] = null;
-      this.cards[i]!.dataset['played'] = '0';
-      this.cards[i]!.dataset['selected'] = 'false';
+    for (const seat of this.seats) {
+      for (let i = 0; i < seat.cards.length; i++) {
+        const timer = seat.playTimers[i];
+        if (timer !== null && timer !== undefined) window.clearTimeout(timer);
+        seat.playTimers[i] = null;
+        seat.lastCardId[i] = null;
+        seat.cards[i]!.dataset['played'] = '0';
+        seat.cards[i]!.dataset['selected'] = 'false';
+      }
     }
     this.refresh();
   }
@@ -563,9 +733,9 @@ export class ArenaHud {
     if (this.viewBtn && this.viewBtn.textContent !== text) this.viewBtn.textContent = text;
   }
 
-  /** 给外部（比如实机探针）读一眼当前卡面文案。 */
+  /** 给外部（比如实机探针）读一眼当前卡面文案（第 0 号座位）。 */
   get cardLabels(): string[] {
-    return this.cards.map((c) => c.textContent ?? '');
+    return (this.seats[0]?.cards ?? []).map((c) => c.textContent ?? '');
   }
 
   /** 用一张卡的说明做长按提示（以后接气泡）。 */

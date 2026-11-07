@@ -35,11 +35,14 @@ import {
   UNIT,
   cardById,
   type ArenaCard,
+  type FieldSpec,
 } from './config';
 
 // 结构与'世界长什么样'在 ./types（这边只留 re-export，免得十几个文件的 import 全改）
 import { statsOf } from './types';
 import { decide, type AiView } from './ai';
+import { PVE_LEVELS, pveLevel, type PveLevel } from './pve/levels';
+import type { Wave } from './pve/waves';
 import type {
   ArenaBuilding,
   ArenaOptions,
@@ -50,6 +53,7 @@ import type {
   Outcome,
   OutcomeReason,
   PlayResult,
+  PlayerSlot,
   Side,
 } from './types';
 
@@ -63,10 +67,72 @@ export type {
   Outcome,
   OutcomeReason,
   PlayResult,
+  PlayerSlot,
   Side,
   UnitStats,
 } from './types';
 export { statsOf } from './types';
+
+/**
+ * 造一个玩家槽（1v1 两人 / PVE 一人或两人）。
+ *
+ * 只在这里给初值：**金币起点、手牌格数、AI 计时**都读 config，
+ * 以后调配额不用满世界找字面量。
+ */
+function makePlayer(id: number, side: Side, auto: boolean): PlayerSlot {
+  return {
+    id,
+    side,
+    gold: ECONOMY.start,
+    goldTick: 0,
+    hand: new Array<ArenaCard | null>(HAND.size).fill(null),
+    cooldowns: new Array<number>(HAND.size).fill(0),
+    lastPlayed: new Array<string | null>(HAND.size).fill(null),
+    auto,
+    aiIn: AI.thinkSeconds,
+    aiRerollIn: 0,
+  };
+}
+
+/**
+ * 把一个"按阵营读写的普通对象"接到玩家槽上。
+ *
+ * 为什么需要：`world.gold.blue = 20` 这种写法在测试里出现 40 多次（给钱造场景）。
+ * 玩家槽化之后如果换成只读快照，这些写入会**静默丢失**（测试会红一片，而且原因很难看出来）。
+ * 用 defineProperty 做成 getter/setter 桥，读写都真正落到 `players` 上 ——
+ * 老代码和老测试一行不用改，语义仍然是"这个阵营主玩家的那一份"。
+ */
+function sideBridge<T>(
+  get: (s: Side) => T,
+  set: (s: Side, v: T) => void,
+): Record<Side, T> {
+  const view = {} as Record<Side, T>;
+  for (const s of ['blue', 'red'] as Side[]) {
+    Object.defineProperty(view, s, {
+      get: () => get(s),
+      set: (v: T) => set(s, v),
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return view;
+}
+
+/**
+ * PVE 的波次进度（只读给 HUD 用，写只有 `tickWaves` 一处）。
+ *
+ * `countdown` 是**距下一波**的秒数；全部波次放完之后是 `Infinity`（HUD 写"最后一波"）。
+ */
+export interface PveState {
+  level: PveLevel;
+  /** 下一波是第几波（0 起） */
+  next: number;
+  countdown: number;
+  /** 已经放出去多少怪 */
+  spawned: number;
+  /** 已经清掉多少怪（死在界面上的 + 飞出地图的） */
+  slain: number;
+}
 
 /**
  * 纯逻辑世界 —— 不 import three，所以**服务器可以直接跑这一份**（未来联机的前提）。
@@ -82,33 +148,40 @@ export { statsOf } from './types';
 export class ArenaWorld {
   readonly seed: number;
   readonly rng: Random;
-
-  gold: Record<Side, number> = { blue: ECONOMY.start, red: ECONOMY.start };
-  /** 距下一格金币还差几秒（每侧各一个计时） */
-  private readonly goldTick: Record<Side, number> = { blue: 0, red: 0 };
   /**
-   * **两边各一副手牌**（原来只有蓝方有，红方是从整池里随手挑 —— 那就是"一直出弓箭手"的来源）。
-   * 红方也走手牌之后，两边受同样的限制：能出的牌只有手上那 4 张，规矩对等。
-   */
-  readonly hands: Record<Side, (ArenaCard | null)[]> = {
-    blue: [null, null, null, null],
-    red: [null, null, null, null],
-  };
-  readonly handCooldowns: Record<Side, number[]> = {
-    blue: [0, 0, 0, 0],
-    red: [0, 0, 0, 0],
-  };
-  /**
-   * 每一格"刚打出去的那张牌"。
+   * 这块场地的尺寸（2026-11-07 参数化）。
    *
-   * 为什么需要它：补牌是在冷却结束时发生的，那时格子里已经是 null，
-   * 只靠"手上剩下的三张"排除不掉刚打出去的那张 —— 于是同 seed 下真会把同一张牌原样发回来。
-   * 以前那条锁能过只是因为卡池 17 张、抽样运气好（1/14 的概率），不是真的挡住了。
+   * 1v1 永远是 `FIELD`（44×20）；PVE 传 `PVE_FIELD`（56×36，"场地贼拉大"）。
+   * 逻辑层所有越界判定、半场归属、禁建带、随机落点都读这里，
+   * **不再有第二处写死尺寸的地方** —— 视图也读 `world.fieldSize`。
    */
-  private readonly lastPlayed: Record<Side, (string | null)[]> = {
-    blue: [null, null, null, null],
-    red: [null, null, null, null],
-  };
+  readonly field: FieldSpec;
+  /** 玩法模式：`arena` 是对战（默认），`pve` 是守波次（场地更大、怪按波次来） */
+  readonly mode: 'arena' | 'pve';
+  /**
+   * PVE 的波次进度（`mode === 'arena'` 时是 null）。
+   *
+   * 为什么记在这里而不是单独一个 `PveWorld` 类：PVE 与 1v1 的差别只有
+   * **场地 / 出怪方式 / 判据**这三处，产能、后勤、碰撞、科技、拆楼全都一样。
+   * 拆成两个类就得把那一千多行复制一份，然后两边慢慢长歪 —— 那才是真返工。
+   */
+  pve: PveState | null = null;
+
+  /**
+   * **玩家槽**（2026-11-07 抽出来给 PVE 多人用）。
+   *
+   * 以前金币 / 手牌 / 托管都是 `Record<Side, …>` —— 一个阵营只能有一个操作者。
+   * PVE 的"多人打"是**合作守家**：两个玩家都在 blue 一侧，各有一份金币和手牌
+   * （建筑与单位靠 `owner` 认人），所以状态必须按"玩家"索引，而不是按"阵营"。
+   *
+   * - 1v1：`[blue 玩家, red AI]` —— 对打，手感不变；
+   * - PVE 单人：`[blue 玩家]`；
+   * - PVE 双人：`[blue 玩家0, blue 玩家1]` —— 两人共守一条线。
+   *
+   * 于是"联机再来一个远端玩家"只是往这个数组里多推一个槽，
+   * 规则层（产能 / 后勤 / 出牌 / 判据）一行都不用改。
+   */
+  readonly players: PlayerSlot[] = [];
 
   readonly buildings = new Map<number, ArenaBuilding>();
   units: ArenaUnit[] = [];
@@ -134,16 +207,6 @@ export class ArenaWorld {
    */
   readonly destroyed: Record<Side, number> = { blue: 0, red: 0 };
 
-  /**
-   * 托管开关。红方恒为 true（它没有手牌，永远由 AI 打）；蓝方默认 false —— 那是玩家的位置。
-   * 打开蓝方 = 我方也自动出牌，自动化测试与"放着自己看"都用它。
-   */
-  readonly auto: Record<Side, boolean> = { blue: false, red: true };
-  /** 两边各自的"下次想一想"倒计时（原来只有红方一个，蓝方托管后必须各记一份） */
-  private readonly aiIn: Record<Side, number> = { blue: AI.thinkSeconds, red: AI.thinkSeconds };
-  /** AI 两次刷新之间的冷却（秒）；玩家手动刷新不占这个计时器 */
-  private readonly aiRerollIn: Record<Side, number> = { blue: 0, red: 0 };
-
   outcome: Outcome = 'playing';
   /** 怎么结束的（HUD 拿它写结算面板的第二行） */
   outcomeReason: OutcomeReason = null;
@@ -155,20 +218,68 @@ export class ArenaWorld {
   constructor(options: ArenaOptions = {}) {
     this.seed = options.seed ?? 1;
     this.rng = new Random(this.seed);
-    if (options.auto?.blue !== undefined) this.auto.blue = options.auto.blue;
+    this.mode = options.mode ?? 'arena';
 
-    const midRow = Math.floor((FIELD.rows - CORE.rows) / 2);
+    // PVE 的场地跟着关卡走（"场地贼拉大"就写在关卡表里，不写死在这里）
+    const level = this.mode === 'pve' ? pveLevel(options.level ?? PVE_LEVELS[0]!.id) : null;
+    this.field = options.field ?? level?.field ?? FIELD;
+    if (level) {
+      this.pve = { level, next: 0, countdown: level.waves[0]?.at ?? Infinity, spawned: 0, slain: 0 };
+    }
+
+    // ---- 玩家槽（口径见 players 字段注释）
+    this.players.push(makePlayer(0, 'blue', false));
+    if (this.mode === 'pve') {
+      // PVE 的怪是 red，不占玩家槽；第二个槽是**同阵营的第二个玩家**
+      if ((options.players ?? 1) >= 2) this.players.push(makePlayer(1, 'blue', false));
+    } else {
+      this.players.push(makePlayer(1, 'red', true));
+    }
+    /**
+     * 托管开关要落到**这个阵营的每一个玩家**上（2026-11-07 双人同屏）。
+     *
+     * 原来写的是 `this.playerOf('blue').auto = ...` —— `playerOf` 只返回 0 号槽，
+     * 于是双人局里 **玩家 1 永远不是托管**：它拿着满格金币、四张手牌一动不动。
+     * 表现是"双人比单人还难"（5/12 vs 8/12），因为实际上只有一个人在守。
+     * 这和 `update()` 的涨金遍历、`tickAi()` 的驱动遍历是同一类漏，改一处要一起看。
+     */
+    if (options.auto?.blue !== undefined) {
+      for (const p of this.playersOf('blue')) p.auto = options.auto.blue;
+    }
+    if (options.auto?.red !== undefined) {
+      for (const p of this.playersOf('red')) p.auto = options.auto.red;
+    }
+
+    const midRow = Math.floor((this.field.rows - CORE.rows) / 2);
     // 横版：蓝在左端、红在右端，各留一格边
     this.place('blue', 'core', 1, midRow, CORE.hp);
-    this.place('red', 'core', FIELD.cols - CORE.cols - 1, midRow, CORE.hp);
+    // PVE 没有对面的家：怪的终点是 blue 大本营，不是"拆掉红方水晶"
+    if (this.mode !== 'pve') this.place('red', 'core', this.field.cols - CORE.cols - 1, midRow, CORE.hp);
 
     const fixed = options.hand ?? [];
-    for (const side of ['blue', 'red'] as Side[]) {
+    for (const p of this.players) {
       for (let i = 0; i < HAND.size; i++) {
-        // 开局手牌只固定蓝方那一副（测试用）；红方也发一副，两边对等
-        this.hands[side][i] = side === 'blue' && fixed[i] ? cardById(fixed[i]!) : this.draw(side);
+        // 开局手牌只固定蓝方玩家 0 那一副（测试用）；其它槽照常随机
+        p.hand[i] = p.side === 'blue' && p.id === 0 && fixed[i] ? cardById(fixed[i]!) : this.draw(p.side);
       }
     }
+  }
+
+  /** 这个阵营的**主玩家**（1v1 恒定一个；PVE 双人取第一个）。手牌/金币的默认落点。 */
+  playerOf(side: Side): PlayerSlot {
+    for (const p of this.players) if (p.side === side) return p;
+    // PVE 里 red 没有玩家槽（它是怪），落到第一个人类玩家，避免 undefined 炸穿调用方
+    return this.players[0]!;
+  }
+
+  /** 这个阵营的**全部玩家**（PVE 双人是 2 个）—— HUD 按它渲染两副手牌。 */
+  playersOf(side: Side): PlayerSlot[] {
+    return this.players.filter((p) => p.side === side);
+  }
+
+  /** 这个玩家槽还归不归人类操作（不是 AI、也不是波次怪）。 */
+  isHuman(p: PlayerSlot): boolean {
+    return p.side === 'blue' && !p.auto;
   }
 
   /**
@@ -189,7 +300,7 @@ export class ArenaWorld {
    * 相当于皇室战争里"玩家自己配卡组"那件事的替代品。
    */
   private draw(side: Side, exclude?: string): ArenaCard {
-    const hand = this.hands[side].filter((c): c is ArenaCard => c !== null);
+    const hand = this.playerOf(side).hand.filter((c): c is ArenaCard => c !== null);
     const taken = new Set(hand.map((c) => c.id));
     if (exclude) taken.add(exclude);
     let pool = CARDS.filter((c) => !taken.has(c.id));
@@ -267,17 +378,47 @@ export class ArenaWorld {
 
   /** 场地尺寸（视图层建地面要它，别自己再去读一遍配置）。 */
   get fieldSize(): { cols: number; rows: number } {
-    return { cols: FIELD.cols, rows: FIELD.rows };
+    return { cols: this.field.cols, rows: this.field.rows };
   }
 
   /** 蓝方的手牌（HUD、测试与老代码都读它；红方的那份在 `hands.red`）。 */
   get hand(): (ArenaCard | null)[] {
-    return this.hands.blue;
+    return this.playerOf('blue').hand;
   }
 
   /** 蓝方的手牌冷却（同上，是 `handCooldowns.blue` 的快捷读法）。 */
   get handCooldown(): number[] {
-    return this.handCooldowns.blue;
+    return this.playerOf('blue').cooldowns;
+  }
+
+  /**
+   * **兼容读数**（2026-11-07 玩家槽化之后留下的旧形状）。
+   *
+   * 老代码和 500 条测试到处在写 `world.gold.blue = 20` / `world.auto.red = false`。
+   * 这两份用 `sideBridge` 做成了**真的可写**（读写都落到 players 上），
+   * 所以"给钱造场景 / 关掉对方 AI"这些老写法语义完全不变。
+   */
+  readonly gold = sideBridge<number>(
+    (s) => this.playerOf(s).gold,
+    (s, v) => {
+      this.playerOf(s).gold = v;
+    },
+  );
+
+  readonly auto = sideBridge<boolean>(
+    (s) => this.playerOf(s).auto,
+    (s, v) => {
+      this.playerOf(s).auto = v;
+    },
+  );
+
+  /** 手牌与冷却：只读快照（数组本身是**真引用**，元素读写都生效）。 */
+  get hands(): Record<Side, (ArenaCard | null)[]> {
+    return { blue: this.playerOf('blue').hand, red: this.playerOf('red').hand };
+  }
+
+  get handCooldowns(): Record<Side, number[]> {
+    return { blue: this.playerOf('blue').cooldowns, red: this.playerOf('red').cooldowns };
   }
 
   /**
@@ -305,7 +446,7 @@ export class ArenaWorld {
    * tests「黄区只禁落位、不禁开火」那一组锁里，塞黄区过滤会红。
    */
   inNoBuild(col: number): boolean {
-    return col >= FIELD.midCol - NO_BUILD.halfWidth && col <= FIELD.midCol + NO_BUILD.halfWidth;
+    return col >= this.field.midCol - NO_BUILD.halfWidth && col <= this.field.midCol + NO_BUILD.halfWidth;
   }
 
   coreOf(side: Side): ArenaBuilding | undefined {
@@ -323,7 +464,7 @@ export class ArenaWorld {
 
   /** 己方半场：蓝在左（col < midCol），红在右。 */
   inOwnHalf(side: Side, col: number): boolean {
-    return side === 'blue' ? col < FIELD.midCol : col >= FIELD.midCol;
+    return side === 'blue' ? col < this.field.midCol : col >= this.field.midCol;
   }
 
   /**
@@ -335,7 +476,7 @@ export class ArenaWorld {
   private buildingPlacementIssue(side: Side, col: number, row: number, cols = 3, rows = 3): string | null {
     void side;
     // 尺寸按 BUILDING_SPECS 传进来：齿轮工厂是 4×3，黄区要遍历 4 列，不能写死 3
-    if (col < 0 || row < 0 || col + cols > FIELD.cols || row + rows > FIELD.rows) return '出界了';
+    if (col < 0 || row < 0 || col + cols > this.field.cols || row + rows > this.field.rows) return '出界了';
     for (let c = col; c < col + cols; c++) if (this.inNoBuild(c)) return '中间黄区不能盖楼';
     if (!this.cellFree(col, row, cols, rows)) return '这格被占了';
     return null;
@@ -343,8 +484,8 @@ export class ArenaWorld {
 
   /** 这一侧有没有放得下 cols×rows 的空位（逐尺寸扫描，一次抽牌只算一遍）。 */
   private scanRoom(side: Side, cols: number, rows: number): boolean {
-    for (let row = 0; row <= FIELD.rows - rows; row++) {
-      for (let col = 0; col <= FIELD.cols - cols; col++) {
+    for (let row = 0; row <= this.field.rows - rows; row++) {
+      for (let col = 0; col <= this.field.cols - cols; col++) {
         if (!this.inOwnHalf(side, col)) continue;
         if (this.buildingPlacementIssue(side, col, row, cols, rows) === null) return true;
       }
@@ -436,8 +577,8 @@ export class ArenaWorld {
     const col = b.side === 'blue' ? b.col + b.cols : b.col - 1;
     const row = b.row + Math.floor(b.rows / 2);
     return {
-      col: Math.min(FIELD.cols - 1, Math.max(0, col)),
-      row: Math.min(FIELD.rows - 1, Math.max(0, row)),
+      col: Math.min(this.field.cols - 1, Math.max(0, col)),
+      row: Math.min(this.field.rows - 1, Math.max(0, row)),
     };
   }
 
@@ -445,7 +586,7 @@ export class ArenaWorld {
   setFlag(buildingId: number, col: number, row: number): boolean {
     const b = this.buildings.get(buildingId);
     if (!b || b.kind !== 'barracks' || !b.side) return false;
-    if (col < 0 || row < 0 || col >= FIELD.cols || row >= FIELD.rows) return false;
+    if (col < 0 || row < 0 || col >= this.field.cols || row >= this.field.rows) return false;
     if (!this.cellFree(col, row, 1, 1)) return false;
     b.flag = { col, row };
     return true;
@@ -476,17 +617,27 @@ export class ArenaWorld {
    * 失败原因会原样给 HUD 用：金不够 / 半场不对 / 这格被占 / 卡还在冷却。
    */
   playCard(side: Side, slot: number, col: number, row: number): PlayResult {
-    const problem = this.placementProblem(side, slot, col, row);
-    if (problem) return { ok: false, reason: problem };
-    const card = this.hands[side][slot]!;
+    return this.playCardOf(this.playerOf(side), slot, col, row);
+  }
 
-    this.execute(side, card, col, row);
+  /**
+   * **指定玩家出牌**（2026-11-07 双人 PVE）。
+   *
+   * 两个人都在 blue 一侧，所以"半场 / 供给 / 后勤"照旧按阵营判，
+   * 只有**金币和手牌**按玩家槽走 —— 谁掏钱、谁那张牌进冷却。
+   */
+  playCardOf(p: PlayerSlot, slot: number, col: number, row: number): PlayResult {
+    const problem = this.placementProblem(p, slot, col, row);
+    if (problem) return { ok: false, reason: problem };
+    const card = p.hand[slot]!;
+
+    this.execute(p, card, col, row);
     // 这栋楼落地后可能刚好把最后一处空位占掉：手里剩下的建筑卡立刻换成军队卡
-    this.purgeLocked(side);
+    this.purgeLocked(p.side);
     // 打出去就进冷却，冷却完补一张新的（配卡组以后再做）
-    this.lastPlayed[side][slot] = card.id;
-    this.hands[side][slot] = null;
-    this.handCooldowns[side][slot] = HAND.refillSeconds;
+    p.lastPlayed[slot] = card.id;
+    p.hand[slot] = null;
+    p.cooldowns[slot] = HAND.refillSeconds;
     return { ok: true };
   }
 
@@ -495,16 +646,21 @@ export class ArenaWorld {
    * 落牌（playCard）和影子的绿/红显色都从这里出，不会算出两套账。
    */
   canPlaceAt(side: Side, slot: number, col: number, row: number): { ok: boolean; reason?: string } {
-    const problem = this.placementProblem(side, slot, col, row);
+    return this.canPlaceAtOf(this.playerOf(side), slot, col, row);
+  }
+
+  canPlaceAtOf(p: PlayerSlot, slot: number, col: number, row: number): { ok: boolean; reason?: string } {
+    const problem = this.placementProblem(p, slot, col, row);
     return problem ? { ok: false, reason: problem } : { ok: true };
   }
 
-  private placementProblem(side: Side, slot: number, col: number, row: number): string | null {
+  private placementProblem(p: PlayerSlot, slot: number, col: number, row: number): string | null {
+    const side = p.side;
     if (this.outcome !== 'playing') return '这一局已经结束';
-    const card = this.hands[side][slot];
+    const card = p.hand[slot];
     if (!card) return '这格是空的';
-    if (this.handCooldowns[side][slot]! > 0) return '这张还在冷却';
-    if (this.gold[side] < card.cost) return `金币不够（要 ${card.cost}）`;
+    if (p.cooldowns[slot]! > 0) return '这张还在冷却';
+    if (p.gold < card.cost) return `金币不够（要 ${card.cost}）`;
     const blocked = this.supplyBlocked(side, card);
     if (blocked) return blocked;
     if (!this.inOwnHalf(side, col)) return '只能放在自己半场';
@@ -514,19 +670,19 @@ export class ArenaWorld {
       return this.buildingPlacementIssue(side, col, row, spec.cols, spec.rows);
     }
     // 军队卡仍占 1×1（飞行单位也一样：落牌位置维持与现有锁一致）
-    if (col + 1 > FIELD.cols || row + 1 > FIELD.rows) return '出界了';
+    if (col + 1 > this.field.cols || row + 1 > this.field.rows) return '出界了';
     if (!this.cellFree(col, row, 1, 1)) return '这格被占了';
     if (this.inNoBuild(col)) return '中间黄区不能放兵';
     return null;
   }
 
   /** 真正的花钱与落位。AI 也用这一条，保证两边走同一套规则。 */
-  private execute(side: Side, card: ArenaCard, col: number, row: number): void {
-    this.spend(side, card.cost);
+  private execute(p: PlayerSlot, card: ArenaCard, col: number, row: number): void {
+    this.spend(p, card.cost);
     if (card.kind === 'building') {
-      this.place(side, card.building!, col, row, BUILDING_SPECS[card.building!].hp);
+      this.place(p.side, card.building!, col, row, BUILDING_SPECS[card.building!].hp);
     } else {
-      this.spawnSquad(side, card.squad ?? [], col, row, false, card.breadPerMan ?? 1);
+      this.spawnSquad(p.side, card.squad ?? [], col, row, false, card.breadPerMan ?? 1);
     }
   }
 
@@ -538,44 +694,39 @@ export class ArenaWorld {
    * `draw()` 自己的「缺后勤保底」只在场上缺民居时触发，所以这里再补一道硬保底。
    */
   reroll(side: Side): PlayResult {
+    return this.rerollOf(this.playerOf(side));
+  }
+
+  /** 指定玩家刷新（双人 PVE：各花各的 5 金）。 */
+  rerollOf(p: PlayerSlot): PlayResult {
     if (this.outcome !== 'playing') return { ok: false, reason: '这一局已经结束' };
-    if (this.gold[side] < REROLL.cost) return { ok: false, reason: `金币不够（刷新要 ${REROLL.cost}）` };
+    if (p.gold < REROLL.cost) return { ok: false, reason: `金币不够（刷新要 ${REROLL.cost}）` };
 
     // 先清空，让 draw() 的去重从零开始，保证 4 张互不重复
-    this.hands[side] = [null, null, null, null];
+    p.hand.fill(null);
     const fresh: ArenaCard[] = [];
     for (let i = 0; i < HAND.size; i++) {
-      const card = this.draw(side, fresh.at(-1)?.id);
+      const card = this.draw(p.side, fresh.at(-1)?.id);
       fresh.push(card);
-      this.hands[side][i] = card;
+      p.hand[i] = card;
     }
-    /**
-     * 保底改成「缺什么给什么」（2026-11-06 实测纠错）。
-     *
-     * 上一版**永远只保 house**，于是 seed 20261027 的红方陷进死循环：
-     * 面包 3/3 满、兵营缺磨坊 → 刷新 → 保底 house 把刚补到的 mill 换掉 →
-     * 磨坊永远盖不出来 → 面包继续满 → 再刷。180 秒刷 11 次、白烧 55 金、0 兵。
-     *
-     * 现在：`missingLogistics()` 说缺磨坊就保 mill，**同时仍保一张房屋**
-     * （用户原话「刷新默认会给一张房屋」，这条不破）。都不缺时只保房屋。
-     */
     // 没空位时**不塞** house/mill 保底（否则刷新完又是一张盖不下去的楼）
-    if (this.hasRoomFor(side, 'house')) {
-      const needs = this.missingLogisticsAll(side);
+    if (this.hasRoomFor(p.side, 'house')) {
+      const needs = this.missingLogisticsAll(p.side);
       const wanted: string[] = needs.length > 0 ? [...needs] : ['house'];
       // 用户原话「刷新默认会给一张房屋」：即使只缺磨坊，房屋也照保
       if (!wanted.includes('house')) wanted.push('house');
       let slot = HAND.size - 1;
       for (const id of wanted) {
-        if (this.hands[side].some((c) => c?.id === id)) continue;
-        this.hands[side][slot--] = cardById(id);
+        if (p.hand.some((c) => c?.id === id)) continue;
+        p.hand[slot--] = cardById(id);
       }
     }
 
     // 牌全换了，冷却与「刚打出去那张」的记录一起清掉
-    this.handCooldowns[side].fill(0);
-    this.lastPlayed[side].fill(null);
-    this.spend(side, REROLL.cost);
+    p.cooldowns.fill(0);
+    p.lastPlayed.fill(null);
+    this.spend(p, REROLL.cost);
     return { ok: true };
   }
 
@@ -586,23 +737,24 @@ export class ArenaWorld {
   private purgeLocked(side: Side): void {
     const room = new Map<string, boolean>();
     for (let i = 0; i < HAND.size; i++) {
-      const card = this.hands[side][i];
+      const card = this.playerOf(side).hand[i];
       if (card && !this.techAllows(side, card, room)) {
-        this.hands[side][i] = this.draw(side, card.id);
+        this.playerOf(side).hand[i] = this.draw(side, card.id);
         room.clear(); // 刚换的牌可能改变占地判断，缓存作废
       }
     }
   }
 
   /** 立刻补一张牌到那一格（补的是**手上还没有的**牌，也不补刚打出去那张）。 */
-  private drawInto(side: Side, slot: number): void {
-    const exclude = this.lastPlayed[side][slot] ?? undefined;
-    this.lastPlayed[side][slot] = null;
-    this.hands[side][slot] = this.draw(side, exclude);
+  private drawInto(p: PlayerSlot, slot: number): void {
+    const exclude = p.lastPlayed[slot] ?? undefined;
+    p.lastPlayed[slot] = null;
+    p.hand[slot] = this.draw(p.side, exclude);
   }
 
-  private spend(side: Side, amount: number): void {
-    this.gold[side] = Math.max(0, this.gold[side] - amount);
+  /** 花钱（PVE 双人时各花各的，所以按玩家槽扣，不按阵营）。 */
+  private spend(p: PlayerSlot, amount: number): void {
+    p.gold = Math.max(0, p.gold - amount);
   }
 
   private spawnSquad(
@@ -656,21 +808,21 @@ export class ArenaWorld {
     // 金：每 ECONOMY.tickSeconds 跳 +perTick，到上限就不涨。
     // 用"攒够一格再加"而不是 perSecond*dt，是为了大 dt（快进/掉帧）时也按整格补，
     // 不会出现 12.7333 这种读数。
-    for (const side of ['blue', 'red'] as Side[]) {
-      this.goldTick[side] += dt;
-      while (this.goldTick[side] >= ECONOMY.tickSeconds) {
-        this.goldTick[side] -= ECONOMY.tickSeconds;
-        this.gold[side] = Math.min(ECONOMY.cap, this.gold[side] + ECONOMY.perTick);
+    for (const p of this.players) {
+      p.goldTick += dt;
+      while (p.goldTick >= ECONOMY.tickSeconds) {
+        p.goldTick -= ECONOMY.tickSeconds;
+        p.gold = Math.min(ECONOMY.cap, p.gold + ECONOMY.perTick);
       }
     }
 
-    // 手牌冷却：两边各自补（红方现在也有手牌了）
-    for (const side of ['blue', 'red'] as Side[]) {
-      const cool = this.handCooldowns[side];
+    // 手牌冷却：**按玩家槽**各自补（PVE 双人时第二个玩家也要补牌）
+    for (const p of this.players) {
+      const cool = p.cooldowns;
       for (let i = 0; i < cool.length; i++) {
         if (cool[i]! <= 0) continue;
         cool[i] = Math.max(0, cool[i]! - dt);
-        if (cool[i] === 0) this.drawInto(side, i);
+        if (cool[i] === 0) this.drawInto(p, i);
       }
     }
 
@@ -685,6 +837,8 @@ export class ArenaWorld {
     this.tickUnits(dt);
     this.separateUnits();
     this.tickAi(dt);
+    // PVE：AI 只管"玩家的托管"，出怪走波次表（两条独立的驱动，不互相顶）
+    if (this.mode === 'pve') this.tickWaves(dt);
     this.checkOutcome();
   }
 
@@ -732,8 +886,8 @@ export class ArenaWorld {
     // 飞行单位**不 clamp**：轰炸机要靠飞出地图来消失（2026-11-07 设计文档 E 节）。
     for (const u of us) {
       if (u.hp <= 0 || this.flyingOf(u.defId)) continue;
-      u.x = Math.min(FIELD.cols - 0.4, Math.max(0.4, u.x));
-      u.z = Math.min(FIELD.rows - 0.4, Math.max(0.4, u.z));
+      u.x = Math.min(this.field.cols - 0.4, Math.max(0.4, u.x));
+      u.z = Math.min(this.field.rows - 0.4, Math.max(0.4, u.z));
     }
   }
 
@@ -824,7 +978,7 @@ export class ArenaWorld {
         b.timer += dt;
         if (b.timer < ECONOMY.millInterval) continue;
         b.timer = 0;
-        this.gold[b.side] = Math.min(ECONOMY.cap, this.gold[b.side] + ECONOMY.millBonus);
+        this.playerOf(b.side).gold = Math.min(ECONOMY.cap, this.playerOf(b.side).gold + ECONOMY.millBonus);
         continue;
       }
       // 塔也要人手：没配到民居的那座**不开火**（用户 2026-10-31："防御建筑也占一处民房"）。
@@ -937,7 +1091,7 @@ export class ArenaWorld {
         }
       }
     }
-    if (u.x < -BOMBER.exitMargin || u.x > FIELD.cols + BOMBER.exitMargin) {
+    if (u.x < -BOMBER.exitMargin || u.x > this.field.cols + BOMBER.exitMargin) {
       u.hp = 0;
       this.leftField.add(u.id);
     }
@@ -1078,8 +1232,8 @@ export class ArenaWorld {
 
       // 没得打就朝对方大本营走；路上被谁挡住就贴上去打（下面这一支）
       const goal = this.coreOf(u.side === 'blue' ? 'red' : 'blue');
-      const gx = goal ? goal.col + goal.cols / 2 : FIELD.cols / 2;
-      const gz = goal ? goal.row + goal.rows / 2 : FIELD.rows / 2;
+      const gx = goal ? goal.col + goal.cols / 2 : this.field.cols / 2;
+      const gz = goal ? goal.row + goal.rows / 2 : this.field.rows / 2;
       const tx = foe ? foe.x : gx;
       const tz = foe ? foe.z : gz;
       const dist = Math.hypot(tx - u.x, tz - u.z);
@@ -1225,8 +1379,16 @@ export class ArenaWorld {
   }
 
   private hurtUnit(u: ArenaUnit, attack: number): void {
+    const before = u.hp;
     u.hp -= damageOf(attack, statsOf(u.defId).defense);
     if (u.hp < 0) u.hp = 0;
+    /**
+     * PVE 的击杀计数放在这里，不放在 `filter` 之前 ——
+     * 单位会在**三个地方**被清掉（塔开火后、`tickUnits` 末尾、离场），
+     * 挂在清场旁边就会漏数一半（实测 48 个怪只数到 10 个）。
+     * 挂在"血量跨过 0 的那一刻"才是唯一正确的位置。
+     */
+    if (before > 0 && u.hp === 0 && u.side === 'red' && this.pve) this.pve.slain++;
   }
 
   /**
@@ -1332,6 +1494,76 @@ export class ArenaWorld {
     });
   }
 
+  // ---------------------------------------------------------------- PVE 波次
+
+  /**
+   * 按波次表放怪（2026-11-07）。
+   *
+   * 三条口径（`docs/工作笔记/PVE模式设计_20261107.md` §4）：
+   * - **一条推进方向、多个出生行**：怪沿 -col 走，目标永远是 blue 大本营；
+   * - **不追远处的兵**：索敌半径照旧（只打贴脸的），用的还是同一套 `tickUnits`；
+   * - **不吃面包、不占人口、不产金** —— 所以波次可以随便加怪，不牵动后勤经济。
+   */
+  private tickWaves(dt: number): void {
+    const s = this.pve;
+    if (!s || this.outcome !== 'playing') return;
+    if (s.next >= s.level.waves.length) return;
+
+    s.countdown -= dt;
+    if (s.countdown > 0) return;
+
+    const wave = s.level.waves[s.next]!;
+    this.spawnWave(wave, s.level, s);
+    s.next++;
+    const nextWave = s.level.waves[s.next];
+    // 间隔用"两波 at 之差"而不是绝对值 —— 掉帧/快进时不会一口气连放三波
+    s.countdown = nextWave ? Math.max(0.5, nextWave.at - wave.at) : Number.POSITIVE_INFINITY;
+  }
+
+  /** 把一波里的每组怪摆到出生带上。同组沿 row 方向错开，不会叠成一坨。 */
+  private spawnWave(wave: Wave, level: PveLevel, s: PveState): void {
+    const col = wave.col ?? level.spawnCol;
+    const lane = wave.lane ?? level.lane;
+    for (const part of wave.spawns) {
+      const row = part.row ?? this.rng.int(lane[0], lane[1]);
+      const gap = part.gap ?? 0.62;
+      const span = (part.count - 1) * gap;
+      for (let n = 0; n < part.count; n++) {
+        this.spawnWaveUnit(part.unitId, col + 0.5, row + 0.5 + n * gap - span / 2);
+        s.spawned++;
+      }
+    }
+  }
+
+  /** 放一个波次怪。字段口径与 `spawnSquad` 一致，差别只有：**不吃面包**、不占人口。 */
+  private spawnWaveUnit(unitId: string, x: number, z: number): void {
+    const st = statsOf(unitId);
+    const uid = this.nextId++;
+    // 移动火炮/弩车不在 UNITS 表（走 MOBILE/BALLISTA 特判），读 special 会抛
+    const healer = unitId === 'mobileCannon' || unitId === 'ballista' ? null : unitDef(unitId).special;
+    this.units.push({
+      id: uid,
+      side: 'red',
+      defId: unitId,
+      x: Math.min(this.field.cols - 0.5, Math.max(0.5, x)),
+      z: Math.min(this.field.rows - 0.5, Math.max(0.5, z)),
+      hp: st.hp,
+      maxHp: st.hp,
+      cooldown: 0,
+      stun: 0,
+      order: null,
+      detour: uid % 2 === 0 ? 1 : -1,
+      // 波次怪等价于"兵营出来的兵"：不占人口（PVE 里也没人统计它们的人口）
+      fromBarracks: true,
+      aim: Math.PI,
+      healIn: healer?.kind === 'heal' ? healer.every : undefined,
+      bombIn: this.bomberOf(unitId) ? BOMBER.interval * 0.5 : undefined,
+      // 怪自带干粮：不吃玩家的面包
+      breadCost: 0,
+    });
+  }
+
+
   // ---------------------------------------------------------------- AI
 
   /**
@@ -1342,20 +1574,34 @@ export class ArenaWorld {
    * 表现出来就是"红方一直在动、蓝方偶尔才动一下"。
    */
   private tickAi(dt: number): void {
-    for (const side of ['blue', 'red'] as Side[]) {
-      if (!this.auto[side]) continue;
-      this.aiRerollIn[side] = Math.max(0, this.aiRerollIn[side] - dt);
-      this.aiIn[side] -= dt;
-      if (this.aiIn[side] > 0) continue;
-      this.aiIn[side] = AI.thinkSeconds;
-      this.think(side);
+    /**
+     * 遍历**玩家槽**而不是阵营（2026-11-07 双人同屏）。
+     *
+     * 原来写的是 `for (const side of ['blue','red'])` + `playerOf(side)`，
+     * 双人时 `playerOf('blue')` 只返回 players[0] ——
+     * **玩家 1 永远不会被托管**：白拿金币、一栋楼不出，探针读数还看不出来
+     * （因为托管只驱动了 0 号，看起来"打输了"其实是只有一个人在守）。
+     * PVE 的波次怪本来就没有玩家槽，这里天然不会驱动到它。
+     */
+    for (const p of this.players) {
+      if (!p.auto) continue;
+      p.aiRerollIn = Math.max(0, p.aiRerollIn - dt);
+      p.aiIn -= dt;
+      if (p.aiIn > 0) continue;
+      p.aiIn = AI.thinkSeconds;
+      this.think(p);
     }
   }
 
-  /** 打开/关掉某一边的托管。红方不允许关（它没有手牌，关了就再也不动了）。 */
+  /**
+   * 打开/关掉托管。红方不允许关（它没有手牌，关了就再也不动了）；
+   * 双人同屏时按 `side` 一次设**所有**该阵营的玩家（两人的托管开关不分开做 UI）。
+   */
   setAuto(side: Side, on: boolean): void {
-    this.auto[side] = side === 'red' ? true : on;
-    if (on) this.aiIn[side] = 0; // 开了就立刻想一次，别让玩家等 2.5 秒
+    for (const p of this.playersOf(side)) {
+      p.auto = side === 'red' ? true : on;
+      if (on) p.aiIn = 0; // 开了就立刻想一次，别让玩家等 2.5 秒
+    }
   }
 
   /**
@@ -1364,33 +1610,34 @@ export class ArenaWorld {
    * 这一层**不做任何判断** —— 「要不要刷新、该出第几张」全在 `ai.ts`，
    * 所以改动策略时不用碰世界状态，给一份 `AiView` 就能单测。
    */
-  private think(side: Side): void {
+  private think(p: PlayerSlot): void {
+    const side = p.side;
     const mine = [...this.buildings.values()].filter((b) => b.side === side && b.kind !== 'core');
     const view: AiView = {
-      hand: this.hands[side],
-      gold: this.gold[side],
+      hand: p.hand,
+      gold: p.gold,
       count: (kind) => mine.filter((b) => b.kind === kind).length,
       // 容器读数直接复用 `supplyOf()`：AI 和 HUD 读同一份，不会算出两套账
       supply: this.supplyOf(side),
-      rerollIn: this.aiRerollIn[side],
+      rerollIn: p.aiRerollIn,
     };
     const action = decide(view);
     if (action.kind === 'reroll') {
       // 刷新保底一张民居；成功后上冷却，避免每 2.5 秒把钱刷光
-      if (this.reroll(side).ok) this.aiRerollIn[side] = AI.rerollCooldown;
+      if (this.rerollOf(p).ok) p.aiRerollIn = AI.rerollCooldown;
       return;
     }
     if (action.kind === 'wait') return;
-    const card = this.hands[side][action.slot];
-    if (card) this.play(side, action.slot, card);
+    const card = p.hand[action.slot];
+    if (card) this.play(p, action.slot, card);
   }
 
   /** 把第 slot 张牌落到半场里一个随机空位。 */
-  private play(side: Side, slot: number, card: ArenaCard): void {
+  private play(p: PlayerSlot, slot: number, card: ArenaCard): void {
     if (slot < 0) return;
-    const cell = this.randomSpot(side, card);
+    const cell = this.randomSpot(p.side, card);
     if (!cell) return;
-    this.playCard(side, slot, cell.col, cell.row);
+    this.playCardOf(p, slot, cell.col, cell.row);
   }
 
   /** AI 的落点：自己半场、不压楼。 */
@@ -1401,12 +1648,12 @@ export class ArenaWorld {
       // 禁建带要整段避开，而且**再多留一格**：建筑模型比占地宽（兵营 3.6 格 vs 占地 3 格），
       // 贴着黄线盖会看起来"楼压进了黄区"（用户 2026-11-02 就是这么以为的，其实格子没压）
       const margin = NO_BUILD.halfWidth + 2;
-      const lo = side === 'red' ? FIELD.midCol + margin : 1;
-      const hi = side === 'red' ? FIELD.cols - spec.cols - 1 : FIELD.midCol - margin - spec.cols - 1;
+      const lo = side === 'red' ? this.field.midCol + margin : 1;
+      const hi = side === 'red' ? this.field.cols - spec.cols - 1 : this.field.midCol - margin - spec.cols - 1;
       if (hi < lo) return null;
       const col = this.rng.int(lo, hi + 1);
-      const row = this.rng.int(1, FIELD.rows - spec.rows - 1);
-      if (col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) continue;
+      const row = this.rng.int(1, this.field.rows - spec.rows - 1);
+      if (col + spec.cols > this.field.cols || row + spec.rows > this.field.rows) continue;
       if (!this.cellIsFree(col, row, spec.cols, spec.rows)) continue;
       return { col, row };
     }
@@ -1440,6 +1687,7 @@ export class ArenaWorld {
    * 并不是打输了 —— 用"拆掉对方多少"才回到真正的攻防账本上。
    */
   private checkOutcome(): void {
+    if (this.mode === 'pve') return this.checkPveOutcome();
     const blueCore = this.coreOf('blue');
     const redCore = this.coreOf('red');
 
@@ -1471,6 +1719,30 @@ export class ArenaWorld {
     const redLost = this.destroyed.red;
     if (blueLost !== redLost) return this.finish(redLost > blueLost ? 'win' : 'lose', 'overtime');
     this.finish('draw', 'draw');
+  }
+
+  /**
+   * **PVE 判据**（2026-11-07）—— 刻意与 1v1 完全分开：
+   *
+   * - 大本营被打穿 ⇒ `lose`（理由 `core`）；
+   * - 全部波次放完 **且** 场上再没有活着的怪 ⇒ `win`（理由 `waves`）；
+   * - **守满关卡的 `seconds`（5 分钟）且大本营还在** ⇒ 也算 `win` —— 残局会僵持
+   *   （一只石怪拆一栋塔要 137 秒，实测拖到 376 秒），塔防不该没有尽头；
+   * - 没有"倒计时判负"：时间本身不会让人输，输只有一种 —— 大本营被拆。
+   *
+   * 1v1 那套"加时 / 存活楼数 / 拆楼数"在这里**一条都不用** —— 这也是
+   * `docs/工作笔记/PVE模式设计_20261107.md` §5 写死的那条红线。
+   */
+  private checkPveOutcome(): void {
+    const s = this.pve;
+    if (!s) return;
+    if (!this.coreOf('blue')) return this.finish('lose', 'core');
+    if (this.elapsed >= s.level.seconds) return this.finish('win', 'waves');
+    if (s.next < s.level.waves.length) return;
+    for (const u of this.units) {
+      if (u.side === 'red' && u.hp > 0) return;
+    }
+    this.finish('win', 'waves');
   }
 
   private finish(outcome: Outcome, reason: OutcomeReason): void {
@@ -1568,7 +1840,7 @@ export class ArenaWorld {
 
   summary() {
     return {
-      gold: Math.floor(this.gold.blue),
+      gold: Math.floor(this.playerOf('blue').gold),
       goldCap: ECONOMY.cap,
       blueCore: Math.round(this.coreOf('blue')?.hp ?? 0),
       redCore: Math.round(this.coreOf('red')?.hp ?? 0),
@@ -1591,6 +1863,29 @@ export class ArenaWorld {
       staffingNeeded: { blue: this.needStaffing('blue'), red: this.needStaffing('red') },
       /** 人口 / 面包（容器）：HUD 左上角那两个读数 */
       supply: { blue: this.supplyOf('blue'), red: this.supplyOf('red') },
+      /**
+       * PVE 读数（`arena` 模式是 null）—— 波次条与结算文案**只读这里**，
+       * 不在 UI 里重算一遍（"规则与文案同表"那条红线）。
+       */
+      pve: this.pve
+        ? {
+            level: this.pve.level.name,
+            /** 已经放完几波（0 起；显示时用 wave+1） */
+            wave: this.pve.next,
+            total: this.pve.level.waves.length,
+            /** 距下一波还有几秒（全部放完是 Infinity ⇒ UI 要自己判） */
+            nextIn: this.pve.countdown,
+            spawned: this.pve.spawned,
+            slain: this.pve.slain,
+            /** 场上还活着的怪 */
+            alive: this.units.filter((u) => u.side === 'red' && u.hp > 0).length,
+            /** 这一关的守满时限 / 还剩几秒 */
+            seconds: this.pve.level.seconds,
+            left: Math.max(0, this.pve.level.seconds - this.elapsed),
+            /** 最后一波是不是已经开始（HUD 切"清剿"文案） */
+            lastWaveOut: this.pve.next >= this.pve.level.waves.length,
+          }
+        : null,
     };
   }
 }

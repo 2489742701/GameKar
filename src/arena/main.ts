@@ -40,6 +40,16 @@ const params = new URLSearchParams(location.search);
  */
 const skipMenu = params.get('play') === '1' || params.get('auto') === '1' || params.get('auto') === 'blue';
 /**
+ * `?mode=pve`：守波次模式（2026-11-07）。
+ *
+ * 场地、出怪、判据全都不一样，但入口还是这一个页面 —— 两套玩法共用一条分发链，
+ * APK 与桌面 HTML 都不用多打一份。
+ * `?level=outpost` 选关卡，`?players=2` 开双人同屏。
+ */
+const mode = params.get('mode') === 'pve' ? 'pve' : 'arena';
+const level = params.get('level') ?? undefined;
+const players = Math.min(2, Math.max(1, Number(params.get('players') ?? 1) || 1));
+/**
  * 花色系统（2026-11-06）：菜单里改过花色 ⇒「开始对战」时重开一局带新花色启动。
  * 存档在 localStorage（banner.ts），这里是"改动后自动重开"的桥：
  * sessionStorage 放一个一次性标记，reload 后跳过菜单直接开打。
@@ -68,6 +78,9 @@ const app = await ArenaApp.boot({
   container,
   canvas,
   seed: seedFromUrl(20261027),
+  mode,
+  level,
+  players,
   /**
    * 警告走左上角通知栏（会向左收起），普通提示走原来的 toast。
    * 出牌被拒时顺手让「对应那个胶囊闪红」—— 判据就是 `playCard` 的 reason 文本。
@@ -88,19 +101,19 @@ const app = await ArenaApp.boot({
 });
 
 hud = new ArenaHud(container, app, {
-  onSelectCard: (slot) => {
-    const result = app.selectCard(slot);
+  onSelectCard: (slot, player = 0) => {
+    const result = app.selectCard(slot, player);
     if (result === 'empty') hud?.say('这张牌已经打出去了，等新牌', 'warn');
     else if (result === 'cooldown') hud?.say('这张还在冷却', 'warn');
     else if (result === 'poor') {
-      const card = app.world.hand[slot];
+      const card = app.playerAt(player).hand[slot];
       hud?.say(`金币不够（要 ${card?.cost ?? 0}）`, 'warn');
     }
     hud?.setHand();
   },
   onCycleView: () => hud?.setViewStatus(app.nextView()),
-  onReroll: () => {
-    const res = app.rerollHand();
+  onReroll: (player = 0) => {
+    const res = app.rerollHand(player);
     if (res.ok) {
       hud?.rerollHand();
       hud?.say('重抽四张（保底一张民居）');
@@ -120,12 +133,23 @@ hud.setViewStatus(app.director.status);
  * 菜单期间 `app.pause()` 停的是逻辑（`GameLoop.onSimStep`），画面照常渲染，
  * 所以背后那幅战场是活的：磨坊在转、浮尘在飘。
  */
-if (!skipMenu) {
+if (!skipMenu && !autoStart) {
   app.pause();
   hud.el.style.visibility = 'hidden';
   const menu = new StartMenu(container, {
     seed: seedFromUrl(20261027),
+    mode,
     sfx: app.sfx,
+    /**
+     * 「守城 PVE」/「双人同屏」：跳过去直接开打。
+     *
+     * 写一次性 autostart 标记再导航 —— reload 之后 `?mode=pve` 生效，
+     * 菜单不再弹（和"改完旗帜自动开打"走同一条通道）。
+     */
+    onPve: (n) => {
+      sessionStorage.setItem(AUTOSTART_KEY, '1');
+      location.search = n >= 2 ? '?mode=pve&players=2' : '?mode=pve';
+    },
     onStart: () => {
       // 浏览器只在**用户手势**里允许建 AudioContext，这一下是全场唯一的天然时机
       app.sfx.unlock();

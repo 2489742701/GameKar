@@ -102,10 +102,15 @@ export class DebugPanel {
       foot,
     );
     this.el.hidden = true;
-
-    // 拖滑杆时把镜头**锁成手动**，否则导演每帧把机位拉回去，滑杆看起来没反应
-    this.app.director.userTouched();
-    this.apply();
+    /**
+     * ⚠️ 这里**不要**调 `userTouched()` / `apply()`（2026-11-07 修）。
+     *
+     * 上一版在构造末尾无条件套了一遍 `DEFAULT_SHOT`（yaw 24 / pitch 50），后果是：
+     * 一进游戏相机就被从 `ARENA_CAMERA` 的机位拽到滑杆默认值，而且顺手 `locked`，
+     * 导演从此再也接管不了 —— PVE 想设"正对 + 俯角 36"完全没反应
+     * （实测 yaw 停在 24、pitch 停在 50，查了半天数据才发现是这块面板干的）。
+     * 面板是隐藏的调试件，凭什么改玩家的镜头？改成**打开时才把滑杆同步成相机**。
+     */
   }
 
   private slider(label: string, min: number, max: number, step: number, value: number): HTMLInputElement {

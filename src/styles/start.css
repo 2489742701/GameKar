@@ -399,3 +399,22 @@
   border: 1px solid rgba(246, 220, 156, 0.14);
   background: rgba(18, 11, 6, 0.72);
 }
+
+/**
+ * PVE 入口那一行（2026-11-07）：两个按钮并排、比主按钮小一档 ——
+ * 它们是"另一套玩法"的入口，不该和「开始对战」抢视觉重量。
+ */
+.start__row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.start__row .start__btn {
+  flex: 1;
+}
+
+.start__btn--pve {
+  border-color: rgba(122, 162, 222, 0.45);
+  color: #d8e6ff;
+}

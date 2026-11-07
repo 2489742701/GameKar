@@ -29,7 +29,7 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResult, type Side } from './ArenaWorld';
 import { AmbientDust } from './ambient';
 import { ArenaDirector } from './Camera';
-import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
+import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
 import { Confetti } from './visuals/confetti';
@@ -52,6 +52,12 @@ export interface ArenaAppOptions {
   container: HTMLElement;
   canvas: HTMLCanvasElement;
   seed?: number;
+  /** 玩法模式（2026-11-07）：`pve` = 守波次，场地与判据都换一套；默认对战 */
+  mode?: 'arena' | 'pve';
+  /** PVE 关卡 id（不给就用第一关） */
+  level?: string;
+  /** PVE 玩家人数（1 或 2，两人都在 blue 一侧） */
+  players?: number;
   dudesUrl?: string;
   /** UI 回调：金/血变了、出牌失败要说话 */
   onToast?: (text: string, tone?: 'ok' | 'warn') => void;
@@ -122,6 +128,18 @@ const FLYER_IDS = new Set(['balloon', 'airscrew', 'bomber']);
 /** 触屏拖放：影子落在手指前方（屏幕上方）这么多 CSS 像素，免得手指盖住预览 */
 const DRAG_FINGER_OFFSET = 56;
 
+/**
+ * 一次拖放的全部 3D 资源。打包成一个对象是为了**按玩家**各留一份 ——
+ * 双人同屏时两个人在同一块屏上各拖一张牌，影子不能共用一个。
+ */
+interface DragState {
+  slot: number;
+  ghost: THREE.Group;
+  fill: THREE.MeshBasicMaterial;
+  edge: THREE.LineBasicMaterial;
+  modelMat: THREE.MeshStandardMaterial;
+}
+
 export class ArenaApp {
   readonly scene = new THREE.Scene();
   readonly world: ArenaWorld;
@@ -130,6 +148,11 @@ export class ArenaApp {
 
   /** 当前选中的手牌槽；-1 = 没选 */
   selectedSlot = -1;
+  /**
+   * 这个槽属于哪个玩家（0 起）。1v1 / PVE 单人恒 0，双人同屏时 0 或 1。
+   * `selectedSlot` 单独一个数字不够用了 —— 两个玩家各有一套手牌，槽号会撞。
+   */
+  selectedPlayer = 0;
   /** 选中的自家建筑（用于挪出兵旗） */
   selectedBuilding: number | null = null;
 
@@ -229,7 +252,12 @@ export class ArenaApp {
     this.seed = opts.seed ?? 20261027;
     this.canvas = opts.canvas;
     this.pack = pack;
-    this.world = new ArenaWorld({ seed: this.seed });
+    this.world = new ArenaWorld({
+      seed: this.seed,
+      mode: opts.mode,
+      level: opts.level,
+      players: opts.players,
+    });
 
     this.map = new TileMap({ cols: this.world.fieldSize.cols, rows: this.world.fieldSize.rows });
     this.ground = new GroundView(this.map);
@@ -254,12 +282,26 @@ export class ArenaApp {
     this.damage.onLand = (x, z, y) => this.fx.dust(x, z, y);
     this.renderer = new Renderer(opts.canvas);
     this.viewport = new Viewport(opts.container);
+    /**
+     * PVE 的相机初值（2026-11-07）。
+     *
+     * **yaw 90° 是关键**：格子的 `col` 轴映射世界 x（水平），而 PVE 的场地是
+     * 60 col × 32 row 的长条 —— 不转 90°，竖屏上看到的是"横向 60 格"，
+     * 水平只能装下 30 格、上下空一大片（实测截图：大本营被挤在左边缘外）。
+     * 转 90° 之后 col 变成屏幕的上下轴，"蓝在下、怪从上往下"的塔防读图才成立。
+     *
+     * 俯角 36°（1v1 是 44°）：俯角越大纵深越扁，36° 时 60 格投影约 49 格。
+     *
+     * ⚠️ 这两个值必须从**构造参数**给：导演的机位每帧才应用一次，
+     * 而且面板/输入一碰就 locked（见 DebugPanel 那段注释）。
+     */
     this.rig = new CameraRig({
-      pitchDeg: ARENA_CAMERA.pitchDeg,
-      yawDeg: ARENA_CAMERA.yawDeg,
+      pitchDeg: this.world.mode === 'pve' ? 36 : ARENA_CAMERA.pitchDeg,
+      yawDeg: this.world.mode === 'pve' ? 90 : ARENA_CAMERA.yawDeg,
       tilesAcross: ARENA_CAMERA.tilesAcross,
       minTilesAcross: ARENA_CAMERA.minTilesAcross,
-      maxTilesAcross: ARENA_CAMERA.maxTilesAcross,
+      // PVE 的场地宽 36 格：不把上限放开，竖屏只能看到半条防线
+      maxTilesAcross: this.world.mode === 'pve' ? 60 : ARENA_CAMERA.maxTilesAcross,
     });
     /**
      * 平移边界 2026-11-06 改**随视野动态**（用户："往左边往自己家里移动会被限位"、
@@ -283,7 +325,7 @@ export class ArenaApp {
 
     // 中场禁建带：**地块本身**染成黄沙（不再盖一层半透明贴纸），两侧各一道亮边。
     const bandCells: { col: number; row: number }[] = [];
-    for (let col = FIELD.midCol - NO_BUILD.halfWidth; col <= FIELD.midCol + NO_BUILD.halfWidth; col++) {
+    for (let col = this.world.field.midCol - NO_BUILD.halfWidth; col <= this.world.field.midCol + NO_BUILD.halfWidth; col++) {
       for (let row = 0; row < this.map.size.rows; row++) bandCells.push({ col, row });
     }
     this.ground.tintCells(bandCells, NO_BUILD.color);
@@ -295,9 +337,9 @@ export class ArenaApp {
     });
     const edgeL = new THREE.Mesh(new THREE.PlaneGeometry(0.12, this.map.size.rows), edgeMat);
     edgeL.rotation.x = -Math.PI / 2;
-    edgeL.position.set(FIELD.midCol - NO_BUILD.halfWidth - 0.5, 0.53, this.map.size.rows / 2);
+    edgeL.position.set(this.world.field.midCol - NO_BUILD.halfWidth - 0.5, 0.53, this.map.size.rows / 2);
     const edgeR = edgeL.clone();
-    edgeR.position.x = FIELD.midCol + NO_BUILD.halfWidth + 0.5;
+    edgeR.position.x = this.world.field.midCol + NO_BUILD.halfWidth + 0.5;
     this.scene.add(apron, edgeL, edgeR, this.ground.group);
     this.gallery = pack ? new DudeGallery(pack) : null;
 
@@ -324,6 +366,13 @@ export class ArenaApp {
       onPan: (dx, dy) => {
         this.director.userTouched();
         if (this.gestureFromField) {
+          this.rig.panByPixels(dx, dy);
+        } else if (this.world.mode === 'pve') {
+          /**
+           * PVE：**不转视角**。60×32 的长条场地一转就歪出画面、两侧防区被裁掉，
+           * 而且塔防的读图靠"正对防线"这个固定参照 —— 转视角只会让人迷路。
+           * 黑区拖动就当作平移（和场内一样），玩家想换角度看还有「视角」按钮。
+           */
           this.rig.panByPixels(dx, dy);
         } else {
           // 黑色区域（场地之外）：拖动 = 上下左右转视角。
@@ -352,7 +401,13 @@ export class ArenaApp {
      * 相机中心往远端（-z）再偏一点：俯角从 52 降到 44 之后地面在竖直方向被压短，
      * 原来这个偏移会让画面下方留一大块黑地。往 -z 偏 = 场地下移，把那块黑吃掉一部分。
      */
-    const mid = cellToWorld(pos(this.map.size.cols / 2, this.map.size.rows / 2 - 2.0));
+    /**
+     * 开局机位：1v1 压在中场（两边都看得见）；
+     * PVE 压在**自家防区**（col 小的那一侧）—— 玩家一上来要布防，
+     * 镜头对着一片空走廊没有意义，怪涌下来的时候再自己往外拖。
+     */
+    const centerCol = this.world.mode === 'pve' ? this.map.size.cols * 0.3 : this.map.size.cols / 2;
+    const mid = cellToWorld(pos(centerCol, this.map.size.rows / 2 - 2.0));
     this.rig.centerOnWorld(mid.x, mid.z, true);
   }
 
@@ -404,15 +459,24 @@ export class ArenaApp {
     return this.loop.isPaused;
   }
 
-  /** 手牌刷新（5 金，保底民居）；成功时由调用方让 HUD 重画卡面。 */
-  rerollHand(): PlayResult {
-    const res = this.world.reroll('blue');
+  /** 手牌刷新（5 金，保底民居）。`player` 是玩家槽下标（双人同屏各刷各的）。 */
+  rerollHand(player = 0): PlayResult {
+    const p = this.playerAt(player);
+    const res = this.world.rerollOf(p);
     if (res.ok) {
       this.selectedSlot = -1;
       this.sfx.play('place');
       this.syncBuildings(0);
     }
     return res;
+  }
+
+  /**
+   * 取玩家槽。下标越界一律回落到 0 —— 单人局里 UI 偶尔带着 `player: 1` 的残留
+   * 不该炸，也不该"操作了第二个不存在的玩家"，回落到 0 是最不容易误解的行为。
+   */
+  playerAt(index: number) {
+    return this.world.players[index] ?? this.world.players[0]!;
   }
 
   /**
@@ -430,9 +494,50 @@ export class ArenaApp {
     const wantRows = this.map.size.rows + 11;
     const wantCols = this.map.size.cols + 10;
     const fit = a >= 1 ? Math.max(wantRows, wantCols / a) : Math.max(wantCols, wantRows * a);
-    this.fitZoom = fit;
-    // 竖屏告诉导演：拉近 + 构图偏自家（2026-11-07 设计文档 D 节）
-    this.director.portrait = a < 1;
+
+    /**
+     * **PVE 竖屏的构图**（2026-11-07 实测纠错）。
+     *
+     * 1v1 的算法是"场地整幅入画"，对 44×20 的小场地没问题；
+     * 但 PVE 是 60×32 的长条，按 `wantCols`（70）算出来的视角在竖屏上
+     * 只能让战场占画面 **42%**（上下各一大片空底盘）——
+     * 因为竖屏的短边是**宽**，按"宽度装下 32 格"就必然在纵深留下 80 格的高度。
+     *
+     * 所以 PVE 竖屏改成**贴着宽度铺满**：短边显示 `rows × 0.95` 格，
+     * 两边各裁掉半格边（看台挡着，看不出来），纵深靠俯视投影自然铺到画面上下沿。
+     * 横屏仍然用整幅入画的算法（横屏本来就看得见全貌）。
+     */
+    const pvePortrait = this.world.mode === 'pve' && a < 1;
+    /**
+     * PVE 的初始机位和 1v1 不一样：
+     * - **正对**（yaw 0）：60×32 的长条斜着看会歪出画面，两侧防区被裁掉；
+     * - **俯角 44°**（2026-11-07 二次实测）：原来给 36°，纵深在屏幕上被压得太扁 ——
+     *   60 格只投影出 35 格，战场只占画面中间 470px，**上下各留一大片空底盘**。
+     *   抬到 44° 后投影约 42 格，战场铺到 580px，空底盘基本收掉。
+     *   （2.5D 的立体感靠 44° 还撑得住，再往上就变成俯视棋盘的平面图了。）
+     */
+    if (this.world.mode === 'pve') {
+      this.director.index = 1;
+      this.director.pitchBias = -2;
+      this.director.yawFix = 270;
+    }
+    /**
+     * 双人同屏时屏幕**上下各压着一套手牌**（2026-11-07），战场可视高度少掉约 130px。
+     * 所以竖屏再退一点（+10%）：不然自家最下面那排楼正好被手牌盖住 ——
+     * 那是玩家最需要盯着看的地方（大本营就在那儿）。
+     */
+    const seatCrowd = this.world.players.length > 1 ? 1.1 : 1;
+    /**
+     * 机位自带的 zoomFactor（「正对」是 0.96）会再乘一道 —— 不抵消的话
+     * `rows × 1.02` 平白缩小 4%，战场两边各露半格看台。
+     */
+    const presetZoom = this.world.mode === 'pve' ? this.director.current.zoomFactor : 1;
+    // 转 90° 之后，屏幕的短边（宽）对的是 row 轴 —— 按 rows 贴满
+    this.fitZoom =
+      (pvePortrait ? (this.map.size.rows * 1.02) / Math.max(0.5, presetZoom) : fit) * seatCrowd;
+    // 竖屏告诉导演：拉近 + 构图偏自家（2026-11-07 设计文档 D 节）。
+    // PVE 已经按宽度贴满了，再乘 0.58 会近到只看得到半个防区。
+    this.director.portrait = a < 1 && !pvePortrait;
     // 自动模式下由导演每帧把缩放拉回机位；手动模式直接吃这个值
     if (this.director.locked) this.rig.zoom = fit * this.director.current.zoomFactor;
   }
@@ -443,12 +548,16 @@ export class ArenaApp {
    * HUD 点手牌。返回三态而不是布尔：
    * "没选中"和"被取消"是两件事，布尔会把"再点一次取消"误报成"选不了"。
    */
-  selectCard(slot: number): 'selected' | 'deselected' | 'empty' | 'cooldown' | 'poor' {
-    const card = this.world.hand[slot];
+  selectCard(slot: number, player = 0): 'selected' | 'deselected' | 'empty' | 'cooldown' | 'poor' {
+    const p = this.playerAt(player);
+    const card = p.hand[slot];
     if (!card) return 'empty';
-    if (this.world.handCooldown[slot]! > 0) return 'cooldown';
-    if (this.world.gold.blue < card.cost) return 'poor';
-    this.selectedSlot = this.selectedSlot === slot ? -1 : slot;
+    if ((p.cooldowns[slot] ?? 0) > 0) return 'cooldown';
+    if (p.gold < card.cost) return 'poor';
+    // 两个玩家各有一套选中状态：玩家 1 选牌不该把玩家 0 的选中清掉
+    const same = this.selectedSlot === slot && this.selectedPlayer === p.id;
+    this.selectedSlot = same ? -1 : slot;
+    this.selectedPlayer = p.id;
     this.selectedBuilding = null;
     return this.selectedSlot === slot ? 'selected' : 'deselected';
   }
@@ -492,14 +601,15 @@ export class ArenaApp {
       return;
     }
 
-    const res = this.playAt(this.selectedSlot, cell);
+    const res = this.playAt(this.selectedSlot, cell, this.selectedPlayer);
     if (res) this.selectedSlot = -1;
   }
 
-  /** 真正落一张牌：点击放置和拖拽放置走同一条路（判据在 world.playCard）。 */
-  private playAt(slot: number, cell: GridPos): boolean {
-    const staffedBefore = this.world.staffedCount('blue');
-    const res = this.world.playCard('blue', slot, cell.col, cell.row);
+  /** 真正落一张牌：点击放置和拖拽放置走同一条路（判据在 world.playCardOf）。 */
+  private playAt(slot: number, cell: GridPos, player = 0): boolean {
+    const p = this.playerAt(player);
+    const staffedBefore = this.world.staffedCount(p.side);
+    const res = this.world.playCardOf(p, slot, cell.col, cell.row);
     if (!res.ok) {
       this.opts.onToast?.(res.reason ?? '放不下', 'warn');
       return false;
@@ -514,7 +624,7 @@ export class ArenaApp {
         placed.kind === 'barracks' ? '兵营要 1 磨坊 + 1 民居才会出兵' : '这座塔要 1 座民居才开火',
         'warn',
       );
-    } else if (this.world.staffedCount('blue') > staffedBefore) {
+    } else if (this.world.staffedCount(p.side) > staffedBefore) {
       this.opts.onToast?.('后勤配齐了，开工');
     }
     this.opts.onState?.();
@@ -531,12 +641,10 @@ export class ArenaApp {
    * 影子是一块贴地的半透明占位（建筑 3×3 / 军队 1×1），绿=可放、红=不可放，
    * 判据和落牌共用 `world.canPlaceAt()`（与 playCard 同一份校验）。
    */
-  private dragSlot = -1;
-  private dragGhost: THREE.Group | null = null;
-  private dragFill: THREE.MeshBasicMaterial | null = null;
-  private dragEdge: THREE.LineBasicMaterial | null = null;
-  /** 模型影子的共享材质（真模型所有 mesh 换成它，绿/红跟着合法性走） */
-  private dragModelMat: THREE.MeshStandardMaterial | null = null;
+  private readonly drags: (DragState | null)[] = [];
+  private dragState(player: number): DragState | null {
+    return this.drags[player] ?? null;
+  }
 
   /** 客户端坐标 → 地面格子（画布外 / 场地外 = null）。 */
   private clientToCell(clientX: number, clientY: number): GridPos | null {
@@ -553,21 +661,21 @@ export class ArenaApp {
     return this.clientToCell(clientX, clientY - lift);
   }
 
-  beginCardDrag(slot: number): void {
-    const card = this.world.hand[slot];
+  beginCardDrag(slot: number, player = 0): void {
+    const p = this.playerAt(player);
+    const card = p.hand[slot];
     if (!card) return;
-    this.cancelCardDrag();
-    this.dragSlot = slot;
+    this.cancelCardDrag(p.id);
     const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
     const cols = spec.cols, rows = spec.rows;
     const g = new THREE.Group();
     // 底下仍留一层**很淡**的占地框（按真实尺寸：齿轮工厂是 4×3 长方形），主角换成模型影子
-    this.dragFill = new THREE.MeshBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide });
-    this.dragEdge = new THREE.LineBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.5, depthTest: false });
-    const fill = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows), this.dragFill);
+    const fillMat = new THREE.MeshBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide });
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.5, depthTest: false });
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows), fillMat);
     fill.rotation.x = -Math.PI / 2;
     fill.position.y = card.kind === 'building' ? 0.05 : 0;
-    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(cols, 0.04, rows)), this.dragEdge);
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(cols, 0.04, rows)), edgeMat);
     edge.renderOrder = 28;
     edge.position.y = card.kind === 'building' ? 0.03 : 0;
     g.add(fill, edge);
@@ -577,35 +685,38 @@ export class ArenaApp {
      * 摆放公式与真楼一致（footprintSurfaceY + BUILDING_SCALE），松手前就能看清
      * "这栋楼长什么样、挡多大"。军队卡给一个小人剪影锥。
      */
-    this.dragModelMat = new THREE.MeshStandardMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.45, depthWrite: false, roughness: 0.9, side: THREE.DoubleSide });
+    const modelMat = new THREE.MeshStandardMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.45, depthWrite: false, roughness: 0.9, side: THREE.DoubleSide });
     if (card.kind === 'building') {
-      const model = ARENA_MODELS[card.building as ArenaModelName](sideColor('blue'));
+      // 影子模型仍按蓝方配色：双人同屏两人都在蓝方，阵营色本来就一样
+      const model = ARENA_MODELS[card.building as ArenaModelName](sideColor(p.side));
       const body = buildModel(model.static);
       body.traverse((o) => {
         const mesh = o as THREE.Mesh;
-        if (mesh.isMesh) mesh.material = this.dragModelMat!;
+        if (mesh.isMesh) mesh.material = modelMat;
       });
       body.scale.setScalar(card.building === 'gearFactory' ? BUILDING_SCALE * 1.18 : BUILDING_SCALE);
       g.add(body);
       g.userData['body'] = body;
     } else {
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.3, 6), this.dragModelMat);
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.28, 1.3, 6), modelMat);
       cone.position.y = 0.65;
       g.add(cone);
     }
     g.visible = false;
     this.scene.add(g);
-    this.dragGhost = g;
+    this.drags[p.id] = { slot, ghost: g, fill: fillMat, edge: edgeMat, modelMat };
   }
 
   /** 影子跟随指针：贴着格子中心，合法绿 / 非法红（判据 canPlaceAt）。 */
-  moveCardDrag(clientX: number, clientY: number, pointerType = 'mouse'): void {
-    if (this.dragSlot < 0 || !this.dragGhost || !this.dragFill || !this.dragEdge || !this.dragModelMat) return;
+  moveCardDrag(clientX: number, clientY: number, pointerType = 'mouse', player = 0): void {
+    const p = this.playerAt(player);
+    const drag = this.dragState(p.id);
+    if (!drag) return;
     // 触屏：影子在手指前方（上方），手指不挡预览；桌面鼠标偏移 0
     const cell = this.dragCell(clientX, clientY, pointerType);
-    this.dragGhost.visible = cell !== null;
+    drag.ghost.visible = cell !== null;
     if (!cell) return;
-    const card = this.world.hand[this.dragSlot];
+    const card = p.hand[drag.slot];
     const isBuilding = card?.kind === 'building';
     const spec = isBuilding ? BUILDING_SPECS[card!.building!] : { cols: 1, rows: 1 };
     const c = cellToWorld(pos(cell.col + spec.cols / 2, cell.row + spec.rows / 2));
@@ -613,43 +724,48 @@ export class ArenaApp {
     const baseY = isBuilding
       ? this.map.footprintSurfaceY(pos(cell.col, cell.row), spec.cols, spec.rows)
       : this.map.surfaceY(cell) + 0.06;
-    this.dragGhost.position.set(c.x, baseY, c.z);
+    drag.ghost.position.set(c.x, baseY, c.z);
     // 模型影子的朝向与落成一致（同一个 落点+类型 key）
-    const ghostBody = this.dragGhost.userData['body'] as THREE.Object3D | undefined;
+    const ghostBody = drag.ghost.userData['body'] as THREE.Object3D | undefined;
     const bId = card?.building;
     if (ghostBody && bId) ghostBody.rotation.y = spinOf(buildingSpinKey(cell.col, cell.row, bId));
-    const ok = this.world.canPlaceAt('blue', this.dragSlot, cell.col, cell.row).ok;
+    const ok = this.world.canPlaceAtOf(p, drag.slot, cell.col, cell.row).ok;
     const color = ok ? 0x7fe09a : 0xe2503f;
-    this.dragFill.color.setHex(color);
-    this.dragEdge.color.setHex(color);
-    this.dragModelMat.color.setHex(color);
+    drag.fill.color.setHex(color);
+    drag.edge.color.setHex(color);
+    drag.modelMat.color.setHex(color);
   }
 
   /** 松手在地图上 = 落牌；松手回到手牌区由 HUD 直接调 cancelCardDrag（拖回取消）。 */
-  dropCardDrag(clientX: number, clientY: number, pointerType = 'mouse'): void {
-    if (this.dragSlot < 0) return;
+  dropCardDrag(clientX: number, clientY: number, pointerType = 'mouse', player = 0): void {
+    const p = this.playerAt(player);
+    const drag = this.dragState(p.id);
+    if (!drag) return;
     // 落牌与影子必须用同一个函数，杜绝"看着放这、落到那"
     const cell = this.dragCell(clientX, clientY, pointerType);
-    if (cell) this.playAt(this.dragSlot, cell);
-    this.cancelCardDrag();
+    if (cell) this.playAt(drag.slot, cell, p.id);
+    this.cancelCardDrag(p.id);
   }
 
-  cancelCardDrag(): void {
-    if (this.dragGhost) {
-      this.scene.remove(this.dragGhost);
-      this.dragGhost.traverse((o) => {
+  /**
+   * 拆掉影子。`player` 省略 = 全部拆掉（系统级取消：指针丢失、切窗、重开）。
+   * 一个人拖到一半点了别处时，只拆他自己的 —— 别把另一个人的影子也清了。
+   */
+  cancelCardDrag(player?: number): void {
+    for (let i = 0; i < this.drags.length; i++) {
+      if (player !== undefined && i !== player) continue;
+      const drag = this.drags[i];
+      if (!drag) continue;
+      this.scene.remove(drag.ghost);
+      drag.ghost.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.geometry) m.geometry.dispose();
       });
-      this.dragFill?.dispose();
-      this.dragEdge?.dispose();
-      this.dragModelMat?.dispose();
-      this.dragGhost = null;
-      this.dragFill = null;
-      this.dragEdge = null;
-      this.dragModelMat = null;
+      drag.fill.dispose();
+      drag.edge.dispose();
+      drag.modelMat.dispose();
+      this.drags[i] = null;
     }
-    this.dragSlot = -1;
   }
 
   private handleLongPress(cssX: number, cssY: number): void {
@@ -1415,6 +1531,15 @@ export class ArenaApp {
     return this.fitZoom;
   }
 
+  /** 相机当前读数：调试面板打开时用它**同步滑杆**（而不是反过来把相机拽到滑杆值）。 */
+  get cameraShotNow(): { yaw: number; pitch: number; zoom: number } {
+    return {
+      yaw: Math.round(this.rig.yaw),
+      pitch: Math.round(this.rig.pitch),
+      zoom: this.rig.zoom / Math.max(1e-6, this.fitZoom),
+    };
+  }
+
   /** 调试面板/机位码用它一次把相机摆到位。 */
   setCameraShot(shot: { yaw: number; pitch: number; zoom: number }): void {
     this.director.userTouched();
@@ -1707,9 +1832,16 @@ export class ArenaApp {
     }
   }
 
-  /** 场地中心（导演的"回中"目标）。 */
+  /**
+   * 镜头该盯哪儿（导演每帧拿它做"回中"目标）。
+   *
+   * 1v1：场地正中 —— 两边都看得见；
+   * PVE：**自家防区**（col 的 28% 处）。塔防 90% 的时间玩家在看自己的楼，
+   * 盯着场地正中会把整条防线顶到画面下沿、被手牌挡住（实测截图就是这样）。
+   */
   private fieldCenter(): { x: number; z: number } {
-    return { x: FIELD.cols / 2, z: FIELD.rows / 2 };
+    const col = this.world.mode === 'pve' ? this.world.field.cols * 0.28 : this.world.field.cols / 2;
+    return { x: col, z: this.world.field.rows / 2 };
   }
 
   get telemetry() {

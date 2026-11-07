@@ -10,10 +10,42 @@
  * **定义只有这一份**，转发只是为了不把 import 路径散到十几个文件里。
  */
 
-import { BALLISTA, MOBILE, type BuildingKind, type Side } from './config';
+import { BALLISTA, MOBILE, type ArenaCard, type BuildingKind, type FieldSpec, type Side } from './config';
 import { unitDef } from '@game/data/units';
 
 export type { Side };
+
+/**
+ * **一个玩家的家当**（2026-11-07 抽出来给 PVE 多人用）。
+ *
+ * 以前这些东西是 `Record<Side, …>` —— 一个阵营只能有一个操作者。
+ * 但 PVE 的"多人打"是**合作守家**：两个玩家都在 blue 一侧，
+ * 各有一份金币和手牌（建筑/单位靠 `owner` 认人），
+ * 所以状态必须按"玩家"索引，而不是按"阵营"。
+ *
+ * 1v1 的映射：players[0] = blue（人）、players[1] = red（AI）——
+ * 对打的手感一个字节都不变。
+ */
+export interface PlayerSlot {
+  /** 玩家序号（0 起）。同阵营两人时靠它区分 */
+  readonly id: number;
+  readonly side: Side;
+  gold: number;
+  /** 距下一格金还差几秒（每条金线各自计时） */
+  goldTick: number;
+  /** 手牌 4 格（null = 冷却中） */
+  hand: (ArenaCard | null)[];
+  /** 每格的补牌倒计时 */
+  cooldowns: number[];
+  /** 每格"刚打出去的那张"（补牌时排除，防止原样发回） */
+  lastPlayed: (string | null)[];
+  /** 托管（AI 代打）。红方恒 true；蓝方默认 false */
+  auto: boolean;
+  /** 下次"想一想"倒计时 */
+  aiIn: number;
+  /** AI 两次刷新之间的冷却（秒） */
+  aiRerollIn: number;
+}
 
 /**
  * 打建筑的是哪种伤害 —— 只用来决定"墙怎么崩"：
@@ -198,8 +230,13 @@ export interface ArenaRuin {
  */
 export type Outcome = 'playing' | 'win' | 'lose' | 'draw';
 
-/** 怎么结束的：大本营被拆 / 常规时间到比判据 / 加时赛打满比判据 / 加时打平。 */
-export type OutcomeReason = 'core' | 'time' | 'overtime' | 'draw' | null;
+/**
+ * 怎么结束的：
+ * - `core` 大本营被拆；
+ * - `time` 常规时间到比判据 / `overtime` 加时打满比判据 / `draw` 加时打平（**1v1 专用**）；
+ * - `waves` PVE 守住全部波次（2026-11-07 加）。
+ */
+export type OutcomeReason = 'core' | 'time' | 'overtime' | 'draw' | 'waves' | null;
 
 export interface PlayResult {
   ok: boolean;
@@ -209,6 +246,17 @@ export interface PlayResult {
 
 export interface ArenaOptions {
   seed?: number;
+  /**
+   * 玩法模式（2026-11-07）：`'arena'` 是对战（默认），`'pve'` 是守波次。
+   *
+   * PVE 只换三件事：**场地**（`PVE_FIELD`）、**出怪方式**（波次表替代 AI 出牌）、
+   * **判据**（守完全部波次 / 大本营被打穿）。数值、后勤、碰撞、科技一行不动。
+   */
+  mode?: 'arena' | 'pve';
+  /** PVE 的玩家人数（1 或 2）。两人时都在 blue 一侧合作守家 */
+  players?: number;
+  /** PVE 的关卡 id（不给就用第一关；场地尺寸也跟着关卡走） */
+  level?: string;
   /** 开局手牌（测试用；不给就按 seed 随机发 4 张） */
   hand?: string[];
   /**
@@ -218,4 +266,9 @@ export interface ArenaOptions {
    * 测出来的只是"没人操作会怎样"，不是这局游戏本身。
    */
   auto?: Partial<Record<Side, boolean>>;
+  /**
+   * 场地尺寸（2026-11-07）：不给就用 1v1 的 `FIELD`。
+   * PVE 传 `PVE_FIELD` —— 世界、地面、看台、彩带全都跟着这个数建。
+   */
+  field?: FieldSpec;
 }

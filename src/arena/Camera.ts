@@ -59,6 +59,17 @@ export class ArenaDirector {
   autoOrbit = false;
   /** 竖屏视口（ArenaApp.fitCamera 设置）：缩放拉近 + 构图偏自家 */
   portrait = false;
+  /**
+   * 俯角偏置（度）。PVE 用 −10：60×32 的长条场地在 46° 下纵深被压得太扁，
+   * 36° 时 60 格投影约 49 格，正好铺满竖屏上下沿。
+   */
+  pitchBias = 0;
+  /**
+   * 朝向锁定（度）。设了就**无视机位的 yaw**：
+   * PVE 用 90° 把攻防轴（col）转成屏幕的上下轴，长条场地才能竖着铺在手机上。
+   * 三个机位的 yaw 是给 1v1 的"斜视/正对/我方"准备的，PVE 不跟它们走。
+   */
+  yawFix: number | null = null;
   index = 0;
   /** 玩家自己拖过镜头：锁在手动，直到他按"视角"按钮（不再 6 秒后偷偷抢回去） */
   locked = false;
@@ -103,9 +114,11 @@ export class ArenaDirector {
     const targetZoom = fitZoom * view.zoomFactor * (this.portrait ? PORTRAIT_ZOOM : 1);
     rig.zoom = lerp(rig.zoom, targetZoom, 1 - Math.exp(-dt * 1.6));
     // 朝向：只补一小步角度
-    rig.rotateBy(shortAngle(view.yaw - rig.yaw) * Math.min(1, dt * 1.8));
+    rig.rotateBy(shortAngle((this.yawFix ?? view.yaw) - rig.yaw) * Math.min(1, dt * 1.8));
     // 竖屏更俯一点（纵向战场看得清），横屏维持机位俯角
-    rig.setPitch(lerp(rig.pitch, view.pitch + (this.portrait ? 6 : 0), Math.min(1, dt * 1.2)));
+    rig.setPitch(
+      lerp(rig.pitch, view.pitch + (this.portrait ? 6 : 0) + this.pitchBias, Math.min(1, dt * 1.2)),
+    );
     // 中心：机位偏移 + 竖屏再偏自家；centerOnWorld 自带阻尼，跟随战场那套已删
     const bias = (view.centerBias ?? 0) + (this.portrait ? PORTRAIT_BIAS : 0);
     rig.centerOnWorld(center.x + bias, center.z);

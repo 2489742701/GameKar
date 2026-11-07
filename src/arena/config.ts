@@ -27,8 +27,20 @@ import type { UnitDef } from '@game/data/units';
 
 export type Side = 'blue' | 'red';
 
+/**
+ * 一块场地的形状（2026-11-07 抽出来给 PVE 用）。
+ *
+ * 原来 `FIELD` 是模块级常量，PVE 要"场地贼拉大"就没法变了。
+ * 现在世界持有 `world.field`，`FIELD` 只是**1v1 的默认值** —— 1v1 一个数都不改。
+ */
+export interface FieldSpec {
+  cols: number;
+  rows: number;
+  midCol: number;
+}
+
 /** 战场：竖屏为主，蓝在南（下方），红在北（上方）。 */
-export const FIELD = {
+export const FIELD: FieldSpec = {
   /**
    * 横版：34 列宽、20 行高。左边（小 col）是蓝方，右边是红方。
    * 建筑统一 3×3 之后，26×16 太挤（一栋楼就占掉半个半场），所以整体放大一档。
@@ -37,6 +49,25 @@ export const FIELD = {
   rows: 20,
   /** 中间这条线左右各归一方，兵只能放在自己这半场 */
   midCol: 22,
+};
+
+/**
+ * PVE 的场地（2026-11-07 用户："场地贼拉大"）。
+ *
+ * 口径见 `docs/工作笔记/PVE模式设计_20261107.md` §1。**形状比面积更重要**：
+ * 第一版做 56×36（横宽），实测在手机竖屏（比例 1:2.17）上"上下游一大片黑"——
+ * 因为竖屏的短边是**宽**，36 行铺满的时候垂直方向能看到 80 格，而场地只有 56 深。
+ *
+ * 所以改成 **60 深 × 32 宽**：面积 1920 格（1v1 的 2.2 倍，"贼拉大"仍然成立），
+ * 但长宽比 1:1.9 贴近手机竖屏，整条防线一眼能看全。
+ *
+ * 分区：玩家 col 0~29（30 列可建）· 黄带 30~38（9 列）· 怪出生区 39~59。
+ * 出生点在 `pve/levels.ts` 里按波次配（44），不写在这里。
+ */
+export const PVE_FIELD: FieldSpec = {
+  cols: 60,
+  rows: 32,
+  midCol: 34,
 };
 
 /**
