@@ -541,80 +541,107 @@ export function houseModel(accent: number): ArenaModel {
 /**
  * **齿轮工厂**（2026-11-07 设计文档 C 节）：第一栋 4×3 建筑，解锁三架飞行器。
  *
- * 复古厂房：石台 + 砖墙 + 木梁 + 双坡顶 + 烟囱；前墙外挂一枚**大齿轮**
- * （圆盘 12 齿 4 辐条）和一枚咬合的小齿轮（反向转）。
+ * 复古厂房：石台 + 砖墙 + 木梁 + 双坡顶 + **两根烟囱**；前墙贴着一枚大齿轮
+ * （圆盘 12 齿 4 辐条）和一枚反向咬合的小齿轮，两轮一直转。
+ *
+ * ## 2026-11-07 返工：穿模 / 太高 / 烟囱只有一根
+ *
+ * 用户上机原话："工业工厂穿模了，其次要求它没那么高，可以稍微矮一点，有两个烟囱，有齿轮转"。
+ * 量出来的三处硬伤（视图把模型整体乘 `BUILDING_SCALE=2.2`，工厂当时还额外乘 1.18 = **2.596**）：
+ *  1. 台基宽 2.3 × 2.596 = **5.97 格**，而占地只有 4 格 —— 屋顶/台基必然盖到隔壁格子上；
+ *  2. 齿轮中心 z=0.95 × 2.596 = **2.47 格**（占地半深才 1.5 格），整个轮子悬在墙外、
+ *     下缘还插进台基；齿轮 y 上半和屋顶也有交叠；
+ *  3. 总高 2.72 × 2.596 = **7.06 格**，比大本营还高；而旗位 `base=2.25 格` 远低于屋顶，
+ *     旗杆整根从砖墙里长出来。施工外壳 `y0=0.06` 也和砖墙 `0.48~1.63` 完全错位。
+ *
+ * 现在所有尺寸按**占地倒推**（模型单位 = 格 / 2.2）：
+ *  x 半宽 ≤ 4/2/2.2 = 0.909，z 半深 ≤ 3/2/2.2 = 0.682，实测取 0.86 / 0.60，
+ *  含齿轮最远 z=0.60 → 1.32 格，仍留在 1.5 格内。总高 1.87 × 2.2 = 4.11 格。
+ *  额外那道 1.18 缩放已在 ArenaApp 里删掉（真楼和拖放影子两处），全楼统一 2.2。
+ *
  * 齿轮复用磨坊帆的 `spin/pivot` 机制：同一 pivot + 同一 speed 的节点，
- * `syncParts` 每帧按绝对角度转 ⇒ 整轮同步「转转转」。
+ * `syncParts` 每帧按绝对角度转 ⇒ 整轮同步；小轮取负速且按半径比放大 ⇒ 真的在啮合。
  */
 export function gearFactoryModel(accent: number): ArenaModel {
-  const GEAR: Vec3 = [0.62, 1.15, 0.95];   // 大齿轮中心（前墙外侧，朝镜头）
-  const SMALL: Vec3 = [-0.42, 0.72, 0.95]; // 咬合的小齿轮
+  // 齿轮贴在前墙（墙皮 z=0.52）上，盘厚 0.08 ⇒ z 0.52~0.60，既不插墙也不悬空
+  const GEAR: Vec3 = [-0.30, 0.82, 0.56];  // 大轮：圆盘 r=0.26、齿顶 0.30
+  const SMALL: Vec3 = [0.16, 0.62, 0.56];  // 小轮：圆盘 r=0.14、齿顶 0.18；中心距 0.50 ≈ 0.30+0.18
+  const BIG_SPEED = 0.9;
+  const SMALL_SPEED = -1.5; // 反向、快约 1.67 倍（≈ 齿数比 12/8）
   const spinPart = (node: Node, pivot: Vec3, speed: number): Node => ({ ...node, spin: speed, pivot });
   const out: Node[] = [
-    // ---- 复古厂房本体（4×3 占地，比 3×3 楼宽一圈）
-    plinth([2.3, 0.08, 1.5], ARENA_PAL.stoneDark),
-    box([2.15, 0.4, 1.4], ARENA_PAL.stone, [0, mid(0.08, 0.4), 0]),
-    box([1.95, 1.15, 1.25], ARENA_PAL.wallDark, [0, mid(0.48, 1.15), 0]),
-    // 木梁：四角立柱 + 两道横箍（复古木骨架）
-    ...[-0.88, 0.88].flatMap((x) => [
-      box([0.1, 1.15, 0.08], ARENA_PAL.wood, [x, mid(0.48, 1.15), 0.64]),
-      box([0.1, 1.15, 0.08], ARENA_PAL.wood, [x, mid(0.48, 1.15), -0.64]),
+    // ---- 厂房本体：全部收在 x ±0.86 / z ±0.60 内
+    plinth([1.72, 0.07, 1.2], ARENA_PAL.stoneDark),
+    box([1.64, 0.3, 1.12], ARENA_PAL.stone, [0, mid(0.07, 0.3), 0]),
+    box([1.56, 0.82, 1.04], ARENA_PAL.wallDark, [0, mid(0.37, 0.82), 0]),
+    // 木骨架：四角立柱 + 两道横箍
+    ...[-0.7, 0.7].flatMap((x) => [
+      box([0.08, 0.82, 0.07], ARENA_PAL.wood, [x, mid(0.37, 0.82), 0.53]),
+      box([0.08, 0.82, 0.07], ARENA_PAL.wood, [x, mid(0.37, 0.82), -0.53]),
     ]),
-    box([1.9, 0.09, 0.09], ARENA_PAL.woodLight, [0, 1.0, 0.64]),
-    box([1.9, 0.09, 0.09], ARENA_PAL.woodLight, [0, 1.52, 0.64]),
-    // 大门 + 两扇小窗
-    box([0.46, 0.68, 0.07], ARENA_PAL.wood, [-0.25, mid(0.48, 0.68), 0.66]),
-    box([0.5, 0.06, 0.09], ARENA_PAL.woodLight, [-0.25, 0.75, 0.68]),
-    box([0.26, 0.3, 0.06], ARENA_PAL.stoneDark, [0.55, 1.15, 0.66]),
-    box([0.26, 0.3, 0.06], ARENA_PAL.stoneDark, [0.55, 1.15, -0.66]),
-    // 双坡顶 + 屋脊
-    prism([2.15, 0.5, 1.45], roofOf(accent), [0, 1.9, 0]),
-    box([2.2, 0.08, 0.12], ridgeOf(accent), [0, mid(2.15, 0.08), 0]),
-    // 烟囱（左后）+ 顶箍
-    cyl([0.18, 0.22, 1.0], ARENA_PAL.stone, [-0.75, 2.15, -0.38], 8),
-    box([0.28, 0.08, 0.28], ridgeOf(accent), [-0.75, 2.68, -0.38]),
+    box([1.5, 0.07, 0.07], ARENA_PAL.woodLight, [0, 0.62, 0.54]),
+    box([1.5, 0.07, 0.07], ARENA_PAL.woodLight, [0, 1.1, 0.54]),
+    // 大门挪到右边，给左边的齿轮腾出整片墙
+    box([0.34, 0.52, 0.05], ARENA_PAL.wood, [0.5, mid(0.37, 0.52), 0.55]),
+    box([0.38, 0.05, 0.06], ARENA_PAL.woodLight, [0.5, 0.91, 0.56]),
+    // 两扇小窗开在后墙，不跟齿轮抢同一面
+    box([0.2, 0.22, 0.05], ARENA_PAL.stoneDark, [-0.48, 0.9, -0.54]),
+    box([0.2, 0.22, 0.05], ARENA_PAL.stoneDark, [0.48, 0.9, -0.54]),
+    // 双坡顶（prism 的 at 是**底面**）+ 屋脊
+    prism([1.7, 0.32, 1.16], roofOf(accent), [0, 1.19, 0]),
+    box([1.74, 0.06, 0.1], ridgeOf(accent), [0, 1.52, 0]),
+    // ---- 两根烟囱：左右各一根，底部埋进屋顶 0.1，不留穿缝
+    ...[-0.52, 0.52].flatMap((x) => [
+      cyl([0.085, 0.1, 0.42], ARENA_PAL.stone, [x, 1.62, -0.3], 8),
+      box([0.2, 0.06, 0.2], ridgeOf(accent), [x, 1.84, -0.3]),
+    ]),
   ];
-  // ---- 大齿轮：圆盘 + 12 齿 + 4 辐条 + 金色轴心（全部同一 pivot/speed 同步转）
+  // ---- 大齿轮：圆盘 + 12 齿 + 4 辐条 + 金色轴心（同一 pivot/speed 同步转）
   out.push(spinPart({
-    part: { kind: 'cyl', rTop: 0.5, rBottom: 0.5, height: 0.14, seg: 12 },
+    part: { kind: 'cyl', rTop: 0.26, rBottom: 0.26, height: 0.08, seg: 12 },
     color: ARENA_PAL.iron, at: GEAR, rot: [Math.PI / 2, 0, 0],
-  }, GEAR, 0.8));
+  }, GEAR, BIG_SPEED));
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
     out.push(spinPart({
-      part: { kind: 'box', size: [0.16, 0.16, 0.14] },
+      part: { kind: 'box', size: [0.1, 0.1, 0.08] },
       color: 0x8a7350,
-      at: [GEAR[0] + Math.cos(a) * 0.56, GEAR[1] + Math.sin(a) * 0.56, GEAR[2]],
+      at: [GEAR[0] + Math.cos(a) * 0.3, GEAR[1] + Math.sin(a) * 0.3, GEAR[2]],
       rot: [0, 0, a],
-    }, GEAR, 0.8));
+    }, GEAR, BIG_SPEED));
   }
   for (let i = 0; i < 4; i++) {
     out.push(spinPart({
-      part: { kind: 'box', size: [0.82, 0.08, 0.08] },
+      part: { kind: 'box', size: [0.44, 0.05, 0.05] },
       color: ARENA_PAL.woodLight, at: GEAR, rot: [0, 0, (i * Math.PI) / 4],
-    }, GEAR, 0.8));
+    }, GEAR, BIG_SPEED));
   }
   out.push(spinPart({
-    part: { kind: 'cyl', rTop: 0.11, rBottom: 0.11, height: 0.2, seg: 8 },
+    part: { kind: 'cyl', rTop: 0.07, rBottom: 0.07, height: 0.12, seg: 8 },
     color: ARENA_PAL.gold, at: GEAR, rot: [Math.PI / 2, 0, 0],
-  }, GEAR, 0.8));
-  // ---- 咬合小齿轮：反向转，机械感
+  }, GEAR, BIG_SPEED));
+  // ---- 咬合小齿轮：8 齿，反向且更快
   out.push(spinPart({
-    part: { kind: 'cyl', rTop: 0.27, rBottom: 0.27, height: 0.12, seg: 10 },
+    part: { kind: 'cyl', rTop: 0.14, rBottom: 0.14, height: 0.07, seg: 10 },
     color: ARENA_PAL.iron, at: SMALL, rot: [Math.PI / 2, 0, 0],
-  }, SMALL, -1.2));
+  }, SMALL, SMALL_SPEED));
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     out.push(spinPart({
-      part: { kind: 'box', size: [0.11, 0.11, 0.12] },
+      part: { kind: 'box', size: [0.07, 0.07, 0.07] },
       color: 0x8a7350,
-      at: [SMALL[0] + Math.cos(a) * 0.31, SMALL[1] + Math.sin(a) * 0.31, SMALL[2]],
+      at: [SMALL[0] + Math.cos(a) * 0.18, SMALL[1] + Math.sin(a) * 0.18, SMALL[2]],
       rot: [0, 0, a],
-    }, SMALL, -1.2));
+    }, SMALL, SMALL_SPEED));
   }
+  out.push(spinPart({
+    part: { kind: 'cyl', rTop: 0.05, rBottom: 0.05, height: 0.1, seg: 8 },
+    color: ARENA_PAL.gold, at: SMALL, rot: [Math.PI / 2, 0, 0],
+  }, SMALL, SMALL_SPEED));
   return {
     static: out,
-    shell: boxShell(1.95, 1.25, 0.06, 1.15, ARENA_PAL.wall, 4, 2, 97),
+    // 施工外壳与砖墙**同一个轮廓、同一个高度**（旧版 y0=0.06 和墙 0.48 完全错位）
+    shell: boxShell(1.56, 1.04, 0.37, 0.82, ARENA_PAL.wall, 4, 2, 97),
   };
 }
 
@@ -658,5 +685,8 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   cannonTower: { x: 1.45, z: 1.45, base: 0.12, pole: 2.1 },
   mill: { x: 0, z: 0, base: 5.25, pole: 0.9 },
   house: { x: 1.2, z: 0, base: 2.55, pole: 0.8 },
-  gearFactory: { x: 0.95, z: 0, base: 2.25, pole: 2.0 },
+  // 2026-11-07 返工：旧 base=2.25 格远低于屋顶（当时屋顶在 4.9 格以上），
+  // 旗杆整根从砖墙里长出来 —— 用户看到的"穿模"里最扎眼的一处。
+  // 新模型屋脊 1.52×2.2 ≈ 3.34 格、烟囱顶 1.87×2.2 ≈ 4.11 格，旗立在屋脊侧。
+  gearFactory: { x: 1.05, z: 0.2, base: 3.35, pole: 1.1 },
 };

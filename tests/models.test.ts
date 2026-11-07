@@ -57,14 +57,33 @@ describe('建筑模型体型', () => {
     expect(base.rows.map((r) => r.name).sort()).toEqual(Object.keys(ARENA_MODELS).sort());
     for (const r of base.rows) {
       // 宽/深不超过 4.8 格：上一版核心的屋顶量出来 8 格，比占地宽一倍 —— 就是那次的教训
-      // 例外：齿轮工厂是 4×3 占地（用户 2026-11-07），允许宽到 5.6
-      const wide = r.name === 'gearFactory' ? 5.6 : 4.8;
+      const wide = r.name === 'gearFactory' ? 4.0 : 4.8;
+      const deep = r.name === 'gearFactory' ? 3.0 : 4.8;
       expect(r.width, `${r.name} 宽`).toBeLessThanOrEqual(wide);
-      expect(r.depth, `${r.name} 深`).toBeLessThanOrEqual(4.8);
+      expect(r.depth, `${r.name} 深`).toBeLessThanOrEqual(deep);
       expect(r.width, `${r.name} 宽`).toBeGreaterThanOrEqual(2.0);
-      expect(r.height, `${r.name} 高`).toBeLessThanOrEqual(7.2);
+      expect(r.height, `${r.name} 高`).toBeLessThanOrEqual(r.name === 'gearFactory' ? 4.6 : 7.2);
       expect(r.height, `${r.name} 高`).toBeGreaterThanOrEqual(1.5);
     }
+  });
+
+  /**
+   * 2026-11-07 用户："工业工厂穿模了……没那么高，稍微矮一点，有两个烟囱，有齿轮转"。
+   *
+   * 这条锁的意义是**能证伪**：旧版量出来 5.97×3.89 格 / 高 7.06 格
+   * （`BUILDING_SCALE 2.2 × 1.18` 额外放大 + 模型本身就写大了），
+   * 旗位 base 2.25 格远低于屋顶 —— 上面三条会同时红。
+   * 只写"不超过 5.6"那种给旧版留后门的宽松阈值，等于没锁。
+   */
+  it('齿轮工厂：收进 4×3 占地、比大本营矮、旗子不插在墙里', () => {
+    const byName = new Map(base.rows.map((r) => [r.name, r]));
+    const factory = byName.get('gearFactory')!;
+    const core = byName.get('core')!;
+    expect(factory.width).toBeLessThanOrEqual(4.0);
+    expect(factory.depth).toBeLessThanOrEqual(3.0);
+    expect(factory.height).toBeLessThan(core.height);
+    // 旗杆底必须落在屋脊附近，不能从砖墙中段长出来（旧版 2.25 < 4.1×0.7）
+    expect(ARENA_FLAGS.gearFactory.base).toBeGreaterThanOrEqual(factory.height * 0.7);
   });
 
   it('骨架件数不多，外墙切成够多的面片（掉起来才像"一块块"）', () => {
@@ -88,6 +107,49 @@ describe('建筑模型体型', () => {
       const top = spot.base + spot.pole;
       expect(top, `${name} 旗顶`).toBeGreaterThanOrEqual(h * 0.7);
       expect(top, `${name} 旗顶`).toBeLessThanOrEqual(h + 2);
+    }
+  });
+});
+
+/**
+ * 齿轮工厂的**零件级**锁：用户点名要「两个烟囱 + 齿轮转」。
+ * 尺寸锁只管外轮廓，管不到"烟囱是不是偷偷变回一根"或者"齿轮是不是被改成静物"。
+ */
+describe('齿轮工厂：双烟囱与咬合齿轮', () => {
+  const nodes = ARENA_MODELS.gearFactory(SIDE_COLOR.blue).static;
+
+  it('正好两根烟囱（半径 0.085 的石柱），左右对称', () => {
+    const stacks = nodes.filter(
+      (n) => n.part.kind === 'cyl' && (n.part as { rTop: number }).rTop === 0.085,
+    );
+    expect(stacks).toHaveLength(2);
+    const xs = stacks.map((n) => n.at![0]).sort((a, b) => a - b);
+    expect(xs[0]).toBeLessThan(0);
+    expect(xs[1]).toBeGreaterThan(0);
+    expect(Math.abs(xs[0]! + xs[1]!)).toBeLessThan(1e-6);
+  });
+
+  it('两枚齿轮反向转，且**每一片齿都跟着转**（不是只有轮毂在自转）', () => {
+    const moving = nodes.filter((n) => n.spin !== undefined);
+    const speeds = [...new Set(moving.map((n) => n.spin))].sort((a, b) => a! - b!);
+    expect(speeds).toHaveLength(2);
+    expect(speeds[0]).toBeLessThan(0);
+    expect(speeds[1]).toBeGreaterThan(0);
+    // 12 齿 + 8 齿 + 4 辐条 + 2 盘 + 2 轴心 = 28 件都会动
+    expect(moving).toHaveLength(28);
+    for (const n of moving) expect(n.pivot, '转轴必须给，否则 buildModel 不生成 Spinner').toBeTruthy();
+    // 反证：小轮要比大轮快（半径小的转得快），等速就是"两轮各转各的"没咬上
+    const big = Math.max(...(speeds as number[]));
+    const small = Math.abs(Math.min(...(speeds as number[])));
+    expect(small).toBeGreaterThan(big);
+  });
+
+  it('齿轮贴墙：最远的零件仍在 3 格占地的半深内', () => {
+    const scale = 2.2; // BUILDING_SCALE，模型单位 → 格
+    for (const n of nodes) {
+      const z = Math.abs(n.at?.[2] ?? 0);
+      // 盘厚 0.08 / 齿盒 0.08，保守按 0.06 半径补
+      expect((z + 0.06) * scale, `零件 ${n.part.kind} 飘出占地`).toBeLessThanOrEqual(1.5);
     }
   });
 });

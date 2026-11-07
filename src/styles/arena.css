@@ -332,8 +332,12 @@
 .ahud__card {
   position: relative;
   flex: 1;
-  /* 92px（2026-11-06 用户"卡牌可以做得更高一点"）：图标 30 + 名字 12 + 需求图标行 14 + 上下留白 */
-  min-height: 92px;
+  /**
+   * 横屏 = **宽卡**（78px 高 vs 四张均分 560px ⇒ 每张约 134px 宽，比例 1.7）。
+   * 竖屏在下面的 `orientation: portrait` 里换成高卡。
+   * 2026-11-07 用户："卡片需要自适应：横屏时默认是宽卡片，竖屏时默认是高卡片。"
+   */
+  min-height: 78px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -406,20 +410,29 @@
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.65);
 }
 
-/* 底部：「几人几包」的 SVG 图标行（2026-11-06 用户："几人几包就改成 SVG"）。
+/**
+ * 卡面**下方**：「增 / 减」两行 SVG 图标（2026-11-07 用户："卡面上的加单位或
+ * 减单位要放在卡面的下方，而不是侧面"）。
+ *
+ * 上一版是 `position:absolute; top:25px; align-items:flex-end` —— 两行贴在名字
+ * 右边，横竖屏看都像"侧面挂了一串小图标"。现在回到正常流，用 `margin-top:auto`
+ * 顶到卡底，加一条细分割线把「卡面」和「需求」分开：上面是费用/图标/名字，
+ * 下面是这栋楼/这队兵要吃多少、给多少 —— 一眼分得清。
+ *
  * 人口不够时 CSS 只把 pop 组标红、面包不够只红 bread 组（data-short 由 HUD 设），
- * 玩家看着牌面就知道差哪样 —— 不用点出去被拒了才明白。 */
+ * 判据仍是 `supplyBlocked` 的理由文本，没在这里重算。
+ */
 .ahud__card__need {
-  /* 2026-11-07：增 / 减拆成两行、整体往上挪（原来贴在卡底，和名字挤成一堆）。
-     左上角的价格数字保持原位 —— 用户："左上角显示那个，其他的不变"。 */
-  position: absolute;
-  top: 25px;
-  right: 3px;
-  left: 3px;
+  position: static;
+  width: 100%;
+  margin-top: auto;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: flex-end;
   gap: 2px;
+  padding-top: 3px;
+  border-top: 1px solid rgba(246, 220, 156, 0.16);
   line-height: 1;
   white-space: nowrap;
   opacity: 0.98;
@@ -855,8 +868,9 @@
     font-size: 11px;
   }
 
+  /* 高度交给下面的 `orientation` 媒体查询统一管（横屏宽卡 / 竖屏高卡），
+     这里只压内边距：按宽度切一刀再按朝向切一刀，会互相打架。 */
   .ahud__card {
-    min-height: 82px;
     padding: 5px 2px 3px;
   }
 
@@ -1272,4 +1286,143 @@
   background-color: transparent;
   color: var(--text);
   border-color: var(--wood-3);
+}
+
+/* ==========================================================================
+ * 朝向自适应（2026-11-07 用户："卡片需要自适应：横屏时默认是宽卡片，
+ * 竖屏时默认是高卡片。其他部分也需要自适应。"）
+ *
+ * 用 `orientation` 而不是 `max-width` 判：手机转个屏，宽度可能还是 400~900，
+ * 按宽度切会给出错误的形态。基础样式（上面的 .ahud__card 78px）就是横屏宽卡，
+ * 这里只负责竖屏换高卡、以及矮横屏把整块 HUD 压扁给战场让路。
+ *
+ * 底栈高度 = 工具行 30 + gap 6 + 卡片 + gap 6 + 金币条 ~24 + 底部 padding 14
+ * ⇒ 横屏约 158px、竖屏约 198px、矮横屏约 148px。toast / 设置面板的 bottom
+ * 必须跟着这三个数走，不然会压在手牌上（2026-11-06 就踩过一次）。
+ * ========================================================================== */
+
+@media (orientation: portrait) {
+  /* 430px 竖屏四张均分 ≈ 97px 宽，118px 高 ⇒ 明确的高卡 */
+  .ahud__card {
+    min-height: 118px;
+    padding: 8px 3px 5px;
+  }
+
+  .ahud__card__art {
+    width: 34px;
+    height: 34px;
+    margin: 12px 0 5px;
+  }
+
+  .ahud__card__name {
+    font-size: 11px;
+  }
+
+  .ahud__card__need {
+    gap: 3px;
+    padding-top: 5px;
+  }
+
+  .ahud__card__need__grp svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .ahud__bank {
+    height: 22px;
+  }
+
+  .ahud__toast {
+    bottom: 208px;
+  }
+
+  .ahud__settings {
+    bottom: calc(var(--safe-bottom) + 178px);
+  }
+
+  .ahud__end__title {
+    font-size: 20px;
+  }
+}
+
+/* 平板/大屏竖屏：卡已经很宽了，别再硬拉到 118px 变成正方形 */
+@media (orientation: portrait) and (min-width: 700px) {
+  .ahud__card {
+    min-height: 100px;
+  }
+
+  .ahud__bottom {
+    max-width: 620px;
+  }
+
+  .ahud__toast {
+    bottom: 190px;
+  }
+}
+
+@media (orientation: landscape) {
+  .ahud__toast {
+    bottom: 164px;
+  }
+
+  .ahud__settings {
+    bottom: calc(var(--safe-bottom) + 138px);
+  }
+}
+
+/* 手机横屏（高度 ≤ 520px）：战场本来就只剩一条，HUD 再占 160px 就什么都不剩了 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .ahud__card {
+    min-height: 68px;
+    padding: 3px 2px 2px;
+  }
+
+  .ahud__card__art {
+    width: 22px;
+    height: 22px;
+    margin: 6px 0 2px;
+  }
+
+  .ahud__card__name {
+    font-size: 9px;
+  }
+
+  .ahud__card__need {
+    gap: 1px;
+    padding-top: 2px;
+  }
+
+  .ahud__card__need__grp svg {
+    width: 9px;
+    height: 9px;
+  }
+
+  .ahud__top {
+    padding: 3px 8px;
+  }
+
+  .ahud__supply__item {
+    padding: 1px 5px;
+  }
+
+  .ahud__toast {
+    bottom: 140px;
+  }
+
+  .ahud__settings {
+    bottom: calc(var(--safe-bottom) + 112px);
+    max-height: min(62vh, 420px);
+  }
+
+  .ahud__end {
+    gap: 8px;
+  }
+
+  .ahud__end__title {
+    font-size: 18px;
+  }
+
+  .ahud__end__btn {
+    min-height: 36px;
+  }
 }

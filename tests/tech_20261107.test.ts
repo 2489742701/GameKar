@@ -103,6 +103,77 @@ describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () =
   });
 });
 
+/**
+ * 2026-11-07 用户："如果场上有一个工业工厂，玩家不会再被发到这个手牌，
+ * 除非自己的工厂被摧毁。"
+ *
+ * 判据只有一处：`ArenaWorld.techAllows` → `hasFactory`。抽卡、刷新、补牌、
+ * 拆楼后的换牌全都经过它，所以这里不需要在每个入口各测一遍。
+ */
+describe('唯一建筑：自家齿轮工厂占坑时退出卡池', () => {
+  const factoryCard = cardById('gearFactory');
+
+  it('没有工厂：判据放行，反复刷新能抽到工厂卡', () => {
+    const w = new ArenaWorld({ seed: 331 });
+    expect(w.hasFactory('blue')).toBe(false);
+    expect(w.techAllows('blue', factoryCard)).toBe(true);
+    expect(seenAfterRerolls(w, 30).has('gearFactory')).toBe(true);
+  });
+
+  it('工厂一落地（连施工中）就禁发：判据关掉 + 30 轮刷新零命中', () => {
+    const w = new ArenaWorld({ seed: 332 });
+    const b = w['place']('blue', 'gearFactory', 10, 6, 700);
+    b.build = 0.4; // 故意施工中不完工：占坑这件事跟完不完工无关
+    expect(w.hasFactory('blue')).toBe(true);
+    expect(w.techAllows('blue', factoryCard)).toBe(false);
+    const seen = seenAfterRerolls(w, 30);
+    expect(seen.has('gearFactory')).toBe(false);
+  });
+
+  it('出了工厂卡之后，补牌不会把第二张工厂卡塞回来', () => {
+    const w = new ArenaWorld({ seed: 333 });
+    w.auto.red = false;
+    w.gold.blue = 20;
+    w.hands.blue.fill(null);
+    w.hands.blue[0] = factoryCard;
+    w.handCooldowns.blue[0] = 0;
+    expect(w.playCard('blue', 0, 6, 9).ok).toBe(true);
+    expect(w.hasFactory('blue')).toBe(true);
+    // 跑够冷却补齐四格，任何一格都不许再出现工厂卡
+    for (let i = 0; i < 400; i++) w.update(0.05);
+    for (const c of w.hands.blue) expect(c?.id).not.toBe('gearFactory');
+  });
+
+  it('工厂被摧毁 ⇒ 自动恢复发牌（废墟不算楼）', () => {
+    const w = new ArenaWorld({ seed: 334 });
+    const b = built(w, 'gearFactory', 10, 6);
+    expect(w.techAllows('blue', factoryCard)).toBe(false);
+    w.buildings.delete(b.id); // hurtBuilding 打空血走的就是这一句
+    w.ruins.push({ id: 9999, kind: 'gearFactory', side: 'blue', col: 10, row: 6, cols: 4, rows: 3, ttl: 10, total: 10 });
+    expect(w.hasFactory('blue')).toBe(false);
+    expect(w.techAllows('blue', factoryCard)).toBe(true);
+    expect(seenAfterRerolls(w, 30).has('gearFactory')).toBe(true);
+  });
+
+  it('只锁自家：对面红方照常能拿工厂卡', () => {
+    const w = new ArenaWorld({ seed: 335 });
+    built(w, 'gearFactory', 10, 6);
+    expect(w.techAllows('blue', factoryCard)).toBe(false);
+    expect(w.techAllows('red', factoryCard)).toBe(true);
+  });
+
+  it('PVE 双人同阵营：一人建厂，两个人的手牌都不再发工厂卡', () => {
+    const w = new ArenaWorld({ seed: 336, mode: 'pve', players: 2 });
+    built(w, 'gearFactory', 10, 6);
+    expect(w.seatCount).toBe(2);
+    for (const p of w.players) {
+      p.gold = 20;
+      for (let i = 0; i < 20; i++) w.rerollOf(p);
+      for (const c of p.hand) expect(c?.id, `玩家 ${p.id} 拿到工厂卡`).not.toBe('gearFactory');
+    }
+  });
+});
+
 describe('齿轮工厂 4×3（设计文档 C 节）', () => {
   it('规格是 4 列 3 行，是第一栋非 3×3 建筑', () => {
     expect(BUILDING_SPECS.gearFactory.cols).toBe(4);

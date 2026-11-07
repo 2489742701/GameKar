@@ -717,7 +717,10 @@ export class ArenaApp {
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.material = modelMat;
       });
-      body.scale.setScalar(card.building === 'gearFactory' ? BUILDING_SCALE * 1.18 : BUILDING_SCALE);
+      // 所有楼统一一个缩放（2026-11-07 返工）：工厂原先额外乘 1.18，
+      // 加上模型本身就宽，台基直接盖出 4×3 占地 —— 影子也得跟着改回 2.2，
+      // 否则"预览一个尺寸、落下去是另一个尺寸"。
+      body.scale.setScalar(BUILDING_SCALE);
       g.add(body);
       g.userData['body'] = body;
     } else {
@@ -895,8 +898,9 @@ export class ArenaApp {
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
       group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
-      // 齿轮工厂 4×3，模型比 3×3 楼再大一圈（用户"工厂稍微大一点"）
-      const bScale = b.kind === 'gearFactory' ? BUILDING_SCALE * 1.18 : BUILDING_SCALE;
+      // 4×3 的"大一圈"是**占地**给的，模型本身按占地倒推，不再额外放大
+      // （2026-11-07 返工：原来额外乘 1.18，台基盖出 5.97 格、屋顶穿到隔壁格子）
+      const bScale = BUILDING_SCALE;
       group.scale.setScalar(bScale);
       // 量一次模型自身的高度（格）：血条挂多高就按它算，不再按建筑种类写死。
       // 相对组自身量：组已经抬到了地块表面，直接用世界坐标会把那 0.5 格算进去。

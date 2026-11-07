@@ -44,19 +44,30 @@ describe('机位表（斜视 / 正对 / 我方 / 俯视）', () => {
     expect(VIEW_PRESETS).toHaveLength(3);
   });
 
-  it('PVE 每档的 yaw 都钉在 270° 附近 —— 歪过头长边就横过来了', () => {
+  it('只有「斜视」明显歪，其余三档仍钉在 270° 附近（长边不能横过来）', () => {
     for (const preset of PVE_VIEW_PRESETS) {
-      expect(Math.abs(preset.yaw - 270), `${preset.name} 的 yaw 离 270 太远`).toBeLessThanOrEqual(12);
+      const off = Math.abs(preset.yaw - 270);
+      if (preset.name === '斜视') continue;
+      expect(off, `${preset.name} 的 yaw 离 270 太远`).toBeLessThanOrEqual(12);
     }
     // 默认档必须正对：60 格长边严格竖直，竖屏才铺得满
     expect(PVE_VIEW_PRESETS[0]!.yaw).toBe(270);
   });
 
-  it('「斜视」比「正对」宽一点（歪了要留出长边的投影）', () => {
+  /**
+   * 用户发回真机截图定稿："就是这个角度，把斜视改成这个角度就是斜视嘛，斜图嘛"。
+   * 图上量出来：场地边/黄区带在屏幕上斜约 25°、低俯角、上下留大块场外、只露一角。
+   * 这一档的定位**不是**"稍微歪一点的全景"，而是斜着切开画面的构图。
+   */
+  it('「斜视」按参考图定稿：拧掉约 30°、低俯角、拉近（不是拉远补裁切）', () => {
     const upright = PVE_VIEW_PRESETS[0]!;
     const slanted = PVE_VIEW_PRESETS[1]!;
-    expect(slanted.yaw).not.toBe(upright.yaw);
-    expect(slanted.zoomFactor).toBeGreaterThan(upright.zoomFactor);
+    const off = Math.abs(slanted.yaw - 270);
+    expect(off).toBeGreaterThanOrEqual(25);
+    expect(off).toBeLessThanOrEqual(45);
+    expect(slanted.pitch).toBeLessThan(upright.pitch);
+    // 歪了不靠拉远把全场塞回来 —— 那是"正对"该干的事
+    expect(slanted.zoomFactor).toBeLessThan(upright.zoomFactor);
   });
 
   it('「俯视」是真的往下压：俯角比「正对」高一大截', () => {

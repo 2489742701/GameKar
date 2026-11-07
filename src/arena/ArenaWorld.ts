@@ -533,12 +533,36 @@ export class ArenaWorld {
   }
 
   /**
+   * 场上是否**已经有一座自家齿轮工厂**（2026-11-07 用户："如果场上有一个工业工厂，
+   * 玩家不会再被发到这个手牌，除非自己的工厂被摧毁"）。
+   *
+   * 和 `hasBuilt` 的区别是**故意的**：这里连施工中（build<1）都算。
+   * 工厂一落地就吃掉一个 4×3 的坑，第二张工厂卡在它盖好之前根本没地方放，
+   * 发下来就是一张死牌；等到盖完再禁，玩家已经白白攥了几秒废卡。
+   *
+   * `hurtBuilding` 拆楼时会 `buildings.delete(b.id)`，所以"被摧毁"不需要额外标记：
+   * 楼一没，这里自然变 false，工厂卡自动回到卡池（废墟 `ruins` 不算楼，不拦发牌）。
+   */
+  hasFactory(side: Side): boolean {
+    for (const b of this.buildings.values()) {
+      if (b.side === side && b.kind === 'gearFactory' && b.hp > 0) return true;
+    }
+    return false;
+  }
+
+  /**
    * **科技前置**（2026-11-07 设计文档 A 节）：
    * 民兵永远可发；其它地面军队要兵营；三架飞行器要齿轮工厂；
    * 建筑卡还要有对应尺寸的空位（P-056 的裁量，按卡逐一判）。
    */
   techAllows(side: Side, card: ArenaCard, cache = new Map<string, boolean>()): boolean {
     if (card.kind === 'building' && card.building) {
+      /**
+       * **唯一建筑**：场上已有自家工厂 ⇒ 这张牌整个退出卡池（2026-11-07 用户）。
+       * 放在 `scanRoom` 前面，是为了让它跟场地有没有空位无关 —— 哪怕场地空得能再
+       * 盖十座，也不该发第二张。判据与落牌/`purgeLocked` 共用这一处，不另算账。
+       */
+      if (card.building === 'gearFactory' && this.hasFactory(side)) return false;
       const spec = BUILDING_SPECS[card.building];
       const key = `${spec.cols}x${spec.rows}`;
       if (!cache.has(key)) cache.set(key, this.scanRoom(side, spec.cols, spec.rows));
