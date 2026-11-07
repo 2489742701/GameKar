@@ -18,12 +18,13 @@ import * as THREE from 'three';
  * 它们的大小也太小了，可以稍微大一点。尤其是热气球可以更大一点"）。
  *
  * 原来 `FLY_HEIGHT=1.25` 格 —— 比民居（约 3 格）还矮，俯视下看着像贴地滑。
- * 现在 2.6 格，明显浮在屋顶线上方；体型倍率也集中在这张表，
+ * 中午提到 2.6，深夜用户又说"空军还是有点低了，可以再高一点" ⇒ **3.8 格**，
+ * 明显压在屋顶线上方，俯视下和地面单位彻底分层。体型倍率也集中在这张表，
  * `ArenaApp` 只读它，不在三处各写一个数。热气球给最大倍率。
  */
 export const FLYER_STYLE = {
-  height: 2.6,
-  scale: { balloon: 1.35, airscrew: 1.05, bomber: 0.45 },
+  height: 3.8,
+  scale: { balloon: 1.5, airscrew: 1.05, bomber: 0.45 },
   shadow: { balloon: 1.5, airscrew: 1.2, bomber: 1.45 },
 } as const;
 
@@ -111,19 +112,45 @@ function collectMats(group: THREE.Group): THREE.MeshStandardMaterial[] {
 export function makeBalloon(accent: number): FlyerModel {
   const g = new THREE.Group();
   const w = wood(), d = darkWood(), sail = canvasOf(accent);
-  const envelope = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 8), sail);
-  envelope.scale.set(1, 1.25, 1);
-  envelope.position.y = 1.05;
+  /**
+   * 球囊加大（用户："热气球好敷衍啊，气球大一点，下面有个小斗子"）：
+   * 半径 0.7 → 1.0，纵向拉 1.18；斗子从 0.5 的小方块改成 0.66×0.42 的
+   * 藤编吊篮（四角立柱 + 上下沿），吊绳也跟着拉长接到球囊底。
+   */
+  const envelope = new THREE.Mesh(new THREE.SphereGeometry(1.0, 16, 12), sail);
+  envelope.scale.set(1, 1.18, 1);
+  envelope.position.y = 1.52;
   g.add(envelope);
-  const basket = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.28, 0.5), w);
-  basket.position.y = 0.16;
+  // 球囊竖向色筋：几条深色的细带，让"大球"不至于是一整块纯色
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    g.add(rod(
+      new THREE.Vector3(Math.cos(a) * 0.99, 1.05, Math.sin(a) * 0.99),
+      new THREE.Vector3(Math.cos(a) * 0.55, 2.62, Math.sin(a) * 0.55),
+      0.018, d, 4,
+    ));
+  }
+  const basket = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.42, 0.66), w);
+  basket.position.y = 0.24;
   g.add(basket);
-  for (const sx of [-0.2, 0.2]) {
-    for (const sz of [-0.2, 0.2]) {
-      g.add(rod(new THREE.Vector3(sx, 0.3, sz), new THREE.Vector3(sx * 0.7, 0.72, sz * 0.7), 0.014, d, 4));
+  // 斗子的四角立柱 + 上下沿（小斗子的"编"感）
+  for (const sx of [-0.31, 0.31]) {
+    for (const sz of [-0.31, 0.31]) {
+      g.add(rod(new THREE.Vector3(sx, 0.06, sz), new THREE.Vector3(sx, 0.45, sz), 0.022, d, 4));
     }
   }
-  const flag = tri(new THREE.Vector3(0, 1.92, 0), new THREE.Vector3(0.34, 1.8, 0), new THREE.Vector3(0, 1.7, 0), d);
+  for (const y of [0.06, 0.45]) {
+    g.add(rod(new THREE.Vector3(-0.31, y, -0.31), new THREE.Vector3(0.31, y, -0.31), 0.02, d, 4));
+    g.add(rod(new THREE.Vector3(-0.31, y, 0.31), new THREE.Vector3(0.31, y, 0.31), 0.02, d, 4));
+    g.add(rod(new THREE.Vector3(-0.31, y, -0.31), new THREE.Vector3(-0.31, y, 0.31), 0.02, d, 4));
+    g.add(rod(new THREE.Vector3(0.31, y, -0.31), new THREE.Vector3(0.31, y, 0.31), 0.02, d, 4));
+  }
+  for (const sx of [-0.26, 0.26]) {
+    for (const sz of [-0.26, 0.26]) {
+      g.add(rod(new THREE.Vector3(sx, 0.45, sz), new THREE.Vector3(sx * 0.62, 1.02, sz * 0.62), 0.018, d, 4));
+    }
+  }
+  const flag = tri(new THREE.Vector3(0, 2.78, 0), new THREE.Vector3(0.42, 2.64, 0), new THREE.Vector3(0, 2.5, 0), d);
   g.add(flag);
   g.scale.setScalar(FLYER_STYLE.scale.balloon);
   return { group: g, mats: collectMats(g) };

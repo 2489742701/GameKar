@@ -90,6 +90,18 @@ interface Corpse {
   fireIn: number;
 }
 
+/** 被击落的飞行器：整机往下掉，触地才解体（不是在空中就没了）。 */
+interface FallingFlyer {
+  obj: THREE.Object3D;
+  x: number;
+  z: number;
+  vy: number;
+  spin: number;
+  ground: number;
+  /** 兜底：万一地面高度异常，也不许永远挂在天上 */
+  life: number;
+}
+
 interface UnitSprite {
   /** 场景里的那个东西：普通兵是像素小人，移动火炮是"推车 + 两个小人" */
   obj: THREE.Object3D;
@@ -138,6 +150,9 @@ const FLASH_WHITE = new THREE.Color(1, 1, 1);
 /** 飞行器离地高度搬到 visuals/flyers.ts 的 FLYER_STYLE，与体型倍率同表 */
 const CORPSE_SECONDS = 2.6;
 const FLYER_IDS = new Set(['balloon', 'airscrew', 'bomber']);
+/** 弹丸模型的"前方"：箭沿 +Z，炮弹/法术沿 +X（拖尾挂在反方向） */
+const SHOT_FORWARD_Z = new THREE.Vector3(0, 0, 1);
+const SHOT_FORWARD_X = new THREE.Vector3(1, 0, 0);
 /** 触屏拖放：影子落在手指前方（屏幕上方）这么多 CSS 像素，免得手指盖住预览 */
 const DRAG_FINGER_OFFSET = 56;
 
@@ -192,6 +207,7 @@ export class ArenaApp {
   private readonly unitSprites = new Map<number, UnitSprite>();
   /** 倒地不动的小人 / 解体冒火的车与飞机（视图自己的残骸池，逻辑层不碰） */
   private readonly corpses: Corpse[] = [];
+  private readonly fallingFlyers: FallingFlyer[] = [];
   private readonly flagMarks = new Map<number, THREE.Group>();
   private readonly styles = new Map<string, DudeStyle>();
   /** 会动的零件：磨坊的风车、炮塔的头、塔口的火光 */
@@ -981,6 +997,7 @@ export class ArenaApp {
     this.damage.update(info.delta);
     this.confetti.update(info.delta);
     this.stepSinking(info.delta);
+    this.stepFalling(info.delta);
     this.stepCorpses(info.delta);
     this.fx.step(info.delta);
     this.dustLayer.update(info.delta);
@@ -1023,6 +1040,17 @@ export class ArenaApp {
       // 外墙是一张单独的面片网格：受伤时从这里整块摘（见 shell.ts）
       const shell = new WallShell(model.shell);
       body.add(shell.mesh);
+      /**
+       * **每栋楼的材质必须独立**（2026-11-07 深夜用户："哪个建筑受到攻击变白，
+       * 而不是建筑群体一起变白"）。`kit.ts` 的材质走全局 `materialCache`，
+       * 同一 partKey 全场共用一份 —— 直接改 color 就是"一栋挨打、全场泛白"。
+       * 这里先把无贴图的标准材质克隆一份再收集，闪白只落在这一栋上。
+       */
+      group.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        const m = mesh.material as THREE.MeshStandardMaterial | undefined;
+        if (m && m.isMeshStandardMaterial && !m.map) mesh.material = m.clone();
+      });
       // 收集楼体材质（受击泛白用）：无贴图的标准材质 + 原色副本；旗布（带 map）与后加的血条不收
       const mats: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[] = [];
       group.traverse((o) => {
@@ -1423,8 +1451,20 @@ export class ArenaApp {
         continue;
       }
       this.sfx.play('kill', { pitch: 0.85 + Math.random() * 0.3 });
-      if (entry.siege || entry.flying) {
-        // 车 / 飞机：解体碎在地上 + 冒火（用户第 2 条）
+      if (entry.flying) {
+        /**
+         * 飞行器：先**整机掉到地上**，触地才解体（用户："空军在空中解体/消失，
+         * 应该是掉到地上了"）。原来的 scatterPieces 用的是子件的局部 y，
+         * 而父级还挂在飞行高度上 —— 碎片落到"局部 -0.2"就停，世界坐标仍在半空，
+         * 看起来就是在空中散开后凭空消失。
+         */
+        this.fallingFlyers.push({
+          obj: entry.obj, x, z, vy: -0.4,
+          spin: (Math.random() - 0.5) * 3.4,
+          ground, life: 3,
+        });
+      } else if (entry.siege) {
+        // 车：原地解体碎在地上 + 冒火
         const pieces = this.scatterPieces(entry.obj);
         this.fx.impact(x, z, ground, 'cannon', 1.3);
         this.fx.spark(x, z, ground + 0.4, 0, 0, 14);
@@ -1437,6 +1477,34 @@ export class ArenaApp {
       }
       entry.shadow?.removeFromParent();
       this.unitSprites.delete(id);
+    }
+  }
+
+  /**
+   * 被击落的飞行器：整机下坠 + 翻转，**触地那一帧**才打散部件、放火花与尘，
+   * 再转交给 corpses 走原来的残骸渐隐。重力 7.5 格/s² ⇒ 从 3.8 格高约 1 秒落地。
+   */
+  private stepFalling(dt: number): void {
+    for (let i = this.fallingFlyers.length - 1; i >= 0; i--) {
+      const f = this.fallingFlyers[i]!;
+      f.life -= dt;
+      f.vy -= 7.5 * dt;
+      f.obj.position.y += f.vy * dt;
+      f.obj.position.x += 0.35 * dt; // 往前飘一点，别直上直下
+      f.obj.rotation.z += f.spin * dt;
+      f.obj.rotation.x += f.spin * 0.55 * dt;
+      const floor = f.ground + 0.12;
+      if (f.obj.position.y > floor && f.life > 0) continue;
+      f.obj.position.y = floor;
+      const pieces = this.scatterPieces(f.obj);
+      this.fx.impact(f.x, f.z, f.ground, 'cannon', 1.3);
+      this.fx.spark(f.x, f.z, f.ground + 0.4, 0, 0, 14);
+      this.fx.dust(f.x, f.z, f.ground + 0.4);
+      this.corpses.push({
+        obj: f.obj, kind: 'wreck', life: CORPSE_SECONDS,
+        x: f.x, z: f.z, pieces, fireIn: 0,
+      });
+      this.fallingFlyers.splice(i, 1);
     }
   }
 
@@ -1887,16 +1955,20 @@ export class ArenaApp {
       const fromY = mesh.userData['fromY'] as number;
       const toY = mesh.userData['toY'] as number;
       // 抛物线：炮弹飞得高一点，法术弹居中，箭基本走直线
-      const arc = Math.sin(k * Math.PI) * (s.ammo === 'cannon' ? 0.9 : s.ammo === 'magic' ? 0.35 : 0.12);
+      const arcAmp = s.ammo === 'cannon' ? 0.9 : s.ammo === 'magic' ? 0.35 : 0.12;
+      const arc = Math.sin(k * Math.PI) * arcAmp;
       mesh.position.set(x, fromY + (toY - fromY) * k + arc, z);
-      if (s.ammo === 'arrow') {
-        // 箭头模型沿 +Z 造：转到"从哪来 → 往哪去"
-        mesh.rotation.y = Math.atan2(s.toX - s.fromX, s.toZ - s.fromZ);
-        mesh.scale.setScalar(s.source === 'ballista' ? 2.2 : 1.6);
-      } else {
-        mesh.rotation.y = -Math.atan2(s.toZ - s.fromZ, s.toX - s.fromX);
-        mesh.scale.setScalar(1);
-      }
+      /**
+       * **拖尾要忠于弹道**（用户："拖尾能不能忠于他们的弹道"）：
+       * 上一版只按 `from→to` 的水平方向绕 Y 转，弹丸爬升/下落时尾巴还横着，
+       * 和抛物线明显不贴。现在把"模型前向"整根对齐**瞬时速度向量** ——
+       * 速度 y 分量 = 直线落差 + 抛物线弧的导数 `arcAmp·π·cos(πk)`，
+       * 所以炮弹刚出膛抬头、命中前低头，尾巴跟着一起转。
+       */
+      const vy = (toY - fromY) + arcAmp * Math.PI * Math.cos(k * Math.PI);
+      const dir = new THREE.Vector3(s.toX - s.fromX, vy, s.toZ - s.fromZ).normalize();
+      mesh.quaternion.setFromUnitVectors(s.ammo === 'arrow' ? SHOT_FORWARD_Z : SHOT_FORWARD_X, dir);
+      mesh.scale.setScalar(s.ammo === 'arrow' ? (s.source === 'ballista' ? 2.2 : 1.6) : 1);
     }
     for (const [id, mesh] of this.shotMeshes) {
       if (live.has(id)) continue;
