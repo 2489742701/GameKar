@@ -28,7 +28,17 @@ export interface ArenaHudOptions {
    * 没有它，打完一局只能不断重开同一关 —— 换模式得去改 URL（2026-11-07 用户反馈）。
    */
   onMenu?: () => void;
-  onCycleView: () => void;
+  /**
+   * 工具行的「退出」：**退出当前这一局**回主菜单（2026-11-07 用户：
+   * "这个进游戏之后退不出来……这个退出游戏就是退出当前游戏，回到主菜单"）。
+   * 和 `onMenu` 是同一件事，只是入口不同 —— 一个在战斗中，一个在结算面板。
+   */
+  onQuit?: () => void;
+  /**
+   * 视角机位菜单选第 i 档（2026-11-07 用户："给一个斜着的，还有一个正视角、
+   * 斜视角，这些都可以设置"）。清单来自 `app.viewPresets`，这里只报下标。
+   */
+  onPickView: (index: number) => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
   onReroll: (player: number) => void;
 }
@@ -85,7 +95,13 @@ export class ArenaHud {
   private readonly end = make('div', 'ahud__end');
   /** 自定义设置面板（花色编辑器 + 关闭按钮）；默认收起 */
   private readonly settingsPanel: HTMLElement;
-  private readonly settingsBtn: HTMLButtonElement;
+  /** 视角机位菜单（斜视 / 正对 / 我方 / 俯视）；默认收起 */
+  private readonly viewMenu: HTMLElement;
+  /** 已经退出过一次的手指：两段式「退出」的第二下才真走 */
+  private quitArmed = false;
+  private quitTimer: number | null = null;
+  /** 上一次画菜单高亮用的指纹：20Hz 的 refresh 里不重复刷 DOM */
+  private lastViewKey = '';
   /** 倒计时：数字（一件只建一次，20Hz 里不重建） */
   private readonly clock = make('div', 'ahud__clock');
   private readonly clockNum = make('b', 'ahud__clock__num', '');
@@ -93,6 +109,7 @@ export class ArenaHud {
   private readonly clockOt = make('span', 'ahud__clock__ot', '');
   private readonly endSub = make('div', 'ahud__end__sub', '');
   private viewBtn!: HTMLButtonElement;
+  private quitBtn!: HTMLButtonElement;
   private toastTimer: number | null = null;
 
   constructor(
@@ -163,20 +180,55 @@ export class ArenaHud {
      * 单人局只建 1 个，DOM 与老版本一致；双人时第二个座位整体转到屏幕顶部。
      */
     const bottom = make('div', 'ahud__bottom');
-    const view = make('button', 'ahud__view', '视角 · 全景');
-    this.viewBtn = view;
-    view.addEventListener('click', () => this.opts.onCycleView());
     const tools = make('div', 'ahud__tools');
+    /**
+     * 视角机位（2026-11-07 用户："手机端额外设置一个视角，给一个斜着的，
+     * 还有一个正视角、斜视角，这些都可以设置"）。
+     *
+     * 上一版这颗按钮是**循环**切机位，字跟着变但人看不到"还有哪些档"——
+     * 现在点开是一张清单，档位名来自 `app.viewPresets`（PVE 和 1v1 各一份），
+     * UI 不自己维护名字，加一档只改 `Camera.ts`。
+     */
+    const view = make('button', 'ahud__view', '视角 · 斜视');
+    this.viewBtn = view;
+    view.type = 'button';
+    view.addEventListener('click', () => this.toggleViewMenu());
+    /**
+     * 退出（2026-11-07 用户："这个进游戏之后退不出来"）：
+     * 两段式 —— 第一下只把按钮改成「再点一次」，2.6 秒不跟就自己复位。
+     * 战斗中误触一下就把一局丢了，代价太大；弹模态框又太重，两段式最省事。
+     */
+    const quit = make('button', 'ahud__view ahud__quit', '退出');
+    this.quitBtn = quit;
+    quit.type = 'button';
+    quit.addEventListener('click', () => this.confirmQuit());
+    tools.append(view, quit);
+    /**
+     * 视角清单（浮在工具行上方，点一下就走）。
+     * 条目在这里按 `app.viewPresets` 生成一次 —— 机位表是**每个模式一份**
+     * （1v1 三档、PVE 四档），所以不能在 UI 里写死名字。
+     */
+    this.viewMenu = make('div', 'ahud__viewmenu');
+    this.viewMenu.hidden = true;
+    for (let i = 0; i < this.app.viewPresets.length; i++) {
+      const item = make('button', 'ahud__viewmenu__item', this.app.viewPresets[i]!.name);
+      item.type = 'button';
+      item.dataset['index'] = String(i);
+      item.addEventListener('click', () => {
+        this.opts.onPickView(i);
+        this.toggleViewMenu(false);
+      });
+      this.viewMenu.append(item);
+    }
+    tools.append(this.viewMenu);
     /**
      * 设置面板（2026-11-06 用户："这个设置能不能额外准备一个自定义设置里面给他处理"）：
      * 战斗中也能调花色 —— 只攒存档，**下一局生效**（「再来一局」= reload 读新档）。
-     * 面板默认收起；和开始菜单里的编辑器是同一份组件（bannerEditor.ts）。
+     *
+     * 2026-11-07 用户："那个游戏栏目不需要设置，应该右键可以" ——
+     * 工具行里**不再有**设置按钮，改成画布上右键（手机长按空地）叫出来。
+     * 战斗中那块屏幕是稀缺资源，常驻按钮只留"这一局用得上"的两个：视角、退出。
      */
-    const settingsBtn = make('button', 'ahud__view', '设置');
-    settingsBtn.type = 'button';
-    settingsBtn.addEventListener('click', () => this.toggleSettings());
-    this.settingsBtn = settingsBtn;
-    tools.append(view, settingsBtn);
     this.settingsPanel = make('div', 'ahud__settings');
     this.settingsPanel.hidden = true;
     const settingsHead = make('div', 'ahud__settings__head');
@@ -185,8 +237,22 @@ export class ArenaHud {
     settingsClose.type = 'button';
     settingsClose.addEventListener('click', () => this.toggleSettings(false));
     settingsHead.append(settingsTitle, settingsClose);
-    const settingsNote = make('p', 'ahud__settings__note', '改完存档，点「再来一局」就能带上新旗上场');
+    const settingsNote = make(
+      'p',
+      'ahud__settings__note',
+      '游戏里右键（手机长按空地）随时叫出这一页 · 改完存档，点「再来一局」就能带上新旗上场',
+    );
     this.settingsPanel.append(settingsHead, settingsNote, createBannerEditor());
+    /**
+     * 右键 = 设置。`PointerInput` 在画布上已经 `preventDefault` 掉了浏览器菜单，
+     * 但那是"别弹系统菜单"，不会吃掉别的监听者，这里照收。
+     */
+    this.app.stage.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.openSettings();
+    });
+    // 手指点回战场：先把视角清单收起来（不然它会一直挂在那儿挡视线）
+    this.app.stage.addEventListener('pointerdown', () => this.toggleViewMenu(false));
     /**
      * 座位只给**玩家阵营**建（2026-11-07 实机纠错，用户："我甚至能看到敌方的卡牌和敌方的经济"）。
      *
@@ -200,6 +266,7 @@ export class ArenaHud {
      */
     const seats = this.app.world.seatPlayers();
     this.el.dataset['players'] = String(Math.max(1, this.app.world.seatCount));
+    // 工具行（视角 / 退出）压在手牌上方；座位自己挂到同一列的下半截
     bottom.append(tools);
     const tops: HTMLElement[] = [];
     seats.forEach((p, order) => {
@@ -417,7 +484,59 @@ export class ArenaHud {
   toggleSettings(on?: boolean): void {
     const next = on ?? this.settingsPanel.hidden;
     this.settingsPanel.hidden = !next;
-    this.settingsBtn.dataset['on'] = String(next);
+  }
+
+  /**
+   * 叫出设置面板（右键 / 长按空地）。
+   * 顺手收掉视角清单：两块浮层叠在同一片右上角，叠着看就是一锅粥。
+   */
+  private openSettings(): void {
+    this.toggleViewMenu(false);
+    this.toggleSettings(true);
+  }
+
+  /** 视角机位清单开关。 */
+  private toggleViewMenu(on?: boolean): void {
+    const next = on ?? this.viewMenu.hidden;
+    this.viewMenu.hidden = !next;
+    this.viewBtn.dataset['on'] = String(next);
+    if (next) this.paintViewMenu();
+  }
+
+  /** 高亮当前档位。只看 `viewIndex`，名字在 20Hz 里不会变。 */
+  private paintViewMenu(): void {
+    const idx = this.app.viewIndex;
+    for (const node of Array.from(this.viewMenu.children)) {
+      const item = node as HTMLElement;
+      item.dataset['on'] = String(Number(item.dataset['index']) === idx);
+    }
+  }
+
+  /**
+   * 两段式退出：第一下改成「再点一次」，2.6 秒内没跟就复位。
+   * 真走之后页面跳转，所以不需要复位（`onQuit` 里清 sessionStorage 再跳）。
+   */
+  private confirmQuit(): void {
+    if (this.quitArmed) {
+      this.opts.onQuit?.();
+      return;
+    }
+    this.quitArmed = true;
+    this.quitBtn.dataset['armed'] = '1';
+    this.quitBtn.textContent = '再点一次';
+    this.say('再点一次「退出」回主菜单，这一局不保存', 'warn');
+    if (this.quitTimer !== null) window.clearTimeout(this.quitTimer);
+    this.quitTimer = window.setTimeout(() => this.resetQuit(), 2600);
+  }
+
+  private resetQuit(): void {
+    if (this.quitTimer !== null) {
+      window.clearTimeout(this.quitTimer);
+      this.quitTimer = null;
+    }
+    this.quitArmed = false;
+    this.quitBtn.dataset['armed'] = '0';
+    this.quitBtn.textContent = '退出';
   }
 
   // ---------------------------------------------------------------- 中央大字
@@ -749,10 +868,14 @@ export class ArenaHud {
     this.refresh();
   }
 
-  /** 视角按钮上的那行字（自动/手动 + 机位名）。 */
+  /** 视角按钮上的那行字（自动/手动 + 机位名），顺带刷新菜单高亮。 */
   setViewStatus(status: string): void {
     const text = `视角 · ${status}`;
     if (this.viewBtn && this.viewBtn.textContent !== text) this.viewBtn.textContent = text;
+    const key = `${this.app.viewIndex}:${status}`;
+    if (key === this.lastViewKey) return;
+    this.lastViewKey = key;
+    this.paintViewMenu();
   }
 
   /** 给外部（比如实机探针）读一眼当前卡面文案（第 0 号座位）。 */

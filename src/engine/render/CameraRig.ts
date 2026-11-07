@@ -46,6 +46,20 @@ export interface CameraRigOptions {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * 俯仰角的活动范围（度）。
+ *
+ * 2026-11-07 用户："最大可以转到平行的那种感觉，往下俯视，最大可以再往下来一点。"
+ * 原来是 `clamp(18, 82)`，两头都差一口气 —— 18° 还明显是俯视，82° 也没到正上方。
+ *
+ * 为什么不给到 0 / 90：
+ *  - **0°** 视线与地面完全平行，`screenToGround` 的射线求交无解（手指点哪都落不了地），
+ *    平移用的"屏幕上向"投影也塌成零向量 —— 6° 是还留着这点余量的极限；
+ *  - **90°** 正上方时 `lookAt` 的上方向退化，镜头会翻面。88° 在视觉上已经是平面图了。
+ */
+export const PITCH_MIN = 6;
+export const PITCH_MAX = 88;
+
 export class CameraRig {
   readonly camera: THREE.OrthographicCamera;
 
@@ -127,7 +141,7 @@ export class CameraRig {
   // ---------------------------------------------------------------- 姿态
 
   setPitch(deg: number): void {
-    this.pitchDeg = clamp(deg, 18, 82);
+    this.pitchDeg = clamp(deg, PITCH_MIN, PITCH_MAX);
   }
 
   setYaw(deg: number): void {

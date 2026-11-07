@@ -898,6 +898,79 @@
   justify-content: flex-end;
   gap: 6px;
   pointer-events: auto;
+  /* 视角清单是 absolute 定位的，靠这一行当锚点 */
+  position: relative;
+}
+
+/**
+ * 视角清单（2026-11-07 用户："给一个斜着的，还有一个正视角、斜视角，这些都可以设置"）。
+ *
+ * 锚在工具行上而不是按钮上：按钮文案会变（「视角 · 自动 · 斜视」），
+ * 宽度跟着变，锚按钮的话清单右边缘会一直抖。
+ */
+.ahud__viewmenu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 112px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--wood-1);
+  background: rgba(12, 8, 4, 0.94);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+.ahud__viewmenu[hidden] {
+  display: none;
+}
+
+.ahud__viewmenu__item {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  letter-spacing: 0.06em;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  background: none;
+}
+
+.ahud__viewmenu__item:hover {
+  border-color: var(--wood-6);
+  background: rgba(246, 220, 156, 0.08);
+}
+
+/* 当前这一档：金框 + 前面点一盏灯，不看按钮上的字也知道自己在哪一档 */
+.ahud__viewmenu__item[data-on='true'] {
+  border-color: var(--gold);
+  color: var(--gold-hi);
+  background: rgba(246, 220, 156, 0.12);
+}
+
+.ahud__viewmenu__item[data-on='true']::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--gold-hi);
+}
+
+/**
+ * 退出按钮（2026-11-07）：两段式。第一下只把它染红改成「再点一次」，
+ * 红色是"这一下真会走"的唯一提示，别用同一身木头色糊过去。
+ */
+.ahud__quit[data-armed='1'] {
+  border-color: var(--danger);
+  color: #ffe1dc;
+  background-image: none;
+  background-color: #6d2a22;
 }
 
 .ahud__reroll {
@@ -1054,7 +1127,8 @@
   color: var(--text-faint);
 }
 
-.ahud__settings .ahud__view[data-on='true'] {
+/* 视角按钮在被点开时点亮（清单开着，别让人以为没反应） */
+.ahud__view[data-on='true'] {
   border-color: var(--gold-hi);
   color: var(--gold-hi);
 }

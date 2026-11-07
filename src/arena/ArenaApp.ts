@@ -28,7 +28,7 @@ import { GroundView } from '@game/world/GroundView';
 import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResult, type Side } from './ArenaWorld';
 import { AmbientDust } from './ambient';
-import { ArenaDirector } from './Camera';
+import { ArenaDirector, PVE_VIEW_PRESETS, type ViewPreset } from './Camera';
 import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
@@ -62,6 +62,13 @@ export interface ArenaAppOptions {
   /** UI 回调：金/血变了、出牌失败要说话 */
   onToast?: (text: string, tone?: 'ok' | 'warn') => void;
   onState?: () => void;
+  /**
+   * 长按**空地**要设置面板（2026-11-07 用户："游戏栏目不需要设置，右键可以"）。
+   *
+   * 为什么走回调而不是让 App 直接拿 HUD：App 是 three 那一层，不该认识设置面板；
+   * 长按落在**建筑**上仍然是原来的"看血量"提示，只有落在空地才是叫设置。
+   */
+  onRequestSettings?: () => void;
 }
 
 interface Corpse {
@@ -283,23 +290,29 @@ export class ArenaApp {
     /**
      * PVE 的相机初值（2026-11-07）。
      *
-     * **yaw 90° 是关键**：格子的 `col` 轴映射世界 x（水平），而 PVE 的场地是
-     * 60 col × 32 row 的长条 —— 不转 90°，竖屏上看到的是"横向 60 格"，
+     * **yaw 270° 是关键**：格子的 `col` 轴映射世界 x（水平），而 PVE 的场地是
+     * 60 col × 32 row 的长条 —— 不转过来，竖屏上看到的是"横向 60 格"，
      * 水平只能装下 30 格、上下空一大片（实测截图：大本营被挤在左边缘外）。
-     * 转 90° 之后 col 变成屏幕的上下轴，"蓝在下、怪从上往下"的塔防读图才成立。
+     * 转过来之后 col 变成屏幕的上下轴，"蓝在下、怪从上往下"的塔防读图才成立。
      *
-     * 俯角 36°（1v1 是 44°）：俯角越大纵深越扁，36° 时 60 格投影约 49 格。
+     * 俯角 44°（= 机位表的 46° + `pitchBias` −2）：俯角越大纵深越扁，
+     * 44° 时 60 格投影约 42 格，正好铺满竖屏上下沿。
      *
-     * ⚠️ 这两个值必须从**构造参数**给：导演的机位每帧才应用一次，
-     * 而且面板/输入一碰就 locked（见 DebugPanel 那段注释）。
+     * 这两个值和 `PVE_VIEW_PRESETS[0]`（正对）是同一组数字 —— 初值直接对齐机位表，
+     * 开局就不会出现"先转 180° 再定住"的甩镜头。
      */
+    const pve = this.world.mode === 'pve';
+    if (pve) {
+      this.director.usePresets(PVE_VIEW_PRESETS, 0);
+      this.director.pitchBias = -2;
+    }
     this.rig = new CameraRig({
-      pitchDeg: this.world.mode === 'pve' ? 36 : ARENA_CAMERA.pitchDeg,
-      yawDeg: this.world.mode === 'pve' ? 90 : ARENA_CAMERA.yawDeg,
+      pitchDeg: pve ? 44 : ARENA_CAMERA.pitchDeg,
+      yawDeg: pve ? 270 : ARENA_CAMERA.yawDeg,
       tilesAcross: ARENA_CAMERA.tilesAcross,
       minTilesAcross: ARENA_CAMERA.minTilesAcross,
-      // PVE 的场地宽 36 格：不把上限放开，竖屏只能看到半条防线
-      maxTilesAcross: this.world.mode === 'pve' ? 60 : ARENA_CAMERA.maxTilesAcross,
+      // PVE 的场地宽 32 格、长 60 格：不把上限放开，竖屏只能看到半条防线
+      maxTilesAcross: pve ? 60 : ARENA_CAMERA.maxTilesAcross,
     });
     /**
      * 平移边界 2026-11-06 改**随视野动态**（用户："往左边往自己家里移动会被限位"、
@@ -377,7 +390,10 @@ export class ArenaApp {
       /**
        * 双指整体上下推 = 调俯仰角（2026-11-07 用户："还有上下转……最大可以转到平行"）。
        * 往上推 = 更俯视（看得见全场布局），往下拉 = 更平（贴近地面看兵线）。
-       * 上下限用 CameraRig 自己的 18~82：18° 已经很接近平行视角了。
+       *
+       * 上下限在 `CameraRig`：6°（几乎与地面平行）~ 88°（几乎正上方）。
+       * 0.22°/px 是按手感定的：一根手指走 300px 能扫完大半段行程，
+       * 再快就一碰就过头，再慢就要站起来划两下。
        */
       onTilt: (dy) => {
         this.director.userTouched();
@@ -500,19 +516,6 @@ export class ArenaApp {
      */
     const pvePortrait = this.world.mode === 'pve' && a < 1;
     /**
-     * PVE 的初始机位和 1v1 不一样：
-     * - **正对**（yaw 0）：60×32 的长条斜着看会歪出画面，两侧防区被裁掉；
-     * - **俯角 44°**（2026-11-07 二次实测）：原来给 36°，纵深在屏幕上被压得太扁 ——
-     *   60 格只投影出 35 格，战场只占画面中间 470px，**上下各留一大片空底盘**。
-     *   抬到 44° 后投影约 42 格，战场铺到 580px，空底盘基本收掉。
-     *   （2.5D 的立体感靠 44° 还撑得住，再往上就变成俯视棋盘的平面图了。）
-     */
-    if (this.world.mode === 'pve') {
-      this.director.index = 1;
-      this.director.pitchBias = -2;
-      this.director.yawFix = 270;
-    }
-    /**
      * 双人同屏时屏幕**上下各压着一套手牌**（2026-11-07），战场可视高度少掉约 130px。
      * 所以竖屏再退一点（+10%）：不然自家最下面那排楼正好被手牌盖住 ——
      * 那是玩家最需要盯着看的地方（大本营就在那儿）。
@@ -522,13 +525,13 @@ export class ArenaApp {
      */
     const seatCrowd = this.world.seatCount > 1 ? 1.1 : 1;
     /**
-     * 机位自带的 zoomFactor（「正对」是 0.96）会再乘一道 —— 不抵消的话
-     * `rows × 1.02` 平白缩小 4%，战场两边各露半格看台。
+     * PVE 竖屏的基准缩放 = `rows × 1.02`，**与当前档位无关**。
+     *
+     * 上一版除以了机位的 `zoomFactor` 去抵消导演那一乘，结果 `fitZoom` 变成
+     * "当时那一档"的函数：玩家切到「斜视」再转屏，重算出来的基准就偏了，
+     * 换回「正对」时大小不对。现在基准固定，机位的 zoomFactor 相对它算。
      */
-    const presetZoom = this.world.mode === 'pve' ? this.director.current.zoomFactor : 1;
-    // 转 90° 之后，屏幕的短边（宽）对的是 row 轴 —— 按 rows 贴满
-    this.fitZoom =
-      (pvePortrait ? (this.map.size.rows * 1.02) / Math.max(0.5, presetZoom) : fit) * seatCrowd;
+    this.fitZoom = (pvePortrait ? this.map.size.rows * 1.02 : fit) * seatCrowd;
     // 竖屏告诉导演：拉近 + 构图偏自家（2026-11-07 设计文档 D 节）。
     // PVE 已经按宽度贴满了，再乘 0.58 会近到只看得到半个防区。
     this.director.portrait = a < 1 && !pvePortrait;
@@ -556,9 +559,35 @@ export class ArenaApp {
     return this.selectedSlot === slot ? 'selected' : 'deselected';
   }
 
-  /** 换下一个机位（HUD 按钮/键盘 V 都走这里）。 */
+  /** 换下一个机位（键盘 V 走这里）。 */
   nextView(): string {
     return this.director.next().name;
+  }
+
+  /**
+   * 直接跳到第 i 档机位（HUD 的视角菜单，2026-11-07 用户："给一个斜着的，
+   * 还有一个正视角、斜视角，这些都可以设置"）。
+   *
+   * 清单本身来自导演（`director.presets`，PVE 与 1v1 不同），这里只做转发 ——
+   * UI 不该自己维护一份机位名，那样加一档要改两处。
+   */
+  pickView(index: number): string {
+    return this.director.select(index).name;
+  }
+
+  /** 当前模式可选的全部机位（视角菜单按它生成按钮）。 */
+  get viewPresets(): readonly ViewPreset[] {
+    return this.director.presets;
+  }
+
+  /** 当前档位下标（菜单高亮用）。 */
+  get viewIndex(): number {
+    return this.director.index;
+  }
+
+  /** 画布本体：HUD 要往它上面挂"右键开设置"（2026-11-07 用户："应该右键可以"）。 */
+  get stage(): HTMLCanvasElement {
+    return this.canvas;
   }
 
   private handleTap(cssX: number, cssY: number): void {
@@ -762,12 +791,23 @@ export class ArenaApp {
     }
   }
 
+  /**
+   * 长按：落在**建筑**上是"看这栋楼的血量"（原有行为）；
+   * 落在**空地**上叫设置面板（2026-11-07 用户："游戏栏目不需要设置，右键可以"——
+   * 手机上没有右键，长按就是它的等价物）。
+   *
+   * 两个出口靠"按到没按到楼"分流，不做二次确认，因为两种意图完全不重叠：
+   * 想挪镜头的人不会按住不动 380ms。
+   */
   private handleLongPress(cssX: number, cssY: number): void {
     const hit = this.rig.screenToGround(cssX, cssY);
     if (!hit) return;
     const cell = worldToCell(hit.x, hit.z);
     const b = this.buildingAtCell(cell);
-    if (!b) return;
+    if (!b) {
+      this.opts.onRequestSettings?.();
+      return;
+    }
     const hp = `${Math.round(b.hp)}/${b.maxHp}`;
     this.opts.onToast?.(`${labelOf(b)} · ${hp}`);
   }

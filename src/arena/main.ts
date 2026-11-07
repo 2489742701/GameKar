@@ -98,7 +98,24 @@ const app = await ArenaApp.boot({
     hud?.setViewStatus(app.director.status);
     debug?.refresh();
   },
+  /**
+   * 长按空地 = 叫出设置面板（手机上没有右键，长按就是它的等价物）。
+   * 桌面端另有 `contextmenu` 那条路，挂在 HUD 里（它才知道面板在哪）。
+   */
+  onRequestSettings: () => hud?.toggleSettings(true),
 });
+
+/**
+ * 回开始菜单 —— 清 `?mode=…` 是必须的。
+ *
+ * 只 `location.reload()` 的话 `?mode=pve` 会一直粘着，玩家永远回不到普通对战 ——
+ * 这正是上一版"三个模式只剩一个开始守关"的成因。
+ * 战斗中的「退出」和结算面板的「回菜单」都走这一个函数，语义上就是同一件事。
+ */
+const toMenu = (): void => {
+  sessionStorage.removeItem(AUTOSTART_KEY);
+  location.href = location.pathname;
+};
 
 hud = new ArenaHud(container, app, {
   onSelectCard: (slot, player = 0) => {
@@ -111,7 +128,11 @@ hud = new ArenaHud(container, app, {
     }
     hud?.setHand();
   },
-  onCycleView: () => hud?.setViewStatus(app.nextView()),
+  /** 视角清单里选了第 i 档：导演平滑挪过去，按钮上的字跟着换 */
+  onPickView: (index: number) => {
+    app.pickView(index);
+    hud?.setViewStatus(app.director.status);
+  },
   onReroll: (player = 0) => {
     const res = app.rerollHand(player);
     if (res.ok) {
@@ -121,17 +142,10 @@ hud = new ArenaHud(container, app, {
       hud?.say(res.reason ?? '刷新不了', 'warn');
     }
   },
-  /** 重开当前模式（URL 不动）。想换模式走下面的「回菜单」 */
+  /** 重开当前模式（URL 不动）。想换模式走下面的「退出 / 回菜单」 */
   onRestart: () => location.reload(),
-  /**
-   * 回开始菜单：**必须把 search 清掉**。
-   * 只 `location.reload()` 的话 `?mode=pve` 会一直粘着，玩家永远回不到普通对战 ——
-   * 这正是上一版"三个模式只剩一个开始守关"的成因。
-   */
-  onMenu: () => {
-    sessionStorage.removeItem(AUTOSTART_KEY);
-    location.href = location.pathname;
-  },
+  onMenu: toMenu,
+  onQuit: toMenu,
 });
 
 hud.setViewStatus(app.director.status);
