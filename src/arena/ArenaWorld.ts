@@ -19,6 +19,7 @@ import {
   BOMBER,
   TECH,
   BUILD,
+  BUILDING_DAMAGE_SCALE,
   BUILDING_SPECS,
   CARDS,
   CORE,
@@ -1528,7 +1529,14 @@ export class ArenaWorld {
   }
 
   private hurtBuilding(b: ArenaBuilding, attack: number, kind: HitKind = 'blade'): void {
-    b.hp -= damageOf(attack, 0);
+    // 唯一的对楼伤害入口：兵砍 / 塔炮 / 炮弹都在这里乘平衡倍率，
+    // 兵种互殴走 hurtUnit → damageOf(attack, defense)，不受影响（P-066）。
+    //
+    // **PVE 不吃这个倍率**：PVE 没有敌方建筑可拆（连红方大本营都不生成），
+    // 会走 hurtBuilding 的只有怪拆玩家的楼 —— 给怪翻倍是单方面削玩家。
+    // 实测 12 局教学关从 9 胜掉到 4 胜就是这么来的。1v1 双方对称才适用。
+    const scale = this.mode === 'arena' ? BUILDING_DAMAGE_SCALE : 1;
+    b.hp -= damageOf(attack * scale, 0);
     b.lastHit = kind;
     if (b.hp < 0) b.hp = 0;
     if (b.hp > 0) return;
