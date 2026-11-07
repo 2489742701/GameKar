@@ -87,6 +87,16 @@ export interface ArenaBuilding {
   shotsMuzzle: number;
   /** 最近一次挨的是什么伤害（视图拿它决定墙板怎么崩，逻辑层不看） */
   lastHit: HitKind;
+  /**
+   * **最后一次挨打的世界时刻**（秒）。脱战计时（`REPAIR.idleSeconds`）和
+   * "挨打就中断修复"都读它 —— 不放在视图层，否则动画和判据会各算一套时间。
+   */
+  lastHitAt: number;
+  /**
+   * 剩余修复时长（秒）；0 = 没在修。
+   * 视图的锤子动画只在 `repairLeft > 0` 时播，**不自己设 setTimeout**。
+   */
+  repairLeft: number;
 }
 
 export interface UnitStats {

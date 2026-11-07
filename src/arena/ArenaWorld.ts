@@ -29,6 +29,7 @@ import {
   HAND,
   LOGISTICS,
   MATCH,
+  REPAIR,
   REROLL,
   RUIN,
   SUPPLY,
@@ -618,6 +619,9 @@ export class ArenaWorld {
       aim: side === 'blue' ? 0 : Math.PI,
       shotsMuzzle: 0,
       lastHit: 'blade',
+      // 开局没挨过打；残血只可能由 hurtBuilding 造成，那时这个时刻会被改写
+      lastHitAt: 0,
+      repairLeft: 0,
     };
     this.buildings.set(b.id, b);
     return b;
@@ -894,6 +898,8 @@ export class ArenaWorld {
     for (const h of this.hits) h.ttl -= dt;
     this.hits = this.hits.filter((h) => h.ttl > 0);
     this.tickUnits(dt);
+    // 修复放在伤害之后：同一帧挨打会先把 repairLeft 清零，这一帧就不会还回血
+    this.tickRepairs(dt);
     this.separateUnits();
     this.tickAi(dt);
     // PVE：AI 只管"玩家的托管"，出怪走波次表（两条独立的驱动，不互相顶）
@@ -1540,6 +1546,46 @@ export class ArenaWorld {
     return this.staffedIds(b.side).has(id);
   }
 
+  // ---------------------------------------------------------------- 手动修复
+
+  /**
+   * **这栋楼现在该不该冒小锤子**。判据全在纯逻辑层，视图只读结果 ——
+   * 否则"按钮出现了但点了没反应"这种假读数又会出现。
+   */
+  repairEligible(b: ArenaBuilding, side: Side): boolean {
+    if (b.side !== side) return false;                        // 只能修自己的楼
+    if (REPAIR.excludeCore && b.kind === 'core') return false; // 大本营是胜负判据
+    if (b.hp <= 0 || b.hp >= b.maxHp) return false;           // 满血 / 已拆不修
+    if (b.build < 1) return false;                             // 施工中不修
+    if (b.repairLeft > 0) return false;                        // 正在修，不重复派单
+    return this.elapsed - b.lastHitAt >= REPAIR.idleSeconds;   // 脱战
+  }
+
+  isRepairing(id: number): boolean {
+    return (this.buildings.get(id)?.repairLeft ?? 0) > 0;
+  }
+
+  /**
+   * 点锤子 = 启动一段修复。返回 false 表示这一下不该被接受
+   *（敌楼 / 满血 / 还在战斗 / 施工 / 大本营 / 已在修）。
+   */
+  startRepair(id: number, side: Side): boolean {
+    const b = this.buildings.get(id);
+    if (!b || !this.repairEligible(b, side)) return false;
+    b.repairLeft = REPAIR.seconds;
+    return true;
+  }
+
+  /** 每帧推进修复：按各楼 maxHp 的比例回血，修满自动收工。 */
+  private tickRepairs(dt: number): void {
+    for (const b of this.buildings.values()) {
+      if (b.repairLeft <= 0) continue;
+      b.repairLeft = Math.max(0, b.repairLeft - dt);
+      b.hp = Math.min(b.maxHp, b.hp + b.maxHp * REPAIR.fractionPerSecond * dt);
+      if (b.hp >= b.maxHp) b.repairLeft = 0;
+    }
+  }
+
   private hurtBuilding(b: ArenaBuilding, attack: number, kind: HitKind = 'blade'): void {
     // 唯一的对楼伤害入口：兵砍 / 塔炮 / 炮弹都在这里乘平衡倍率，
     // 兵种互殴走 hurtUnit → damageOf(attack, defense)，不受影响（P-066）。
@@ -1550,6 +1596,10 @@ export class ArenaWorld {
     const scale = this.mode === 'arena' ? BUILDING_DAMAGE_SCALE : 1;
     b.hp -= damageOf(attack * scale, 0);
     b.lastHit = kind;
+    // 挨打 = 重新进入战斗：脱战计时归零、正在进行的修复立刻打断。
+    // 这两行和 tickRepairs / repairEligible 共用同一对字段，别在视图层另记一份时间。
+    b.lastHitAt = this.elapsed;
+    b.repairLeft = 0;
     if (b.hp < 0) b.hp = 0;
     if (b.hp > 0) return;
     this.buildings.delete(b.id);

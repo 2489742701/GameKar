@@ -21,6 +21,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { TILT_SHIFT_SHADER, loadDim, loadTilt, saveDim, saveTilt } from './visuals/tiltShift';
+import { RepairButtons } from './visuals/repairButtons';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
@@ -263,6 +264,8 @@ export class ArenaApp {
   }[] = [];
   /** 两座大本营的世界空间悬浮血条：满血不显示，挨打才浮出来 */
   private readonly coreBars = new Map<number, CoreBar>();
+  /** 脱战后挂在残血楼头顶的小锤子（P-078）；每帧跟相机投影，判据全在 world 里 */
+  private readonly repairButtons: RepairButtons;
   /** 已经放过治疗圈的 id（world.heals 是逐帧还在的事件，别重复放） */
   private readonly seenHeals = new Set<number>();
   /** 已经放过粒子效果的近战命中 id（world.hits 是逐帧还在的事件，别重复放） */
@@ -314,6 +317,7 @@ export class ArenaApp {
       players: opts.players,
     });
     this.autoPilot = new AutoPilot(this.world, opts.onAutoPilot);
+    this.repairButtons = new RepairButtons(opts.container, this);
     /**
      * **桌面端视角键**（2026-11-07 用户："单桌面上用 WSAD 和 QE 来调整这些视角"）。
      *
@@ -1030,6 +1034,8 @@ export class ArenaApp {
     const postFx = this.tiltAmount > 0.001 || this.dimAmount > 0.001;
     if (postFx && this.composer) this.composer.render(info.delta);
     else this.renderer.render(this.scene, this.rig.camera);
+    // 世界空间 DOM 覆盖层：每帧投影一次，相机转动时锤子不会飘在原地
+    this.repairButtons.update();
   }
 
   /**
@@ -2142,6 +2148,36 @@ export class ArenaApp {
   private fieldCenter(): { x: number; z: number } {
     const col = this.world.mode === 'pve' ? this.world.field.cols * 0.28 : this.world.field.cols / 2;
     return { x: col, z: this.world.field.rows / 2 };
+  }
+
+  /**
+   * **世界坐标 → UI 容器内的 CSS 像素**（P-078）。正交相机同样能 `Vector3.project`；
+   * 按 canvas 与容器的实际矩形换算，DPR / 缩放 / 安全区都不会让锤子偏。
+   */
+  projectToScreen(p: { x: number; y: number; z: number }): { x: number; y: number; visible: boolean } {
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(this.rig.camera);
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const hostRect = this.opts.container.getBoundingClientRect();
+    return {
+      x: canvasRect.left - hostRect.left + (v.x * 0.5 + 0.5) * canvasRect.width,
+      y: canvasRect.top - hostRect.top + (-v.y * 0.5 + 0.5) * canvasRect.height,
+      visible: v.z > -1 && v.z < 1 && Math.abs(v.x) <= 1.05 && Math.abs(v.y) <= 1.05,
+    };
+  }
+
+  /** 建筑头顶的世界坐标锚点：楼顶再抬 1.1 格，和「挨打才出现」的血条错开。 */
+  repairAnchorOf(id: number): { x: number; y: number; z: number } | null {
+    const b = this.world.buildings.get(id);
+    const group = this.buildingMeshes.get(id);
+    if (!b || !group) return null;
+    const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
+    const modelTop = this.parts.get(id)?.modelTop ?? 2.6;
+    return { x: center.x, y: group.position.y + modelTop + 1.1, z: center.z };
+  }
+
+  /** 点锤子：只做派单，能不能修全交给 `world.repairEligible / startRepair`。 */
+  requestRepair(id: number): void {
+    if (this.world.startRepair(id, 'blue')) this.opts.onToast?.('工人开始修复这栋楼');
   }
 
   /** 后期缓冲跟着视口/DPR 走，shader 的 texel 才知道一个像素有多大。 */

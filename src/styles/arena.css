@@ -1747,3 +1747,112 @@
     padding: 2px 5px;
   }
 }
+
+/* ---------- 脱战修复：小锤子按钮 + SVG 敲击动画（P-078） ---------- */
+
+.rp-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* 必须**低于** .ahud(20)：设置面板 / 顶栏 / 手牌都挂在 .ahud 里，
+   * .ahud 自己带 z-index 就形成 stacking context，内部写 55 也压不过外层的 24 ——
+   * 早先写 24 会让残血楼的锤子浮在设置面板上面。战场中间的 .ahud 是
+   * pointer-events:none，事件会自然穿透到这一层，按钮照样点得到。 */
+  z-index: 19;
+  overflow: hidden;
+}
+
+.rp {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  animation: rp-pop 0.24s cubic-bezier(0.2, 1.4, 0.5, 1) both;
+}
+
+@keyframes rp-pop {
+  from { opacity: 0; transform: translate(-50%, -100%) scale(0.6); }
+  to { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+
+.rp__btn {
+  pointer-events: auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 2px solid #6b461f;
+  border-radius: 10px;
+  background: linear-gradient(#e7c58a, #b98a4e);
+  box-shadow: 0 3px 0 #5b3a1e, inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.12s, filter 0.12s;
+}
+
+.rp__btn:hover { transform: translateY(-2px); filter: brightness(1.08); }
+.rp__btn:active { transform: translateY(1px); box-shadow: 0 1px 0 #5b3a1e; }
+.rp__btn:disabled { display: none; }
+.rp__icon { display: block; }
+
+.rp__fx {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 3px 6px 4px;
+  border-radius: 10px;
+  background: rgba(18, 26, 20, 0.82);
+  border: 1px solid rgba(230, 200, 140, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.rp[data-state='working'] .rp__fx { display: flex; }
+.rp[data-state='working'] .rp__btn { display: none; }
+
+.rp__svg { display: block; overflow: visible; width: 64px; height: 50px; }
+
+/* 锤子绕柄尾摆；落到 0° 时锤头正压在板子上沿，同一拍闪火星 */
+.rp__hammer {
+  transform-box: view-box;
+  transform-origin: 30px 31px;
+  animation: rp-swing 0.56s ease-in-out infinite;
+}
+
+.rp__spark {
+  opacity: 0;
+  animation: rp-spark 0.56s linear infinite;
+}
+
+@keyframes rp-swing {
+  0%, 100% { transform: rotate(-42deg); }
+  46% { transform: rotate(8deg); }
+  58% { transform: rotate(3deg); }
+}
+
+@keyframes rp-spark {
+  0%, 38% { opacity: 0; }
+  47% { opacity: 1; }
+  62%, 100% { opacity: 0; }
+}
+
+.rp__txt {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #f0dcae;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp { animation: none; }
+  .rp__hammer, .rp__spark { animation-duration: 1.4s; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .rp__btn { width: 28px; height: 28px; border-radius: 8px; }
+  .rp__icon { width: 16px; height: 16px; }
+  .rp__svg { width: 50px; height: 40px; }
+  .rp__txt { font-size: 9px; }
+}
