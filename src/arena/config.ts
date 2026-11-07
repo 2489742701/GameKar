@@ -259,12 +259,13 @@ export const CORE = {
    * **水晶魔法攻击**（2026-11-06 用户："主城就是可以射击，顶上的水晶可以魔法攻击"）。
    *
    * 口径三条：
-   * - **只打兵、不打建筑**：移动火炮射程 7.2 > 这里的 5.5+1.5，仍然能白嫖大本营 ——
-   *   "攻城武器白嫖塔/主城"是对局的核心博弈，水晶是最后防线不是主炮台；
+   * - **只打地面兵、不打建筑也不对空**：移动火炮射程 7.2 > 这里的 6.5，
+   *   仍然能白嫖大本营 —— "攻城武器白嫖主城"是核心博弈，水晶是最后防线不是主炮台。
+   *   （提高到 6.5 是用户"主城可以更远一点"，仍刻意留在 7.2 之下。）
    * - **不需要民居配给**：大本营是地图本身，不是玩家盖的楼；
    * - 射程从**占地边缘**量（和塔同一口径，+1.5）。
    */
-  attack: { damage: 14, range: 5.5, interval: 1.6 },
+  attack: { damage: 14, range: 6.5, interval: 1.6 },
 };
 
 export const BARRACKS = {
@@ -276,11 +277,21 @@ export const BARRACKS = {
 };
 
 export const TOWER = {
-  /** 箭塔 */
-  arrow: { hp: 520, damage: 9, range: 6.8, interval: 0.75, ammo: 'arrow' as const },
-  /** 炮塔：慢、重、带溅射 */
-  cannon: { hp: 640, damage: 24, range: 5.6, interval: 1.7, ammo: 'cannon' as const, splash: 1.3 },
+  /** 箭塔：2026-11-08 用户"防御性建筑可以射得更远一点" ⇒ 6.8 → 7.8 */
+  arrow: { hp: 520, damage: 9, range: 7.8, interval: 0.75, ammo: 'arrow' as const },
+  /** 炮塔：慢、重、带溅射；5.6 → 6.8。炮弹够不着天上，不对空（见 AA_SOURCES） */
+  cannon: { hp: 640, damage: 24, range: 6.8, interval: 1.7, ammo: 'cannon' as const, splash: 1.3 },
 };
+
+/**
+ * **对空判据的唯一来源**（2026-11-08 用户："火炮理论上没办法射击，空军只有箭塔可以射击"）。
+ *
+ * 炮弹是平射/曲射的，够不着天上的东西；水晶是魔法弹但也只打地面兵；
+ * 所有兵种（含移动火炮、弩车、弓箭手）同样不对空。
+ * 只有箭塔能拦空军 —— 想加第二个防空单位，改这张表，别在四处 if 里各写一遍。
+ */
+export const AA_SOURCES: ReadonlySet<string> = new Set(['arrowTower']);
+export const canHitAir = (source: string): boolean => AA_SOURCES.has(source);
 
 export const MILL = { hp: 300 };
 
@@ -412,7 +423,8 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'arrowTower',
     name: '箭塔',
-    blurb: '自动打靠近的敌人，射程 6.8 格。便宜的防守。',
+    // 射程从 TOWER 读，不写死数字：2026-11-08 上调到 7.8 之后，卡面不会留一个 6.8 的假读数
+    blurb: `自动打靠近的敌人，射程 ${TOWER.arrow.range} 格。唯一能拦下空军的防御。`,
     kind: 'building',
     cost: 12,
     building: 'arrowTower',
@@ -444,7 +456,9 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'mobileCannon',
     name: '移动火炮',
-    blurb: '两个小人推着走，射程比塔还远。拆塔也打兵，慢、脆、贵，但它能白嫖塔。',
+    // 2026-11-08 防御塔射程加远后：箭塔 7.8 > 火炮 7.2，"比塔都远"已经不成立。
+    // 白嫖窗口只剩炮塔（6.8 + 1.5 = 8.3 < 火炮 7.2 + 1.5 = 8.7），别再对玩家许诺能白嫖箭塔。
+    blurb: '两个小人推着走，射程 7.2 格。拆塔也打兵，慢、脆、贵；能白嫖炮塔，但压不住箭塔。',
     kind: 'siege',
     cost: 14,
     squad: [{ unitId: 'mobileCannon', count: 1 }],
@@ -747,9 +761,12 @@ export type ArenaUnitRef = Pick<UnitDef, 'id' | 'name' | 'hp' | 'attack' | 'defe
 
 /**
  * 移动火炮（用户 2026-10-27 点名要的"工程设备"）：
- * 两个小人在后面推，车上架一门 3D 火炮，**射程比防御塔还远** —— 就是拿来白嫖塔的。
+ * 两个小人在后面推，车上架一门 3D 火炮，**射程比炮塔还远** —— 就是拿来白嫖炮塔的。
+ * 2026-11-08 防御塔加远之后，箭塔 7.8 已经反超这里的 7.2：
+ * 火炮只比炮塔（6.8）远，白嫖窗口从"所有塔"收窄成"只有炮塔"，其余代价不变。
  * 代价写在这一行里：贵（16 金）、慢（0.5 格/秒）、脆（90 血）、装填很久（2.8 秒）。
  * 2026-10-27 用户修正：**它也要打兵**（之前只拆建筑，兵走到脸上它都不理）。
+ * 2026-11-08：它是地面单位，和所有兵一样**不对空**。
  */
 export const MOBILE = {
   hp: 90,

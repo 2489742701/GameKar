@@ -184,7 +184,8 @@ describe('兵：会往前走、会互相打', () => {
   it('两个敌对兵贴在一起会互相掉血', () => {
     const world = new ArenaWorld({ seed: 9 });
     give(world, 'archers');
-    // 2026-11-06 水晶攻击后：交火点必须离主城远一点（水晶射程 5.5+1.5 从占地边缘量），
+    // 2026-11-06 水晶攻击后：交火点必须离主城远一点
+    //（水晶射程 CORE.attack.range + 1.5 从占地边缘量，P-076 后是 6.5 + 1.5），
     // 否则水晶一箭把红兵秒了、测试量的是水晶不是互殴
     world.playCard('blue', 0, 12, 7);
     const blue = world.units.find((u) => u.side === 'blue')!;
@@ -394,7 +395,8 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
    * 塔会打进入射程的敌方建筑。
    *
    * 2026-11-02 起这条**不能再用"两座塔隔中场互殴"来测**：禁建带从 5 列加宽到 7 列之后，
-   * 两边最近的合法落点相距 10 格，而箭塔边缘射程只有 6.8 —— 跨中线互殴在实战里已经打不到了。
+   * 两边最近的合法落点相距 10 格，而箭塔边缘射程（P-076 后 7.8）仍然够不着 ——
+   * 跨中线互殴在实战里打不到。
    * 所以这里用 `instant` 把红方兵营直接摆进蓝塔射程（place 不查半场，只造场景），
    * 验的还是同一条逻辑："塔的靶子里不只有兵，还有楼"。
    */
@@ -409,16 +411,24 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
     expect(target.hp).toBeLessThan(hp0);
   });
 
-  it('移动火炮射程比塔远：站在塔射程外能把塔拆掉，自己不掉血', () => {
+  /**
+   * 2026-11-08 P-076：防御塔加远（箭塔 6.8 → **7.8**、炮塔 5.6 → **6.8**）之后，
+   * "移动火炮射程比塔远"只对**炮塔**还成立：
+   *   箭塔边缘射程 = 7.8 + 1.5 = 9.3 > 火炮 7.2 + 1.5 = 8.7 ⇒ 白嫖窗口关了；
+   *   炮塔边缘射程 = 6.8 + 1.5 = 8.3 < 8.7                  ⇒ 还留 0.4 格。
+   * 所以拆成两条：一条验"新口径真的生效"（反证：旧数值下这条会红），
+   * 一条验"白嫖炮塔这条老设计没被顺手删光"。
+   * 摆法也改成 instant 落塔 + 民居、关掉 AI，不再靠发牌和 AI 时序凑配给。
+   */
+  function siegeWindow(kind: 'arrowTower' | 'cannonTower') {
     const world = new ArenaWorld({ seed: 52 });
-    world.gold.red = 20;
-    give(world, 'arrowTower', 'red');
-    expect(world.playCard('red', 0, 28, 9).ok).toBe(true);
-    const tower = [...world.buildings.values()].find((b) => b.kind === 'arrowTower')!;
+    world.auto.red = false;
+    const tower = instant(world, 'red', kind, 28, 9, kind === 'arrowTower' ? 520 : 640);
+    instant(world, 'red', 'house', 36, 9, 220);
+    expect(world.isStaffed(tower.id)).toBe(true);
     const cx = tower.col + tower.cols / 2;
     const cz = tower.row + tower.rows / 2;
-    // 摆在塔中心左边 8.6 格：塔的边缘射程 = 6.8（range）+ 1.5（半占地）= 8.3，够不着；
-    // 火炮的 = 7.2 + 1.5 = 8.7，够得着 —— 中间这 0.4 格就是"白嫖"的窗口
+    // 塔中心左边 8.6 格：火炮到塔的**边缘距** = 8.6 − 1.5 = 7.1 ≤ 7.2，够得着塔
     world.units.push({
       id: 9100,
       side: 'blue',
@@ -435,9 +445,19 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
     run(world, 10, () => {
       world.units = world.units.filter((u) => u.id === 9100);
     });
-    const me = world.units.find((u) => u.id === 9100);
-    expect(tower.hp).toBeLessThan(hp0); // 塔挨打了
-    if (me) expect(me.hp).toBe(me.maxHp); // 火炮一滴血没掉（白嫖）
+    return { hp0, hp: tower.hp, me: world.units.find((u) => u.id === 9100) };
+  }
+
+  it('反证：箭塔加远到 7.8 后，移动火炮站在 8.6 格会被还击，不再能白嫖', () => {
+    const r = siegeWindow('arrowTower');
+    expect(r.hp, '火炮仍然够得着塔').toBeLessThan(r.hp0);
+    expect(r.me === undefined || r.me.hp < 90, '塔现在够得着火炮（打死也算）').toBe(true);
+  });
+
+  it('移动火炮仍能白嫖炮塔：站在炮塔射程外把塔拆掉，自己不掉血', () => {
+    const r = siegeWindow('cannonTower');
+    expect(r.hp, '塔挨打了').toBeLessThan(r.hp0);
+    expect(r.me?.hp, '火炮一滴血没掉（白嫖）').toBe(90);
   });
 
   it('被拆掉的楼留废墟，过一段时间自己塌平', () => {
@@ -1991,7 +2011,7 @@ describe('大本营水晶：魔法攻击（P-043）', () => {
   it('敌兵进射程：水晶开火（source=core 的 magic 弹）并掉血 —— 不需要民居配给', () => {
     const w = new ArenaWorld({ seed: 181 });
     w.auto.red = false;
-    // 蓝方大本营中心 (2.5, 9.5)；靶子放在距中心 6.5 格（边缘外 5 格 < 5.5 射程）
+    // 蓝方大本营中心 (2.5, 9.5)；靶子放在距中心 6.5 格（边缘外 5 格 < CORE.attack.range 6.5）
     pinned(w, 9101, 9, 9.5);
     let fired = false;
     run(w, 2, () => {
@@ -2006,10 +2026,10 @@ describe('大本营水晶：魔法攻击（P-043）', () => {
     const w = new ArenaWorld({ seed: 182 });
     w.auto.red = false;
     w.auto.blue = false;
-    // 红方塔立在蓝方大本营射程内：塔中心 (8.5,10.5)，距蓝core中心 hypot(6,1)=6.08 − 边缘 1.5 = 4.58 < 5.5
+    // 红方塔立在蓝方大本营射程内：中心 (8.5,10.5)，距蓝core中心 hypot(6,1)=6.08 − 边缘 1.5 = 4.58
     const t = instant(w, 'red', 'arrowTower', 7, 9, 520);
     const d = Math.hypot(t.col + 1.5 - 2.5, t.row + 1.5 - 9.5) - Math.max(t.cols, t.rows) / 2;
-    expect(d, '靶楼必须在水晶射程内，这条锁才有意义').toBeLessThan(5.5);
+    expect(d, '靶楼必须在水晶射程内，这条锁才有意义').toBeLessThan(CORE.attack.range);
     let fired = false;
     run(w, 2.5, () => {
       if (w.shots.some((s) => s.source === 'core')) fired = true;
@@ -2017,10 +2037,12 @@ describe('大本营水晶：魔法攻击（P-043）', () => {
     expect(fired, '水晶只自卫打兵，不参与拆楼').toBe(false);
   });
 
-  it('射程从占地边缘量：边缘外 5.8 格打不着（> 5.5），5.2 格打得着', () => {
+  it('射程从占地边缘量：边缘外 6.8 格打不着（> 6.5），6.2 格打得着', () => {
     const w = new ArenaWorld({ seed: 183 });
     w.auto.red = false;
-    pinned(w, 9102, 2.5 + 1.5 + 5.8, 9.5); // 距中心 7.3 > 5.5 + 1.5
+    // P-076 把 CORE.attack.range 从 5.5 提到 6.5：边界内外都要跟着挪，
+    // 距离仍从**占地边缘**量（中心 2.5 + 半占地 1.5 + 边缘外 d）。
+    pinned(w, 9102, 2.5 + 1.5 + 6.8, 9.5); // 距中心 8.3 > 6.5 + 1.5
     let fired = false;
     run(w, 2, () => {
       if (w.shots.some((s) => s.source === 'core')) fired = true;
@@ -2029,12 +2051,12 @@ describe('大本营水晶：魔法攻击（P-043）', () => {
 
     const w2 = new ArenaWorld({ seed: 184 });
     w2.auto.red = false;
-    pinned(w2, 9103, 2.5 + 1.5 + 5.2, 9.5); // 距中心 6.7 < 7
+    pinned(w2, 9103, 2.5 + 1.5 + 6.2, 9.5); // 距中心 7.7 < 8.0
     let fired2 = false;
     run(w2, 2, () => {
       if (w2.shots.some((s) => s.source === 'core')) fired2 = true;
     });
-    expect(fired2, '边缘量距：6.7 < 5.5+1.5 应当打得到').toBe(true);
+    expect(fired2, '边缘量距：7.7 < 6.5+1.5 应当打得到').toBe(true);
   });
 });
 

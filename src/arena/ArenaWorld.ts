@@ -36,6 +36,7 @@ import {
   UNIT,
   armySupplyOf,
   buildingPopOf,
+  canHitAir,
   cardById,
   type ArenaCard,
   type BuildingKind,
@@ -953,7 +954,8 @@ export class ArenaWorld {
    * 大本营的水晶**魔法攻击**（2026-11-06 用户："主城顶上的水晶可以魔法攻击"）。
    *
    * 与塔的三点不同（口径都写在 config.CORE.attack 注释里）：
-   * - **只打兵**：敌建筑让移动火炮去白嫖，水晶是最后防线不是主炮台；
+   * - **只打地面兵**：敌建筑让移动火炮去白嫖，水晶是最后防线不是主炮台；
+   *   空军也不归它管 —— 对空来源只有 `AA_SOURCES` 里那一座箭塔；
    * - **不配给**：大本营是地图本身，不受民居名额管；
    * - 射程从占地边缘量（+1.5），和塔同一口径。
    */
@@ -965,7 +967,8 @@ export class ArenaWorld {
     const reach = spec.range + Math.max(b.cols, b.rows) / 2;
     let best: { d: number; u: ArenaUnit } | null = null;
     for (const u of this.units) {
-      if (u.side === b.side || u.hp <= 0) continue;
+      // 水晶只打地面兵：火炮/水晶都够不着天上的东西（对空规则只在 config.AA_SOURCES 一处）
+      if (u.side === b.side || u.hp <= 0 || (!canHitAir('core') && this.flyingOf(u.defId))) continue;
       const d = Math.hypot(u.x - c.x, u.z - c.z);
       if (d > reach) continue;
       if (!best || d < best.d) best = { d, u };
@@ -1079,6 +1082,7 @@ export class ArenaWorld {
       if ('splash' in spec && spec.splash) {
         for (const u of this.units) {
           if (u.side === b.side || u.hp <= 0) continue;
+          if (!canHitAir(b.kind) && this.flyingOf(u.defId)) continue;
           if (Math.hypot(u.x - target.x, u.z - target.z) <= spec.splash) this.hurtUnit(u, dmg);
         }
       } else if (target.unit) {
@@ -1126,7 +1130,10 @@ export class ArenaWorld {
       let target: ArenaUnit | null = null;
       let best = BOMBER.detect;
       for (const e of this.units) {
+        // 炸弹是往下掉的：对空口径和所有地面兵一样读 AA_SOURCES，
+        // 别在这里另写一份"飞行单位不算靶子"。
         if (e.side === u.side || e.hp <= 0 || this.bomberOf(e.defId)) continue;
+        if (!canHitAir('unit') && this.flyingOf(e.defId)) continue;
         const d = Math.hypot(e.x - u.x, e.z - u.z);
         if (d <= best) { best = d; target = e; }
       }
@@ -1145,6 +1152,7 @@ export class ArenaWorld {
         });
         for (const e of this.units) {
           if (e.side === u.side || e.hp <= 0) continue;
+          if (!canHitAir('unit') && this.flyingOf(e.defId)) continue;
           if (Math.hypot(e.x - target.x, e.z - target.z) <= BOMBER.splash) this.hurtUnit(e, BOMBER.damage);
         }
       }
@@ -1313,6 +1321,8 @@ export class ArenaWorld {
     // buildingsOnly 现在对移动火炮是 false（它要能打兵）；字段留着给以后"纯攻城"的兵种
     for (const other of buildingsOnly ? [] : this.units) {
       if (other.side === u.side || other.hp <= 0) continue;
+      // 地面单位（含移动火炮、弩车、弓箭手）都打不到空军；只有箭塔拦得住
+      if (!canHitAir('unit') && this.flyingOf(other.defId)) continue;
       const d = Math.hypot(other.x - u.x, other.z - u.z);
       if (d <= sight && (!best || d < best.dist)) best = { dist: d, x: other.x, z: other.z, unit: other };
     }
@@ -1361,8 +1371,10 @@ export class ArenaWorld {
     range: number,
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
+    const aa = canHitAir(tower.kind);
     for (const u of this.units) {
       if (u.side === tower.side || u.hp <= 0) continue;
+      if (!aa && this.flyingOf(u.defId)) continue;
       const d = Math.hypot(u.x - x, u.z - z);
       if (d <= range && (!best || d < best.dist)) best = { dist: d, x: u.x, z: u.z, unit: u };
     }

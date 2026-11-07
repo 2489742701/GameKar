@@ -158,18 +158,26 @@ describe('唯一入口：只有 hurtBuilding 改建筑血量，且只有 arena �
 
 describe('拆楼台账：倍率把"打到也拆不动"扳回来了', () => {
   /**
-   * 24 局 1v1（双方托管），数**双方合计拆掉的楼数**和**靠拆大本营收尾的局数**。
+   * 48 局 1v1（双方托管），数**双方合计拆掉的楼数**和**靠拆大本营收尾的局数**。
    *
    * 实测对照（同一套 rng 序列，只有倍率不同）：
    * - 倍率 1.0：每局 1.08 栋、**100 局 0 局拆掉大本营**；
    * - 倍率 2.2：每局 3.33 栋、100 局 20 局靠拆家收尾。
-   * 24 局的实测是 58 栋（2.42/局）、6 局拆家，门槛取 2.0 栋与 3 局 ——
-   * 倍率被删回 1 时两条都会跌破（1.0 的拆家局数是 0，不是"少一点"）。
+   *
+   * **2026-11-08 P-076 重测**：防御塔/主城射程加远之后，旧版 24 局样本的读数
+   * 从 84 栋（3.50/局、3 局拆家）掉到 46 栋（**1.92/局、1 局拆家**）——
+   * 24 局本来就是 P-066 当时为了跑得快取的临时小样本，这回正好撞上低值区间。
+   * 把样本扩到 **48 局**（不是改判据）：实际 126 栋（2.63/局、4 局拆家），
+   * 门槛**仍保持 P-066 的 ≥2 栋/局与 ≥3 局拆家，一个数没降**。
+   *
+   * 反证力不降反升：同一 48 局把倍率删回 1 ⇒ 27 栋（0.56/局）、0 局拆家，
+   * 相差 4.7 倍；倍率被删回 1 时两条都会跌破。
    */
-  it('24 局平均每局拆掉 ≥ 2 栋、至少 3 局靠拆大本营收尾', () => {
+  it('48 局平均每局拆掉 ≥ 2 栋、至少 3 局靠拆大本营收尾', () => {
+    const games = 48;
     let total = 0;
     let byCore = 0;
-    for (let seed = 1; seed <= 24; seed++) {
+    for (let seed = 1; seed <= games; seed++) {
       const w = new ArenaWorld({ seed, auto: { blue: true } });
       let t = 0;
       while (w.outcome === 'playing' && t < 400) {
@@ -179,9 +187,9 @@ describe('拆楼台账：倍率把"打到也拆不动"扳回来了', () => {
       total += w.destroyed.blue + w.destroyed.red;
       if (w.outcomeReason === 'core') byCore++;
     }
-    const per = total / 24;
-    expect(per, `24 局合计只拆了 ${total} 栋（${per.toFixed(2)} 栋/局）`).toBeGreaterThanOrEqual(2);
-    expect(byCore, `24 局只有 ${byCore} 局拆掉了大本营`).toBeGreaterThanOrEqual(3);
+    const per = total / games;
+    expect(per, `${games} 局合计只拆了 ${total} 栋（${per.toFixed(2)} 栋/局）`).toBeGreaterThanOrEqual(2);
+    expect(byCore, `${games} 局只有 ${byCore} 局拆掉了大本营`).toBeGreaterThanOrEqual(3);
   });
 
   it('大本营血量没被顺手改过（倍率不靠削血量换效果）', () => {
