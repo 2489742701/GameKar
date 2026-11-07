@@ -58,6 +58,9 @@ export class DebugPanel {
   private readonly idText = make('code', 'dbg__id');
   private readonly log = make('textarea', 'dbg__log');
   private readonly slotsBox = make('div', 'dbg__slots');
+  /** PC 调试：实时性能读数（卡不卡，一眼有数，不用猜"是不是渲染层"） */
+  private readonly perfText = make('code', 'dbg__perf');
+  private readonly qualityBtns = new Map<string, HTMLButtonElement>();
   private readonly slots: ShotSlot[] = [];
   private open = false;
   private readonly labelOf = new Map<HTMLInputElement, HTMLElement>();
@@ -112,6 +115,23 @@ export class DebugPanel {
     this.log.readOnly = true;
     this.log.placeholder = '记下的东西会出现在这里，复制后发给我即可';
 
+    /**
+     * 画质三档（2026-11-07 深夜，PC 卡顿用）。PC 上老口径永远开 DPR 2，
+     * 手机反而降档 —— 现场切一档就能看出是不是填充率/阴影拖的。
+     */
+    const qualityRow = make('div', 'dbg__row');
+    qualityRow.append(make('span', 'dbg__k', '画质'));
+    for (const [key, label] of [['high', '高'], ['balanced', '均衡'], ['low', '省电']] as const) {
+      const btn = make('button', 'dbg__btn dbg__btn--ghost', label);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        this.app.setQualityPreset(key);
+        this.refresh();
+      });
+      this.qualityBtns.set(key, btn);
+      qualityRow.append(btn);
+    }
+
     const foldBox = make('details', 'dbg__fold');
     foldBox.append(
       make('summary', 'dbg__fold__sum', '要删的东西 / 账本（点开）'),
@@ -136,6 +156,9 @@ export class DebugPanel {
       make('div', 'dbg__label', '我调的机位（发我这个）'),
       this.slotsBox,
       make('div', 'dbg__row', [copySlots, clearSlots]),
+      make('div', 'dbg__label', '性能（PC 上看这个）'),
+      this.perfText,
+      qualityRow,
       /**
        * 可删项 + 账本收进折叠区（2026-11-07 晚）。
        * 五根滑杆 + 槽位 + 8 条可删项 + 账本一屏放不下，手机上"存这一档"会被顶到屏幕外 ——
@@ -236,14 +259,38 @@ export class DebugPanel {
     });
   }
 
-  private async copySlots(): Promise<void> {
-    const text = this.slots.map((s, i) => this.slotLine(s, i)).join('\n');
+  /**
+   * 复制兜底（PC 版重点）：`navigator.clipboard` 只在 https / localhost 可用，
+   * 直接双击 dist 里的 index.html（file://）会抛 NotAllowedError。
+   * 这时退回 textarea + execCommand('copy')，PC 上照样一按就复制走。
+   */
+  private async writeClipboard(text: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(text);
-      this.push('（已复制 ' + this.slots.length + ' 档机位）');
+      return true;
     } catch {
-      this.push('复制失败，请手动抄：\n' + text);
+      // 非安全上下文：走老接口
     }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      // 浏览器不让复制：下面会把文本摊在账本里，手动抄也行
+    }
+    ta.remove();
+    return ok;
+  }
+
+  private async copySlots(): Promise<void> {
+    const text = this.slots.map((s, i) => this.slotLine(s, i)).join('\n');
+    if (await this.writeClipboard(text)) this.push('（已复制 ' + this.slots.length + ' 档机位）');
+    else this.log.value = text; // 兜底也没成：直接把文本放进账本，选中即复制
   }
 
   private push(line: string): void {
@@ -252,11 +299,7 @@ export class DebugPanel {
   }
 
   private async copy(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(this.log.value);
-    } catch {
-      this.log.select();
-    }
+    if (!(await this.writeClipboard(this.log.value))) this.log.select();
   }
 
   /** 每帧由 main 调一次：手动拖了镜头之后，读数要跟着变。 */
@@ -275,6 +318,13 @@ export class DebugPanel {
     if (this.colInput.value !== col) this.colInput.value = col;
     if (this.rowInput.value !== row) this.rowInput.value = row;
     this.paintReadouts();
+    const t = this.app.telemetry;
+    this.perfText.textContent =
+      `${t.fps} fps · ${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面 · ` +
+      `dpr ${t.dpr} · 画质 ${t.quality}`;
+    for (const [key, btn] of this.qualityBtns) {
+      btn.dataset['on'] = String(key === t.quality);
+    }
   }
 
   toggle(): void {

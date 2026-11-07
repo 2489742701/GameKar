@@ -13,7 +13,9 @@
     "dist:web": "npm run build",
     "android:web": "npm run build && node tools/prepare_android_web.mjs",
     "android:sync": "npm run android:web && node tools/sync_android_web.mjs",
-    "android:apk": "npm run android:sync && node tools/build_android_apk.mjs"
+    "android:apk": "npm run android:sync && node tools/build_android_apk.mjs",
+    "pc": "npm run build && node tools/pc_serve.mjs",
+    "pc:serve": "node tools/pc_serve.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.10",

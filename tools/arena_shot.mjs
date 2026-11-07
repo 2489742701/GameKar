@@ -111,10 +111,11 @@ try {
 
   // 视口尺寸：`--window-size` 在 headless 下不一定生效，用 CDP 强制覆盖
   const [viewW, viewH] = (process.env.SHOT_SIZE ?? '1280,760').split(',').map(Number);
+  const dpr = Number(process.env.SHOT_DPR ?? 1);
   await send('Emulation.setDeviceMetricsOverride', {
     width: viewW,
     height: viewH,
-    deviceScaleFactor: 1,
+    deviceScaleFactor: dpr,
     mobile: viewH > viewW,
   });
   await send('Page.navigate', { url });

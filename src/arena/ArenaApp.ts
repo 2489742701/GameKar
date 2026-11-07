@@ -15,7 +15,7 @@ import { cellToWorld, inBounds, pos, worldToCell, type GridPos } from '@engine/m
 import { hashString, Random } from '@engine/math/Random';
 import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
-import { Renderer, pickQuality } from '@engine/render/Renderer';
+import { Renderer, loadQuality, pickQuality, saveQuality, type QualityPreset } from '@engine/render/Renderer';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
@@ -261,6 +261,11 @@ export class ArenaApp {
   readonly autoPilot: AutoPilot;
   /** 所有声音都从这里发：合成音，不加载素材（见 `@audio/sfx`） */
   readonly sfx = new Sfx();
+  /**
+   * 画质档（2026-11-07 深夜）：PC 版卡多半是老口径给桌面开了 DPR 2 的超采样，
+   * 手机上反而自动降档 —— 现在三档可选、存在 localStorage，调试面板里能现场切。
+   */
+  private qualityPreset: QualityPreset = loadQuality();
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
   private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
@@ -488,14 +493,14 @@ export class ArenaApp {
     this.viewport.attach();
     this.input.attach();
     this.viewport.observe((v) => {
-      const quality = pickQuality(v.cssWidth * v.cssHeight, v.dpr);
+      const quality = pickQuality(v.cssWidth * v.cssHeight, v.dpr, this.qualityPreset);
       this.renderer.resize(v.cssWidth, v.cssHeight, v.dpr, quality);
       this.rig.resize(v.cssWidth, v.cssHeight);
       this.fitCamera(v.cssWidth, v.cssHeight);
       this.lighting.follow(this.rig);
     });
     const s = this.viewport.snapshot;
-    this.renderer.resize(s.cssWidth, s.cssHeight, s.dpr, pickQuality(s.cssWidth * s.cssHeight, s.dpr));
+    this.renderer.resize(s.cssWidth, s.cssHeight, s.dpr, pickQuality(s.cssWidth * s.cssHeight, s.dpr, this.qualityPreset));
     this.rig.resize(s.cssWidth, s.cssHeight);
     this.fitCamera(s.cssWidth, s.cssHeight);
     this.lighting.follow(this.rig);
@@ -2014,6 +2019,17 @@ export class ArenaApp {
     return { x: col, z: this.world.field.rows / 2 };
   }
 
+  /** 调试面板现场切画质：立刻重设后备缓冲与阴影，并存进 localStorage。 */
+  setQualityPreset(preset: QualityPreset): void {
+    this.qualityPreset = preset;
+    saveQuality(preset);
+    const v = this.viewport.snapshot;
+    const q = pickQuality(v.cssWidth * v.cssHeight, v.dpr, preset);
+    this.renderer.resize(v.cssWidth, v.cssHeight, v.dpr, q);
+    this.renderer.configureShadows(q.shadows, q.shadowMapSize);
+    this.lighting.sun.castShadow = q.shadows;
+  }
+
   get telemetry() {
     return {
       fps: Math.round(this.lastFrame.fps),
@@ -2021,6 +2037,10 @@ export class ArenaApp {
       sprites: this.unitSprites.size,
       buildings: this.buildingMeshes.size,
       dudesReady: this.pack !== null,
+      drawCalls: this.renderer.drawCalls,
+      triangles: this.renderer.triangles,
+      quality: this.qualityPreset,
+      dpr: this.viewport.snapshot.dpr,
     };
   }
 }

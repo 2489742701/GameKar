@@ -822,6 +822,24 @@
   color: var(--text-dim);
 }
 
+/* PC 调试：实时帧率 / drawCalls / 画质档 */
+.dbg__perf {
+  display: block;
+  font-family: var(--font-num);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--gold-hi);
+  background: rgba(0, 0, 0, 0.38);
+  border-radius: 5px;
+  padding: 4px 6px;
+  overflow-wrap: anywhere;
+}
+
+.dbg__btn[data-on='true'] {
+  outline: 2px solid var(--gold-hi);
+  outline-offset: 1px;
+}
+
 /* 可删项 / 账本的折叠区：默认收起，把上半截（调机位）留给一屏 */
 .dbg__fold {
   border-top: 1px solid rgba(255, 255, 255, 0.09);
