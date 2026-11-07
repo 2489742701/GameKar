@@ -41,9 +41,11 @@ export function supplyRows(card: ArenaCard): SupplyRows {
     return { plus: '', minus: group('pop', POP_ICON.repeat(pop)) };
   }
   const n = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
+  // 面包按**实际口粮**画（民兵每人 0.5 ⇒ 6 人只画 3 个面包），别按人头骗玩家
+  const breadN = Math.ceil(n * (card.breadPerMan ?? 1));
   return {
     plus: '',
-    minus: repeat('pop', POP_ICON, n) + repeat('bread', BREAD_ICON, n),
+    minus: repeat('pop', POP_ICON, n) + repeat('bread', BREAD_ICON, breadN),
   };
 }
 

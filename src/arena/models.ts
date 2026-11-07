@@ -537,6 +537,87 @@ export function houseModel(accent: number): ArenaModel {
   };
 }
 
+
+/**
+ * **齿轮工厂**（2026-11-07 设计文档 C 节）：第一栋 4×3 建筑，解锁三架飞行器。
+ *
+ * 复古厂房：石台 + 砖墙 + 木梁 + 双坡顶 + 烟囱；前墙外挂一枚**大齿轮**
+ * （圆盘 12 齿 4 辐条）和一枚咬合的小齿轮（反向转）。
+ * 齿轮复用磨坊帆的 `spin/pivot` 机制：同一 pivot + 同一 speed 的节点，
+ * `syncParts` 每帧按绝对角度转 ⇒ 整轮同步「转转转」。
+ */
+export function gearFactoryModel(accent: number): ArenaModel {
+  const GEAR: Vec3 = [0.62, 1.15, 0.95];   // 大齿轮中心（前墙外侧，朝镜头）
+  const SMALL: Vec3 = [-0.42, 0.72, 0.95]; // 咬合的小齿轮
+  const spinPart = (node: Node, pivot: Vec3, speed: number): Node => ({ ...node, spin: speed, pivot });
+  const out: Node[] = [
+    // ---- 复古厂房本体（4×3 占地，比 3×3 楼宽一圈）
+    plinth([2.3, 0.08, 1.5], ARENA_PAL.stoneDark),
+    box([2.15, 0.4, 1.4], ARENA_PAL.stone, [0, mid(0.08, 0.4), 0]),
+    box([1.95, 1.15, 1.25], ARENA_PAL.wallDark, [0, mid(0.48, 1.15), 0]),
+    // 木梁：四角立柱 + 两道横箍（复古木骨架）
+    ...[-0.88, 0.88].flatMap((x) => [
+      box([0.1, 1.15, 0.08], ARENA_PAL.wood, [x, mid(0.48, 1.15), 0.64]),
+      box([0.1, 1.15, 0.08], ARENA_PAL.wood, [x, mid(0.48, 1.15), -0.64]),
+    ]),
+    box([1.9, 0.09, 0.09], ARENA_PAL.woodLight, [0, 1.0, 0.64]),
+    box([1.9, 0.09, 0.09], ARENA_PAL.woodLight, [0, 1.52, 0.64]),
+    // 大门 + 两扇小窗
+    box([0.46, 0.68, 0.07], ARENA_PAL.wood, [-0.25, mid(0.48, 0.68), 0.66]),
+    box([0.5, 0.06, 0.09], ARENA_PAL.woodLight, [-0.25, 0.75, 0.68]),
+    box([0.26, 0.3, 0.06], ARENA_PAL.stoneDark, [0.55, 1.15, 0.66]),
+    box([0.26, 0.3, 0.06], ARENA_PAL.stoneDark, [0.55, 1.15, -0.66]),
+    // 双坡顶 + 屋脊
+    prism([2.15, 0.5, 1.45], roofOf(accent), [0, 1.9, 0]),
+    box([2.2, 0.08, 0.12], ridgeOf(accent), [0, mid(2.15, 0.08), 0]),
+    // 烟囱（左后）+ 顶箍
+    cyl([0.18, 0.22, 1.0], ARENA_PAL.stone, [-0.75, 2.15, -0.38], 8),
+    box([0.28, 0.08, 0.28], ridgeOf(accent), [-0.75, 2.68, -0.38]),
+  ];
+  // ---- 大齿轮：圆盘 + 12 齿 + 4 辐条 + 金色轴心（全部同一 pivot/speed 同步转）
+  out.push(spinPart({
+    part: { kind: 'cyl', rTop: 0.5, rBottom: 0.5, height: 0.14, seg: 12 },
+    color: ARENA_PAL.iron, at: GEAR, rot: [Math.PI / 2, 0, 0],
+  }, GEAR, 0.8));
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    out.push(spinPart({
+      part: { kind: 'box', size: [0.16, 0.16, 0.14] },
+      color: 0x8a7350,
+      at: [GEAR[0] + Math.cos(a) * 0.56, GEAR[1] + Math.sin(a) * 0.56, GEAR[2]],
+      rot: [0, 0, a],
+    }, GEAR, 0.8));
+  }
+  for (let i = 0; i < 4; i++) {
+    out.push(spinPart({
+      part: { kind: 'box', size: [0.82, 0.08, 0.08] },
+      color: ARENA_PAL.woodLight, at: GEAR, rot: [0, 0, (i * Math.PI) / 4],
+    }, GEAR, 0.8));
+  }
+  out.push(spinPart({
+    part: { kind: 'cyl', rTop: 0.11, rBottom: 0.11, height: 0.2, seg: 8 },
+    color: ARENA_PAL.gold, at: GEAR, rot: [Math.PI / 2, 0, 0],
+  }, GEAR, 0.8));
+  // ---- 咬合小齿轮：反向转，机械感
+  out.push(spinPart({
+    part: { kind: 'cyl', rTop: 0.27, rBottom: 0.27, height: 0.12, seg: 10 },
+    color: ARENA_PAL.iron, at: SMALL, rot: [Math.PI / 2, 0, 0],
+  }, SMALL, -1.2));
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    out.push(spinPart({
+      part: { kind: 'box', size: [0.11, 0.11, 0.12] },
+      color: 0x8a7350,
+      at: [SMALL[0] + Math.cos(a) * 0.31, SMALL[1] + Math.sin(a) * 0.31, SMALL[2]],
+      rot: [0, 0, a],
+    }, SMALL, -1.2));
+  }
+  return {
+    static: out,
+    shell: boxShell(1.95, 1.25, 0.06, 1.15, ARENA_PAL.wall, 4, 2, 97),
+  };
+}
+
 /** 名字 → 造模型。视图层只读这张表；`accent` 是阵营色。 */
 export const ARENA_MODELS = {
   core: coreModel,
@@ -545,6 +626,7 @@ export const ARENA_MODELS = {
   cannonTower: cannonTowerModel,
   mill: millModel,
   house: houseModel,
+  gearFactory: gearFactoryModel,
 } as const;
 
 export type ArenaModelName = keyof typeof ARENA_MODELS;
@@ -576,4 +658,5 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   cannonTower: { x: 1.45, z: 1.45, base: 0.12, pole: 2.1 },
   mill: { x: 0, z: 0, base: 5.25, pole: 0.9 },
   house: { x: 1.2, z: 0, base: 2.55, pole: 0.8 },
+  gearFactory: { x: 0.95, z: 0, base: 2.25, pole: 2.0 },
 };

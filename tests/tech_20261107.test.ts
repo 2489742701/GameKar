@@ -1,0 +1,136 @@
+/**
+ * 2026-11-07 设计文档 A/B/C 节的锁：科技前置 / 民兵集结 / 齿轮工厂 4×3。
+ */
+import { describe, expect, it } from 'vitest';
+import { ArenaWorld } from '@arena/ArenaWorld';
+import { BUILDING_SPECS, CARDS, FIELD, TECH, cardById } from '@arena/config';
+
+function run(w: ArenaWorld, seconds: number): void {
+  for (let i = 0; i < Math.round(seconds / 0.05); i++) w.update(0.05);
+}
+
+function built(w: ArenaWorld, kind: 'barracks' | 'gearFactory', col = 6, row = 6) {
+  const b = w['place']('blue', kind, col, row, 9999);
+  b.build = 1;
+  return b;
+}
+
+function handIds(w: ArenaWorld): string[] {
+  return w.hands.blue.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => c.id);
+}
+
+/** 多次刷新收集出现过的卡（抽卡有随机性，用覆盖面断言而不是赌某一手）。 */
+function seenAfterRerolls(w: ArenaWorld, times = 12): Set<string> {
+  const seen = new Set<string>();
+  for (let i = 0; i < times; i++) {
+    w.gold.blue = 20;
+    w.reroll('blue');
+    for (const id of handIds(w)) seen.add(id);
+  }
+  return seen;
+}
+
+describe('民兵集结（设计文档 B 节）', () => {
+  it('4 民兵 + 2 弓箭手 = 6 人、5 金、每人半份面包', () => {
+    const card = cardById(TECH.militia);
+    expect(card.cost).toBe(5);
+    expect(card.squad).toEqual([{ unitId: 'militia', count: 4 }, { unitId: 'archer', count: 2 }]);
+    expect((card.squad ?? []).reduce((n, g) => n + g.count, 0)).toBe(6);
+    expect(card.breadPerMan).toBe(0.5);
+  });
+
+  it('开局就能出：6 人口 + 3 面包正好压满基础容器（不多吃一份）', () => {
+    const w = new ArenaWorld({ seed: 301 });
+    w.auto.red = false;
+    w.gold.blue = 20;
+    w.hands.blue[0] = cardById(TECH.militia);
+    w.handCooldowns.blue[0] = 0;
+    expect(w.playCard('blue', 0, 6, 9).ok).toBe(true);
+    const s = w.supplyOf('blue');
+    expect(w.units.filter((u) => u.side === 'blue')).toHaveLength(6);
+    expect(s.pop).toBe(6);
+    expect(s.bread).toBe(3);
+    expect(s.breadMax).toBe(3);
+    // 每个兵都记了半份口粮（兵营兵不受影响）
+    expect(w.units.every((u) => u.side !== 'blue' || u.breadCost === 0.5)).toBe(true);
+  });
+});
+
+describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () => {
+  it('默认：刷新 12 次也只会出现民兵这一种军队卡', () => {
+    const w = new ArenaWorld({ seed: 302 });
+    const seen = seenAfterRerolls(w);
+    const army = [...seen].filter((id) => cardById(id)?.kind !== 'building');
+    expect(army).toEqual([TECH.militia]);
+    expect(w.techHint('blue')).toBe('需要军营解锁军队');
+  });
+
+  it('盖好兵营：地面军队解锁，飞行器仍然不出现', () => {
+    const w = new ArenaWorld({ seed: 303 });
+    const b = built(w, 'barracks');
+    expect(w.hasBuilt('blue', 'barracks')).toBe(true);
+    const seen = seenAfterRerolls(w);
+    expect([...seen].some((id) => ['archers', 'knights', 'spearmen'].includes(id))).toBe(true);
+    for (const id of TECH.flyerCards) expect(seen.has(id)).toBe(false);
+    expect(w.techHint('blue')).toBe('需要齿轮工厂解锁空军');
+    // 拆掉兵营 ⇒ 立刻重新上锁
+    w.buildings.delete(b.id);
+    expect(w.hasBuilt('blue', 'barracks')).toBe(false);
+    expect(handIds(w).some((id) => id !== TECH.militia && cardById(id)?.kind !== 'building')).toBe(false);
+  });
+
+  it('盖好齿轮工厂：三架飞行器进池', () => {
+    const w = new ArenaWorld({ seed: 304 });
+    built(w, 'barracks', 6, 6);
+    built(w, 'gearFactory', 10, 6);
+    expect(w.hasBuilt('blue', 'gearFactory')).toBe(true);
+    // 判据锁：三架都解锁（不赌抽卡运气）
+    for (const id of TECH.flyerCards) {
+      expect(w.techAllows('blue', cardById(id)), `${id} 前置应满足`).toBe(true);
+    }
+    // 统计锁：刷新多轮至少出现过一架（保底会占手牌格，别断言每张都出现）
+    const seen = seenAfterRerolls(w, 30);
+    expect(TECH.flyerCards.some((id) => seen.has(id))).toBe(true);
+    expect(w.techHint('blue')).toBeNull();
+  });
+
+  it('施工中的科技建筑不算解锁（build<1 不干活）', () => {
+    const w = new ArenaWorld({ seed: 305 });
+    const b = w['place']('blue', 'barracks', 6, 6, 420);
+    b.build = 0.5;
+    expect(w.hasBuilt('blue', 'barracks')).toBe(false);
+    expect(w.techAllows('blue', cardById('archers'))).toBe(false);
+  });
+});
+
+describe('齿轮工厂 4×3（设计文档 C 节）', () => {
+  it('规格是 4 列 3 行，是第一栋非 3×3 建筑', () => {
+    expect(BUILDING_SPECS.gearFactory.cols).toBe(4);
+    expect(BUILDING_SPECS.gearFactory.rows).toBe(3);
+    expect(cardById('gearFactory').cost).toBe(16);
+  });
+
+  it('黄区判据遍历 4 列：压到黄区就被拒，合法位置放得下', () => {
+    const w = new ArenaWorld({ seed: 306 });
+    w.auto.red = false;
+    w.gold.blue = 20;
+    w.hands.blue[0] = cardById('gearFactory');
+    w.handCooldowns.blue[0] = 0;
+    // 蓝方半场 col<22；黄区 col 18..26，4 列从 15 起会压到 18
+    expect(w.playCard('blue', 0, 15, 6).ok).toBe(false);
+    expect(w.playCard('blue', 0, 6, 6).ok).toBe(true);
+    const b = [...w.buildings.values()].find((x) => x.kind === 'gearFactory')!;
+    expect(b.cols).toBe(4);
+    expect(b.rows).toBe(3);
+    run(w, BUILDING_SPECS.gearFactory.cols); // 施工推进：完工才算解锁
+    expect(w.hasBuilt('blue', 'gearFactory')).toBe(true);
+  });
+
+  it('卡池 25 张；工厂不需要后勤配给', () => {
+    expect(CARDS).toHaveLength(25);
+    const w = new ArenaWorld({ seed: 307 });
+    const b = built(w, 'gearFactory');
+    expect(w.isStaffed(b.id)).toBe(true); // 被动科技，不挂「缺民居」
+    void FIELD;
+  });
+});

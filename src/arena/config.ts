@@ -301,9 +301,11 @@ export interface ArenaCard {
   /** 花多少金 */
   cost: number;
   /** 建筑卡：模型与规格 */
-  building?: 'barracks' | 'arrowTower' | 'cannonTower' | 'mill' | 'house';
+  building?: 'barracks' | 'arrowTower' | 'cannonTower' | 'mill' | 'house' | 'gearFactory';
   /** 军队卡：出哪几种、各几个 */
   squad?: { unitId: string; count: number }[];
+  /** 每个兵吃几份面包（默认 1）。民兵自带干粮只吃 0.5，6 人才装得进基础 3 面包 */
+  breadPerMan?: number;
 }
 
 /**
@@ -503,6 +505,24 @@ export const CARDS: ArenaCard[] = [
     cost: 14,
     squad: [{ unitId: 'bomber', count: 1 }],
   },
+  // ---------------------------------------------------------------- 2026-11-07 科技前置（设计文档 A/B/C 节）
+  {
+    id: 'militia',
+    name: '民兵集结',
+    blurb: '4 民兵 + 2 弓箭手：攻防低，但人多、便宜、自带干粮。',
+    kind: 'squad',
+    cost: 5,
+    squad: [{ unitId: 'militia', count: 4 }, { unitId: 'archer', count: 2 }],
+    breadPerMan: 0.5,
+  },
+  {
+    id: 'gearFactory',
+    name: '齿轮工厂',
+    blurb: '复古厂房 + 大齿轮（4×3）。建成后解锁热气球、空气螺旋机与扑翼轰炸机。',
+    kind: 'building',
+    cost: 16,
+    building: 'gearFactory',
+  },
 ];
 
 export const cardById = (id: string): ArenaCard => {
@@ -516,12 +536,28 @@ export const cardById = (id: string): ArenaCard => {
  * 占地：**所有建筑一律 3×3**（用户 2026-10-27 定的）。
  * 视觉上模型只有 1 格大，所以视图层会按 3 格再放大一次（见 ArenaApp 的 BUILDING_SCALE）。
  */
+/** 齿轮工厂：第一栋 4×3 建筑（解锁空军），血厚一点、被动科技不配民居。 */
+export const GEAR_FACTORY = { hp: 700 };
+
+/** 科技前置（2026-11-07 设计文档 A 节）：唯一默认军队卡 + 解锁者 */
+export const TECH = {
+  /** 无前置、永远在卡池 */
+  militia: 'militia',
+  /** 兵营解锁全部地面军队（除民兵） */
+  barracks: 'barracks',
+  /** 齿轮工厂解锁三架飞行器 */
+  gearFactory: 'gearFactory',
+  /** 需要齿轮工厂的卡 */
+  flyerCards: ['balloon', 'airscrew', 'bomber'] as string[],
+};
+
 export const BUILDING_SPECS = {
   barracks: { cols: 3, rows: 3, hp: BARRACKS.hp },
   arrowTower: { cols: 3, rows: 3, hp: TOWER.arrow.hp },
   cannonTower: { cols: 3, rows: 3, hp: TOWER.cannon.hp },
   mill: { cols: 3, rows: 3, hp: MILL.hp },
   house: { cols: 3, rows: 3, hp: HOUSE.hp },
+  gearFactory: { cols: 4, rows: 3, hp: GEAR_FACTORY.hp },
 } as const;
 
 /** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */

@@ -72,7 +72,7 @@ describe('发牌裁量：没空位只发军队（P-056 A 节）', () => {
 
 describe('三架独立飞行器与四张新军队（P-056 B 节）', () => {
   it('卡池 23 张；热气球 / 空气螺旋机 / 扑翼轰炸机是三个不同单位', () => {
-    expect(CARDS).toHaveLength(23);
+    expect(CARDS).toHaveLength(25);
     const ids = ['balloon', 'airscrew', 'bomber'];
     expect(new Set(ids).size).toBe(3);
     for (const id of ids) {

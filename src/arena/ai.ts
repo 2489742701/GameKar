@@ -78,7 +78,7 @@ export function canPlay(card: ArenaCard, s?: SupplyView): boolean {
   const n = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
   return (
     s.pop + n * SUPPLY.unitPop <= s.popMax &&
-    s.bread + n * SUPPLY.unitBread <= s.breadMax
+    s.bread + n * (card.breadPerMan ?? 1) * SUPPLY.unitBread <= s.breadMax
   );
 }
 

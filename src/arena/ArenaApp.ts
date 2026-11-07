@@ -29,7 +29,7 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResult, type Side } from './ArenaWorld';
 import { AmbientDust } from './ambient';
 import { ArenaDirector } from './Camera';
-import { ARENA_CAMERA, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
+import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, FIELD, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
 import { Confetti } from './visuals/confetti';
@@ -174,6 +174,8 @@ export class ArenaApp {
       mats?: { mat: THREE.MeshStandardMaterial; color: THREE.Color }[];
       /** 施工脚手架（完工后拆掉，不在 group 里 —— 它不该跟着楼一起升起） */
       scaffold?: THREE.Group;
+      /** 模型缩放（工厂 1.18 倍）；施工缩放要用同一个值 */
+      scale?: number;
       /** 楼的静止高度（世界 y），施工时 group 从这个高度下面往上冒 */
       baseY?: number;
       /** 模型自身高度（世界单位），决定施工要"长"多高 */
@@ -556,15 +558,16 @@ export class ArenaApp {
     if (!card) return;
     this.cancelCardDrag();
     this.dragSlot = slot;
-    const size = card.kind === 'building' ? 3 : 1;
+    const spec = card.kind === 'building' ? BUILDING_SPECS[card.building!] : { cols: 1, rows: 1 };
+    const cols = spec.cols, rows = spec.rows;
     const g = new THREE.Group();
-    // 底下仍留一层**很淡**的占地框（给精确的 3×3 格），主角换成模型影子
+    // 底下仍留一层**很淡**的占地框（按真实尺寸：齿轮工厂是 4×3 长方形），主角换成模型影子
     this.dragFill = new THREE.MeshBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide });
     this.dragEdge = new THREE.LineBasicMaterial({ color: 0x7fe09a, transparent: true, opacity: 0.5, depthTest: false });
-    const fill = new THREE.Mesh(new THREE.PlaneGeometry(size, size), this.dragFill);
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(cols, rows), this.dragFill);
     fill.rotation.x = -Math.PI / 2;
     fill.position.y = card.kind === 'building' ? 0.05 : 0;
-    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(size, 0.04, size)), this.dragEdge);
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(cols, 0.04, rows)), this.dragEdge);
     edge.renderOrder = 28;
     edge.position.y = card.kind === 'building' ? 0.03 : 0;
     g.add(fill, edge);
@@ -582,7 +585,7 @@ export class ArenaApp {
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.material = this.dragModelMat!;
       });
-      body.scale.setScalar(BUILDING_SCALE);
+      body.scale.setScalar(card.building === 'gearFactory' ? BUILDING_SCALE * 1.18 : BUILDING_SCALE);
       g.add(body);
       g.userData['body'] = body;
     } else {
@@ -604,11 +607,11 @@ export class ArenaApp {
     if (!cell) return;
     const card = this.world.hand[this.dragSlot];
     const isBuilding = card?.kind === 'building';
-    const size = isBuilding ? 3 : 1;
-    const c = cellToWorld(pos(cell.col + size / 2, cell.row + size / 2));
+    const spec = isBuilding ? BUILDING_SPECS[card!.building!] : { cols: 1, rows: 1 };
+    const c = cellToWorld(pos(cell.col + spec.cols / 2, cell.row + spec.rows / 2));
     // 模型影子的摆放公式与真楼一致；占地平面只差一层 0.05 的贴地防 z-fight
     const baseY = isBuilding
-      ? this.map.footprintSurfaceY(pos(cell.col, cell.row), size, size)
+      ? this.map.footprintSurfaceY(pos(cell.col, cell.row), spec.cols, spec.rows)
       : this.map.surfaceY(cell) + 0.06;
     this.dragGhost.position.set(c.x, baseY, c.z);
     // 模型影子的朝向与落成一致（同一个 落点+类型 key）
@@ -734,14 +737,17 @@ export class ArenaApp {
       });
       // 磨坊的帆是六块各自带 pivot 的件 ⇒ 套件建了六个转轴 Group。
       // 只转第一个的话，就是"一块帆在转、其余五块钉死"（用户："有的地方转，有的地方不转"）。
-      const sails = spinnersOf(group).map((s) => ({ group: s.group, speed: s.speed }));
+      // 自转件在 body 子组里（P-054 建筑朝向拆组后），必须读 body 而不是外层 group
+      const sails = spinnersOf(body).map((s) => ({ group: s.group, speed: s.speed }));
       const turret = body.userData[TURRET] as THREE.Object3D | undefined;
       this.parts.set(b.id, { sails: sails.length > 0 ? sails : undefined, turret, spin });
       const center = cellToWorld(pos(b.col + b.cols / 2 - 0.5, b.row + b.rows / 2 - 0.5));
       // 模型说明书写的是"局部原点在占地中心、底面 y=0"，所以要抬到**地块表面**，
       // 不能放在 y=0 —— 草地表面在 0.5，放 0 就是整栋楼埋掉半截。
       group.position.set(center.x, this.map.footprintSurfaceY(pos(b.col, b.row), b.cols, b.rows), center.z);
-      group.scale.setScalar(BUILDING_SCALE);
+      // 齿轮工厂 4×3，模型比 3×3 楼再大一圈（用户"工厂稍微大一点"）
+      const bScale = b.kind === 'gearFactory' ? BUILDING_SCALE * 1.18 : BUILDING_SCALE;
+      group.scale.setScalar(bScale);
       // 量一次模型自身的高度（格）：血条挂多高就按它算，不再按建筑种类写死。
       // 相对组自身量：组已经抬到了地块表面，直接用世界坐标会把那 0.5 格算进去。
       group.updateMatrixWorld(true);
@@ -750,7 +756,7 @@ export class ArenaApp {
       this.scene.add(group);
       // 血条要挂在**抵消缩放**的子组里：直接挂在 group 上会跟着放大，位置被抬到半空
       const ui = new THREE.Group();
-      ui.scale.setScalar(1 / BUILDING_SCALE);
+      ui.scale.setScalar(1 / bScale);
       group.add(ui);
       group.userData['ui'] = ui;
       // 旗：放进反向缩放的 ui 组，所以尺寸直接用"格"（落点表在 models.ts 的 ARENA_FLAGS）
@@ -765,6 +771,7 @@ export class ArenaApp {
         shell,
         baseY: group.position.y,
         modelTop,
+        scale: bScale,
         built: b.build >= 1,
         mats,
       });
@@ -815,7 +822,8 @@ export class ArenaApp {
          * 墙反而藏在土里），读起来像"楼掉坑里了"；压扁是"矮墙在长高"，才是垒墙。
          */
         shell.setBuild(b.build);
-        group.scale.set(BUILDING_SCALE, BUILDING_SCALE * Math.max(0.12, b.build), BUILDING_SCALE);
+        const sc = this.parts.get(b.id)?.scale ?? BUILDING_SCALE;
+        group.scale.set(sc, sc * Math.max(0.12, b.build), sc);
         const info = this.parts.get(b.id)!;
         if (info.banner) info.banner.group.visible = false;
         const scaffold = makeScaffold(b.cols, b.rows, modelTop);
@@ -905,7 +913,7 @@ export class ArenaApp {
         life: 0,
         dustIn: 0,
       });
-      // 所有楼都是 3×3 占地（BUILDING_SPECS），删除分支里 b 已经是 undefined，别去读它
+      // 占地按 BUILDING_SPECS（齿轮工厂 4×3），删除分支里 b 已经是 undefined，别去读它
       this.fx.collapseDust(group.position.x, group.position.z, baseY, 1.9);
       this.buildingMeshes.delete(id);
       this.damage.forget(id); // collapseAll 已经删了状态，这里只是兜底
@@ -955,7 +963,8 @@ export class ArenaApp {
     if (b.build < 1) {
       info.shell?.setBuild(b.build);
       // 楼往上长（原点在底面）+ 脚手架跟着长：一个通到顶的空架子立在矮墙上，像楼掉坑里了
-      group.scale.set(BUILDING_SCALE, BUILDING_SCALE * Math.max(0.12, b.build), BUILDING_SCALE);
+      const sc = this.parts.get(b.id)?.scale ?? BUILDING_SCALE;
+        group.scale.set(sc, sc * Math.max(0.12, b.build), sc);
       if (info.banner) info.banner.group.visible = false;
       if (info.scaffold) info.scaffold.scale.y = 0.32 + 0.68 * b.build;
       return;

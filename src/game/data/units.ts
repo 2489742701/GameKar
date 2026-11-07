@@ -341,6 +341,29 @@ export const UNITS: Record<string, UnitDef> = {
   }),
 
   // ---------------------------------------------------------------- 2026-11-07 四张新军队卡（平衡见设计文档 B 节）
+  /** 民兵集结专用：攻防都低、人多炮灰（2026-11-07 设计文档 B 节） */
+  militia: U({
+    id: 'militia',
+    name: '民兵',
+    blurb: '临时召集：便宜、脆、靠人数。',
+    role: 'melee',
+    faction: 'own',
+    hp: 22,
+    attack: 5,
+    defense: 0,
+    range: 1.2,
+    speed: 1.5,
+    cooldown: 1.1,
+    sight: 4.2,
+    attackAnim: 'sword',
+    idleAnim: 'idleSword',
+    anims: COMBAT_ANIMS('sword', 'idleSword'),
+    headBands: [[1, 33]],
+    faceBand: [1, 40],
+    trainSeconds: 0,
+    stockInitial: 0,
+  }),
+
   spearman: U({
     id: 'spearman',
     name: '长矛兵',

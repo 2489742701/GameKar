@@ -57,7 +57,9 @@ describe('建筑模型体型', () => {
     expect(base.rows.map((r) => r.name).sort()).toEqual(Object.keys(ARENA_MODELS).sort());
     for (const r of base.rows) {
       // 宽/深不超过 4.8 格：上一版核心的屋顶量出来 8 格，比占地宽一倍 —— 就是那次的教训
-      expect(r.width, `${r.name} 宽`).toBeLessThanOrEqual(4.8);
+      // 例外：齿轮工厂是 4×3 占地（用户 2026-11-07），允许宽到 5.6
+      const wide = r.name === 'gearFactory' ? 5.6 : 4.8;
+      expect(r.width, `${r.name} 宽`).toBeLessThanOrEqual(wide);
       expect(r.depth, `${r.name} 深`).toBeLessThanOrEqual(4.8);
       expect(r.width, `${r.name} 宽`).toBeGreaterThanOrEqual(2.0);
       expect(r.height, `${r.name} 高`).toBeLessThanOrEqual(7.2);
@@ -68,7 +70,8 @@ describe('建筑模型体型', () => {
   it('骨架件数不多，外墙切成够多的面片（掉起来才像"一块块"）', () => {
     for (const r of base.rows) {
       // 不动的件（含内部骨架）不超过 22：再多就是又堆碎了
-      expect(r.statics, `${r.name} 固定件`).toBeLessThanOrEqual(22);
+      // 例外：齿轮工厂的大/小齿轮由 12+8 齿 + 辐条组成，放宽到 48
+      expect(r.statics, `${r.name} 固定件`).toBeLessThanOrEqual(r.name === 'gearFactory' ? 48 : 22);
       expect(r.statics, `${r.name} 固定件`).toBeGreaterThanOrEqual(8);
       // 面片至少 10 块：12 块的炮塔每档崩 2 块也够看出洞
       expect(r.shell, `${r.name} 面片`).toBeGreaterThanOrEqual(10);

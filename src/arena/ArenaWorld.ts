@@ -17,6 +17,7 @@ import {
   AI,
   BARRACKS,
   BOMBER,
+  TECH,
   BUILD,
   BUILDING_SPECS,
   CARDS,
@@ -193,16 +194,16 @@ export class ArenaWorld {
     if (exclude) taken.add(exclude);
     let pool = CARDS.filter((c) => !taken.has(c.id));
     if (pool.length === 0) pool = CARDS;
-
     /**
-     * **发牌裁量（2026-11-07 设计文档 A 节）**：没地方放楼了就别再发建筑卡。
-     * 判据 `buildingRoom` 与落牌共用 `buildingPlacementIssue`，不另算一套账；
-     * 没空位时两个建筑保底（后勤 / 建筑）也必须跳过，否则刚过滤完又塞回来。
+     * **科技前置 + 发牌裁量**（2026-11-07）：池子先按「有没有前置建筑 /
+     * 有没有对应尺寸空位」过滤；判据与落牌共用 `buildingPlacementIssue`。
+     * 过滤后两个建筑保底自然失效（池里没有建筑卡）—— 不会刚过滤完又塞回来。
      */
-    if (!this.buildingRoom(side)) {
-      const army = pool.filter((c) => c.kind !== 'building');
-      pool = army.length > 0 ? army : pool;
-      return this.rng.pick(pool);
+    const room = new Map<string, boolean>();
+    pool = pool.filter((c) => this.techAllows(side, c, room));
+    if (pool.length === 0) {
+      pool = CARDS.filter((c) => this.techAllows(side, c, room));
+      if (pool.length === 0) pool = [cardById(TECH.militia)]; // 极端兜底：民兵永远能发
     }
 
     // ① 后勤保底（2026-10-31）：场上缺民居/磨坊，而手里一张都没有 ⇒ 这一张发它。
@@ -331,24 +332,68 @@ export class ArenaWorld {
    * `placementProblem` 的建筑分支直接返回它，`buildingRoom` 与发牌裁量也读它——
    * 卡面提示、落牌拒绝、发牌过滤三件事不会算出两套账。
    */
-  private buildingPlacementIssue(side: Side, col: number, row: number): string | null {
+  private buildingPlacementIssue(side: Side, col: number, row: number, cols = 3, rows = 3): string | null {
     void side;
-    const spec = { cols: 3, rows: 3 }; // 五栋楼全是 3×3（BUILDING_SPECS）
-    if (col < 0 || row < 0 || col + spec.cols > FIELD.cols || row + spec.rows > FIELD.rows) return '出界了';
-    for (let c = col; c < col + spec.cols; c++) if (this.inNoBuild(c)) return '中间黄区不能盖楼';
-    if (!this.cellFree(col, row, spec.cols, spec.rows)) return '这格被占了';
+    // 尺寸按 BUILDING_SPECS 传进来：齿轮工厂是 4×3，黄区要遍历 4 列，不能写死 3
+    if (col < 0 || row < 0 || col + cols > FIELD.cols || row + rows > FIELD.rows) return '出界了';
+    for (let c = col; c < col + cols; c++) if (this.inNoBuild(c)) return '中间黄区不能盖楼';
+    if (!this.cellFree(col, row, cols, rows)) return '这格被占了';
     return null;
   }
 
-  /** 这一侧还有没有能放下一栋 3×3 楼的空位。 */
-  buildingRoom(side: Side): boolean {
-    for (let row = 0; row <= FIELD.rows - 3; row++) {
-      for (let col = 0; col <= FIELD.cols - 3; col++) {
+  /** 这一侧有没有放得下 cols×rows 的空位（逐尺寸扫描，一次抽牌只算一遍）。 */
+  private scanRoom(side: Side, cols: number, rows: number): boolean {
+    for (let row = 0; row <= FIELD.rows - rows; row++) {
+      for (let col = 0; col <= FIELD.cols - cols; col++) {
         if (!this.inOwnHalf(side, col)) continue;
-        if (this.buildingPlacementIssue(side, col, row) === null) return true;
+        if (this.buildingPlacementIssue(side, col, row, cols, rows) === null) return true;
       }
     }
     return false;
+  }
+
+  /** 还有没有能放这座楼的空位。 */
+  hasRoomFor(side: Side, building: keyof typeof BUILDING_SPECS): boolean {
+    const spec = BUILDING_SPECS[building];
+    return this.scanRoom(side, spec.cols, spec.rows);
+  }
+
+  /** 这一侧还有没有能放下任意建筑（3×3 或 4×3）的空位。 */
+  buildingRoom(side: Side): boolean {
+    return this.scanRoom(side, 3, 3) || this.scanRoom(side, 4, 3);
+  }
+
+  /** 完工（build>=1）才算科技解锁；施工中的楼不干活（项目红线）。 */
+  hasBuilt(side: Side, kind: 'barracks' | 'gearFactory'): boolean {
+    for (const b of this.buildings.values()) {
+      if (b.side === side && b.kind === kind && b.hp > 0 && b.build >= 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * **科技前置**（2026-11-07 设计文档 A 节）：
+   * 民兵永远可发；其它地面军队要兵营；三架飞行器要齿轮工厂；
+   * 建筑卡还要有对应尺寸的空位（P-056 的裁量，按卡逐一判）。
+   */
+  techAllows(side: Side, card: ArenaCard, cache = new Map<string, boolean>()): boolean {
+    if (card.kind === 'building' && card.building) {
+      const spec = BUILDING_SPECS[card.building];
+      const key = `${spec.cols}x${spec.rows}`;
+      if (!cache.has(key)) cache.set(key, this.scanRoom(side, spec.cols, spec.rows));
+      return cache.get(key)!;
+    }
+    if (card.id === TECH.militia) return true;
+    if (TECH.flyerCards.includes(card.id)) return this.hasBuilt(side, 'gearFactory');
+    return this.hasBuilt(side, 'barracks');
+  }
+
+  /** HUD 小标：场地 > 兵营 > 工厂，按解锁顺序给下一句提示。 */
+  techHint(side: Side): string | null {
+    if (!this.buildingRoom(side)) return '场地已满 · 只发军队';
+    if (!this.hasBuilt(side, 'barracks')) return '需要军营解锁军队';
+    if (!this.hasBuilt(side, 'gearFactory')) return '需要齿轮工厂解锁空军';
+    return null;
   }
 
   buildingCenter(b: ArenaBuilding): { x: number; z: number } {
@@ -437,7 +482,7 @@ export class ArenaWorld {
 
     this.execute(side, card, col, row);
     // 这栋楼落地后可能刚好把最后一处空位占掉：手里剩下的建筑卡立刻换成军队卡
-    if (card.kind === 'building') this.purgeBuildingsIfNoRoom(side);
+    this.purgeLocked(side);
     // 打出去就进冷却，冷却完补一张新的（配卡组以后再做）
     this.lastPlayed[side][slot] = card.id;
     this.hands[side][slot] = null;
@@ -464,7 +509,10 @@ export class ArenaWorld {
     if (blocked) return blocked;
     if (!this.inOwnHalf(side, col)) return '只能放在自己半场';
 
-    if (card.kind === 'building') return this.buildingPlacementIssue(side, col, row);
+    if (card.kind === 'building') {
+      const spec = BUILDING_SPECS[card.building!];
+      return this.buildingPlacementIssue(side, col, row, spec.cols, spec.rows);
+    }
     // 军队卡仍占 1×1（飞行单位也一样：落牌位置维持与现有锁一致）
     if (col + 1 > FIELD.cols || row + 1 > FIELD.rows) return '出界了';
     if (!this.cellFree(col, row, 1, 1)) return '这格被占了';
@@ -478,7 +526,7 @@ export class ArenaWorld {
     if (card.kind === 'building') {
       this.place(side, card.building!, col, row, BUILDING_SPECS[card.building!].hp);
     } else {
-      this.spawnSquad(side, card.squad ?? [], col, row);
+      this.spawnSquad(side, card.squad ?? [], col, row, false, card.breadPerMan ?? 1);
     }
   }
 
@@ -512,7 +560,7 @@ export class ArenaWorld {
      * （用户原话「刷新默认会给一张房屋」，这条不破）。都不缺时只保房屋。
      */
     // 没空位时**不塞** house/mill 保底（否则刷新完又是一张盖不下去的楼）
-    if (this.buildingRoom(side)) {
+    if (this.hasRoomFor(side, 'house')) {
       const needs = this.missingLogisticsAll(side);
       const wanted: string[] = needs.length > 0 ? [...needs] : ['house'];
       // 用户原话「刷新默认会给一张房屋」：即使只缺磨坊，房屋也照保
@@ -531,12 +579,18 @@ export class ArenaWorld {
     return { ok: true };
   }
 
-  /** 场地没空位时，把手牌里的建筑卡换成军队卡（槽位/冷却不动，只换卡面）。 */
-  private purgeBuildingsIfNoRoom(side: Side): void {
-    if (this.buildingRoom(side)) return;
+  /**
+   * 手牌里不满足前置的卡（科技被拆回去 / 场地被占满）当场换成允许卡。
+   * 只换卡面，槽位/冷却不动。触发：出牌后、拆楼后、刷新后。
+   */
+  private purgeLocked(side: Side): void {
+    const room = new Map<string, boolean>();
     for (let i = 0; i < HAND.size; i++) {
       const card = this.hands[side][i];
-      if (card?.kind === 'building') this.hands[side][i] = this.draw(side, card.id);
+      if (card && !this.techAllows(side, card, room)) {
+        this.hands[side][i] = this.draw(side, card.id);
+        room.clear(); // 刚换的牌可能改变占地判断，缓存作废
+      }
     }
   }
 
@@ -558,6 +612,8 @@ export class ArenaWorld {
     row: number,
     /** true = 兵营自动出的兵：不占人口（用户 2026-11-06），面包照吃 */
     fromBarracks = false,
+    /** 民兵自带干粮：每人只吃 0.5 面包（默认 1） */
+    breadPerMan = 1,
   ): void {
     let i = 0;
     for (const part of squad) {
@@ -584,6 +640,7 @@ export class ArenaWorld {
           aim: side === 'blue' ? 0 : Math.PI,
           healIn: part.unitId === 'mobileCannon' ? undefined : unitDef(part.unitId).special?.kind === 'heal' ? unitDef(part.unitId).special!.every : undefined,
           bombIn: this.bomberOf(part.unitId) ? BOMBER.interval * 0.5 : undefined,
+          breadCost: breadPerMan,
         });
         i++;
       }
@@ -1257,6 +1314,8 @@ export class ArenaWorld {
     if (b.hp < 0) b.hp = 0;
     if (b.hp > 0) return;
     this.buildings.delete(b.id);
+    // 科技载体被拆 ⇒ 立刻重新上锁（手牌里的高级卡换成允许卡）
+    if (b.kind === 'barracks' || b.kind === 'gearFactory') this.purgeLocked(b.side);
     // "拖他的建筑"的账本：记的永远是**谁被拆了**，判胜时反过来看（我拆掉对方多少）
     this.destroyed[b.side] += 1;
     // 留一堆废墟，过一会儿自己塌平（用户：被摧毁的地方要留废墟，等一段时间才消失）
@@ -1458,14 +1517,13 @@ export class ArenaWorld {
     }
 
     let popEaters = 0;
-    let eaters = 0;
+    let bread = 0;
     for (const u of this.units) {
       if (u.side !== side || u.hp <= 0) continue;
-      eaters++;
+      bread += (u.breadCost ?? 1) * SUPPLY.unitBread;
       if (!u.fromBarracks) popEaters++;
     }
     pop += popEaters * SUPPLY.unitPop;
-    const bread = eaters * SUPPLY.unitBread;
 
     return { pop, popMax, bread, breadMax };
   }
@@ -1502,7 +1560,7 @@ export class ArenaWorld {
     if (s.pop + n * SUPPLY.unitPop > s.popMax) {
       return `人口不够（${s.pop}/${s.popMax}，先盖民居）`;
     }
-    if (s.bread + n * SUPPLY.unitBread > s.breadMax) {
+    if (s.bread + n * (card.breadPerMan ?? 1) * SUPPLY.unitBread > s.breadMax) {
       return `面包不够（${s.bread}/${s.breadMax}，先盖磨坊）`;
     }
     return null;

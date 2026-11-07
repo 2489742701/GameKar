@@ -77,7 +77,7 @@ describe('外墙面片', () => {
           max = Math.max(max, Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
         }
       }
-      expect(max, `${kind} 洞口直径`).toBeLessThan(1.3);
+      expect(max, `${kind} 洞口直径`).toBeLessThan(kind === 'gearFactory' ? 1.5 : 1.3);
     }
   });
 

@@ -172,6 +172,19 @@ export const CARD_ICON: Record<string, string> = {
     <path fill="currentColor" d="M11.2 17 7 21h10l-4.2-4h-1.6Z"/>
     <circle fill="currentColor" cx="12" cy="3" r="1.3"/>
   </svg>`,
+
+  /** 民兵集结：三支草叉 + 一张弓 */
+  militia: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M6 1.5 7.5 5H4.5L6 1.5Zm0 3.7.8 14H5.2l.8-14ZM12 1.5 13.5 5h-3L12 1.5Zm0 3.7.8 14h-1.6l.8-14ZM18 1.5 19.5 5h-3L18 1.5Zm0 3.7.8 14h-1.6l.8-14Z"/>
+    <path d="M5 9c5 3 9 3 14 0M5 9l3 4m11-4-3 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>`,
+
+  /** 齿轮工厂：大齿轮 + 烟囱 */
+  gearFactory: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M10.6 1h2.8l.5 2.3 1.8.8 2-1.3 2 2-1.3 2 .8 1.8 2.3.5v2.8l-2.3.5-.8 1.8 1.3 2-2 2-2-1.3-1.8.8-.5 2.3h-2.8l-.5-2.3-1.8-.8-2 1.3-2-2 1.3-2-.8-1.8L1.4 13v-2.8l2.3-.5.8-1.8-1.3-2 2-2 2 1.3 1.8-.8L10.6 1Z"/>
+    <circle cx="12" cy="11" r="3.6" fill="#0e0b08"/>
+    <path fill="currentColor" d="M18.5 17h2v5h-2v-5Z"/>
+  </svg>`,
 };
 
 /** 取一张卡的图标；卡池里新加卡但忘了画图时退回一个空框，不要崩。 */
