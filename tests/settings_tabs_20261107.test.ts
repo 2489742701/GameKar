@@ -22,7 +22,8 @@ describe('标签栏结构', () => {
     expect(hud).toContain("label: '托管'");
     expect(hud).toContain("label: '方向'");
     expect(hud).toContain("label: '旗帜'");
-    expect(hud).toContain('改完立刻生效并存在本机');
+    // 托管页的说明 2026-11-07 傍晚改过（自动档删了，只剩手动）
+    expect(hud).toContain('托管只能手动点');
     expect(hud).toContain('下一局生效');
   });
 

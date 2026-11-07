@@ -64,12 +64,14 @@ describe('建筑朝向（P-054 B 节）', () => {
 });
 
 describe('机位与竖屏（P-054 D 节）', () => {
-  it('三档机位，新「我方」低俯角 / 拉近 / 中心偏自家', () => {
-    expect(VIEW_PRESETS).toHaveLength(3);
-    const own = VIEW_PRESETS.find((v) => v.name === '我方')!;
-    expect(own.zoomFactor).toBeLessThan(1);
-    expect(own.pitch).toBeLessThan(40);
-    expect(own.centerBias!).toBeLessThan(0);
+  /**
+   * 2026-11-07 傍晚用户："视野不要搞得那么复杂，点一下就切换的，切换到我方视角也不对"
+   * ⇒ 1v1 只剩「斜视 / 正对」两档，「我方」删掉。这条锁跟着改成"两档且没有'我方'"。
+   */
+  it('两档机位（斜视 / 正对），「我方」那档已按用户口径删掉', () => {
+    expect(VIEW_PRESETS).toHaveLength(2);
+    expect(VIEW_PRESETS.map((v) => v.name)).toEqual(['斜视', '正对']);
+    expect(VIEW_PRESETS.some((v) => v.name === '我方')).toBe(false);
   });
 
   it('竖屏：导演把缩放拉近、中心往蓝方挪（同一 fitZoom 对比横屏）', () => {

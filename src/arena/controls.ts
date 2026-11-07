@@ -21,11 +21,8 @@ export interface ControlPrefs {
   rotateInvert: boolean;
   /** 捏合 / 滚轮 → 缩放 */
   zoomInvert: boolean;
-  /**
-   * 闲置自动托管（2026-11-07 用户："玩家 5 秒钟未操作时就会自动托管"）。
-   * 放在同一份操作偏好里，读写/容错/存档 key 全复用，不另起一套 localStorage。
-   */
-  idleAuto: boolean;
+  // 2026-11-07 傍晚删掉了 `idleAuto`（闲置 5 秒自动托管）：用户改口径为
+  // "必须玩家自己手动点才会托管"。老存档里多出来的这个键会在 loadControls 里被忽略。
 }
 
 export const CONTROL_KEY = 'gamekar.controls.v1';
@@ -35,7 +32,6 @@ export const DEFAULT_CONTROLS: Readonly<ControlPrefs> = {
   panInvert: false,
   rotateInvert: false,
   zoomInvert: false,
-  idleAuto: true,
 };
 
 /** 0.22°/px：一根手指走 300px 能扫完大半段俯仰行程，再快就一碰就过头。 */

@@ -256,14 +256,12 @@ export class ArenaApp {
   readonly controls = loadControls();
   /**
    * 我方托管状态机。构造体里 `world` 一落地就建（不能用字段初始化器 ——
-   * 那时 `this.world` 还没赋值）。20Hz 的 `onSimStep` 每帧喂 dt，
-   * window 上的 pointerdown/keydown 喂 `activity()`。
+   * 那时 `this.world` 还没赋值）。**只有手动开关一条路**（2026-11-07 傍晚用户改口径：
+   * "托管就是点一下就托管，不要等 5 秒"）。
    */
   readonly autoPilot: AutoPilot;
   /** 所有声音都从这里发：合成音，不加载素材（见 `@audio/sfx`） */
   readonly sfx = new Sfx();
-  /** window 捕获阶段统一的「玩家还在操作」信号 */
-  private readonly markActivity = (): void => this.autoPilot.activity();
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
   private lastOutcome = 'playing';
   private fitZoom = ARENA_CAMERA.tilesAcross;
@@ -280,16 +278,31 @@ export class ArenaApp {
       level: opts.level,
       players: opts.players,
     });
-    this.autoPilot = new AutoPilot(this.world, this.controls, opts.onAutoPilot);
+    this.autoPilot = new AutoPilot(this.world, opts.onAutoPilot);
     /**
-     * 「玩家还在这儿」的判定只有一条：**任何指针按下 / 键盘按键**。
-     * 在 window 捕获阶段收，画布手势、卡牌点击、刷新、拖放、菜单按钮全都覆盖；
-     * 不用给每个交互点单独接一次，也不会漏掉 HUD 上的操作。
-     * 刻意不收 `pointermove`/`hover` —— 鼠标悬着不动不该算"人在操作"。
+     * **桌面端视角键**（2026-11-07 用户："单桌面上用 WSAD 和 QE 来调整这些视角"）。
+     *
+     * 只在 window 上收键，但**排除输入框**（F2 调试面板里有滑杆和 textarea）——
+     * 否则在面板里敲数字会把镜头甩走。手机上这些键根本不会出现，等于零成本。
+     * 按住才动：每帧按 delta 推进，松手立刻停（不是"点一下跳一格"）。
      */
     if (typeof window !== 'undefined') {
-      window.addEventListener('pointerdown', this.markActivity, { capture: true });
-      window.addEventListener('keydown', this.markActivity);
+      const typing = (t: EventTarget | null): boolean => {
+        const el = t as HTMLElement | null;
+        const tag = el?.tagName?.toLowerCase();
+        return tag === 'input' || tag === 'textarea' || el?.isContentEditable === true;
+      };
+      window.addEventListener('keydown', (e) => {
+        if (typing(e.target)) return;
+        const k = e.key.toLowerCase();
+        if (k === 'w' || k === 'a' || k === 's' || k === 'd' || k === 'q' || k === 'e') {
+          this.keys.add(k);
+          this.director.userTouched();
+        }
+      });
+      window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+      // 切走窗口时按键不会收到 up，不清空就会"自己一直往前飘"
+      window.addEventListener('blur', () => this.keys.clear());
     }
 
     this.map = new TileMap({ cols: this.world.fieldSize.cols, rows: this.world.fieldSize.rows });
@@ -386,8 +399,7 @@ export class ArenaApp {
       hz: 20,
       onSimStep: (dt) => {
         // 先推进托管计时，再更新世界：状态一变这一帧就生效，不用多等一轮
-        this.autoPilot.step(dt);
-        this.world.update(dt);
+          this.world.update(dt);
         this.opts.onState?.();
       },
       onFrame: (info) => this.draw(info),
@@ -433,7 +445,16 @@ export class ArenaApp {
         this.rig.setPitch(this.rig.pitch + pitchDelta(dy, this.controls));
       },
       onTap: (x, y) => this.handleTap(x, y),
-      onLongPress: (x, y) => this.handleLongPress(x, y),
+      onLongPress: (x, y, pointerType) => this.handleLongPress(x, y, pointerType),
+      onGrabMove: (x, y, pointerType) => {
+        const r = this.canvas.getBoundingClientRect();
+        this.moveCardDrag(x + r.left, y + r.top, pointerType, this.grabPlayer);
+      },
+      onGrabEnd: (x, y, pointerType) => {
+        const r = this.canvas.getBoundingClientRect();
+        this.dropCardDrag(x + r.left, y + r.top, pointerType, this.grabPlayer);
+        this.selectedSlot = -1;
+      },
       onHover: () => {},
     });
 
@@ -592,6 +613,29 @@ export class ArenaApp {
     return this.selectedSlot === slot ? 'selected' : 'deselected';
   }
 
+  /**
+   * 桌面视角键：W/S 前后、A/D 左右、Q/E 转朝向。每秒 10 格 / 90°。
+   *
+   * 走的是和手指拖动同一个 `panByPixels`（内容跟手），所以"按住 W 画面往前推"
+   * 和"手指往下拖"是同一个手感，不用另写一套相机数学。
+   */
+  private stepViewKeys(dt: number): void {
+    if (this.keys.size === 0) return;
+    const sec = Math.min(0.1, Math.max(0, dt));
+    if (sec === 0) return;
+    const px = (10 / this.rig.worldPerPixel()) * sec;
+    let dx = 0;
+    let dy = 0;
+    if (this.keys.has('w')) dy += px;
+    if (this.keys.has('s')) dy -= px;
+    if (this.keys.has('a')) dx += px;
+    if (this.keys.has('d')) dx -= px;
+    if (dx !== 0 || dy !== 0) this.rig.panByPixels(dx, dy);
+    const turn = 90 * sec;
+    if (this.keys.has('q')) this.rig.rotateBy(-turn);
+    if (this.keys.has('e')) this.rig.rotateBy(turn);
+  }
+
   /** 换下一个机位（键盘 V 走这里）。 */
   nextView(): string {
     return this.director.next().name;
@@ -698,6 +742,10 @@ export class ArenaApp {
    * 判据和落牌共用 `world.canPlaceAt()`（与 playCard 同一份校验）。
    */
   private readonly drags: (DragState | null)[] = [];
+  /** 长按接管放牌时，这一轮属于哪个玩家槽 */
+  private grabPlayer = 0;
+  /** 桌面端视角键（WSAD 平移 / QE 转向）；手机上永远是空集合 */
+  private readonly keys = new Set<string>();
   private dragState(player: number): DragState | null {
     return this.drags[player] ?? null;
   }
@@ -835,17 +883,39 @@ export class ArenaApp {
    * 两个出口靠"按到没按到楼"分流，不做二次确认，因为两种意图完全不重叠：
    * 想挪镜头的人不会按住不动 380ms。
    */
-  private handleLongPress(cssX: number, cssY: number): void {
+  private handleLongPress(cssX: number, cssY: number, pointerType = 'mouse'): boolean {
+    /**
+     * **选中手牌后长按地图 = 出影子放牌**（2026-11-07 用户："点击卡牌之后长按那个地图
+     * 也是冒出一个影子，然后让玩家放置"）。
+     *
+     * 这一条必须先于"长按空地叫设置"：玩家手里正捏着牌，长按地图的意图只可能是放牌。
+     * 返回 true 让指针层把这一根手指交给 `onGrabMove/onGrabEnd` —— 挪影子的时候
+     * 镜头**不许**跟着平移，否则影子和地面会一起飘。
+     */
+    if (this.selectedSlot >= 0) {
+      const hit0 = this.rig.screenToGround(cssX, cssY);
+      if (hit0) {
+        const c0 = worldToCell(hit0.x, hit0.z);
+        if (inBounds(c0, this.map.size)) {
+          this.grabPlayer = this.selectedPlayer;
+          this.beginCardDrag(this.selectedSlot, this.selectedPlayer);
+          const r = this.canvas.getBoundingClientRect();
+          this.moveCardDrag(cssX + r.left, cssY + r.top, pointerType, this.selectedPlayer);
+          return true;
+        }
+      }
+    }
     const hit = this.rig.screenToGround(cssX, cssY);
-    if (!hit) return;
+    if (!hit) return false;
     const cell = worldToCell(hit.x, hit.z);
     const b = this.buildingAtCell(cell);
     if (!b) {
       this.opts.onRequestSettings?.();
-      return;
+      return false;
     }
     const hp = `${Math.round(b.hp)}/${b.maxHp}`;
     this.opts.onToast?.(`${labelOf(b)} · ${hp}`);
+    return false;
   }
 
   private buildingAtCell(cell: GridPos): ArenaBuilding | null {
@@ -862,6 +932,7 @@ export class ArenaApp {
     // 镜头转到哪一侧，那一侧的整段看台就整段消失（台阶 + 座位 + 帆布 + 撑杆）
     this.stand.update(this.rig.yaw);
     this.audioCues();
+    this.stepViewKeys(info.delta);
     this.rig.update(info.delta);
     this.lighting.follow(this.rig);
     this.ground.update(info.time);
@@ -1629,6 +1700,20 @@ export class ArenaApp {
     this.rig.setPitch(shot.pitch);
     const delta = ((((shot.yaw - this.rig.yaw + 180) % 360) + 360) % 360) - 180;
     this.rig.rotateBy(delta);
+  }
+
+  /** 调试面板：把镜头中心挪到某一格（格子坐标）。 */
+  setCameraCenter(col: number, row: number): void {
+    this.director.userTouched();
+    const w = cellToWorld(pos(col, row));
+    this.rig.centerOnWorld(w.x, w.z);
+  }
+
+  /** 调试面板：当前镜头中心落在哪一格（未取整，便于显示小数）。 */
+  get cameraCenterCell(): { col: number; row: number } {
+    const c = this.rig.center;
+    const cell = worldToCell(c.x, c.z);
+    return { col: cell.col, row: cell.row };
   }
 
   /** 这一点脚下的地表高度（草地 0.5）。所有贴地的件都读它，别各写各的。 */

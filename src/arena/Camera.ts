@@ -22,15 +22,19 @@ export interface ViewPreset {
 }
 
 /**
- * 三档静止机位（2026-11-07 加了「我方」：用户要"从我方看向敌方的画面"）。
+ * 静止机位。
+ *
+ * **2026-11-07 傍晚砍到两档**：用户原话"你的视野不要搞得那么复杂，点一下就切换的，
+ * 切换到我方视角也不对" —— 「我方」那一档（低俯角 + 拉近 + 偏蓝方）直接删掉，
+ * 剩斜视 / 正对两个"换个角度整片战场"的档，按钮点一下循环。
+ * 要精调机位走 F2 调试面板，调好把机位 ID 发回来，再定成新档。
+ *
  * 自动巡视仍是默认关，镜头不会自己跑（2026-10-27 用户拍板）。
  */
 export const VIEW_PRESETS: ViewPreset[] = [
   // 默认是**斜视**（用户 2026-10-27：更偏向从自己这边斜着看整片战场）
   { name: '斜视', zoomFactor: 1, yaw: 20, pitch: 44 },
   { name: '正对', zoomFactor: 0.96, yaw: 0, pitch: 46 },
-  // 低俯角 + 拉近 + 中心偏蓝方：自家阵地在前、敌方在画面远端
-  { name: '我方', zoomFactor: 0.78, yaw: 8, pitch: 34, centerBias: -8 },
 ];
 
 /**
@@ -59,7 +63,7 @@ export const PVE_VIEW_PRESETS: ViewPreset[] = [
   { name: '正对', zoomFactor: 1, yaw: 270, pitch: 46 },
   // pitch 写 34，加上 PVE 的 pitchBias −2 ⇒ 实际 32°；0.8 × 32.64 ⇒ 26.1 格
   { name: '斜视', zoomFactor: 0.8, yaw: 238, pitch: 34 },
-  { name: '我方', zoomFactor: 0.9, yaw: 266, pitch: 28, centerBias: -6 },
+  // 「我方」那档同时删掉：和 1v1 一起按用户"不要那么复杂"的口径收敛
   { name: '俯视', zoomFactor: 1.04, yaw: 270, pitch: 76 },
 ];
 

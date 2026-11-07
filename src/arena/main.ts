@@ -135,9 +135,9 @@ hud = new ArenaHud(container, app, {
     }
     hud?.setHand();
   },
-  /** 视角清单里选了第 i 档：导演平滑挪过去，按钮上的字跟着换 */
-  onPickView: (index: number) => {
-    app.pickView(index);
+  /** 视角按钮：点一下切下一档（导演平滑挪过去，按钮上的字跟着换） */
+  onCycleView: () => {
+    app.nextView();
     hud?.setViewStatus(app.director.status);
   },
   /** 工具行 / 设置面板共用这一条：切手动托管，按钮与开关由 refresh() 统一重画 */
@@ -229,6 +229,11 @@ if (autoParam === '1' || autoParam === 'blue') {
 // 调试面板：F2 开关。用户在这里调机位、把喜欢的机位码与"要删的东西"记下来发我。
 debug = new DebugPanel(app);
 container.append(debug.el);
+/**
+ * 挂到 window 上只为一件事：**无头探针要能开面板**（`tools/_probe_*.js` 走 CDP eval）。
+ * 面板本来就是临时调试件，跟着它一起删；不是给产品逻辑用的入口。
+ */
+(window as unknown as { __dbg: DebugPanel }).__dbg = debug;
 
 // 键盘：V 换视角（和 HUD 上那颗按钮走同一条路）
 window.addEventListener('keydown', (e) => {

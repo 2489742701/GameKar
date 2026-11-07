@@ -38,13 +38,17 @@ describe('俯仰范围（双指上下推能推到哪）', () => {
   });
 });
 
-describe('机位表（斜视 / 正对 / 我方 / 俯视）', () => {
-  it('PVE 四档，1v1 仍是三档（两套表互不覆盖）', () => {
-    expect(PVE_VIEW_PRESETS.map((v) => v.name)).toEqual(['正对', '斜视', '我方', '俯视']);
-    expect(VIEW_PRESETS).toHaveLength(3);
+describe('机位表（斜视 / 正对 / 俯视）', () => {
+  /**
+   * 2026-11-07 傍晚："你的视野不要搞得那么复杂，点一下就切换的，切换到我方视角也不对"
+   * ⇒ 两套表都删掉「我方」，1v1 剩 2 档、PVE 剩 3 档。
+   */
+  it('PVE 三档、1v1 两档，且两套表互不覆盖', () => {
+    expect(PVE_VIEW_PRESETS.map((v) => v.name)).toEqual(['正对', '斜视', '俯视']);
+    expect(VIEW_PRESETS.map((v) => v.name)).toEqual(['斜视', '正对']);
   });
 
-  it('只有「斜视」明显歪，其余三档仍钉在 270° 附近（长边不能横过来）', () => {
+  it('只有「斜视」明显歪，其余档仍钉在 270° 附近（长边不能横过来）', () => {
     for (const preset of PVE_VIEW_PRESETS) {
       const off = Math.abs(preset.yaw - 270);
       if (preset.name === '斜视') continue;
@@ -72,7 +76,8 @@ describe('机位表（斜视 / 正对 / 我方 / 俯视）', () => {
 
   it('「俯视」是真的往下压：俯角比「正对」高一大截', () => {
     const upright = PVE_VIEW_PRESETS[0]!;
-    const top = PVE_VIEW_PRESETS[3]!;
+    const top = PVE_VIEW_PRESETS[2]!;
+    expect(top.name).toBe('俯视');
     expect(top.pitch).toBeGreaterThanOrEqual(upright.pitch + 28);
   });
 });
@@ -104,10 +109,10 @@ describe('导演换表与选档', () => {
     const rig = new CameraRig({ tilesAcross: 20, yawDeg: 270, pitchDeg: 44 });
     d.update(1 / 60, rig, 32, { x: 16, z: 16 });
     const frozen = rig.pitch;
-    d.select(3); // 俯视 76°
+    d.select(2); // 俯视 76°
     expect(d.locked).toBe(false);
     for (let i = 0; i < 240; i++) d.update(1 / 60, rig, 32, { x: 16, z: 16 });
     expect(rig.pitch).toBeGreaterThan(frozen + 20);
-    expect(rig.pitch).toBeCloseTo(PVE_VIEW_PRESETS[3]!.pitch, 0); // 导演没设 pitchBias，直接落到 76°
+    expect(rig.pitch).toBeCloseTo(PVE_VIEW_PRESETS[2]!.pitch, 0); // 导演没设 pitchBias，直接落到 76°
   });
 });

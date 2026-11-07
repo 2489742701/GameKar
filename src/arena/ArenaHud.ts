@@ -34,7 +34,7 @@ const SETTINGS_TABS: { key: SettingsTab; label: string; hint: string }[] = [
   {
     key: 'auto',
     label: '托管',
-    hint: '改完立刻生效并存在本机；自动托管点屏幕就交还，手动托管要再点一次才关。',
+    hint: '托管只能手动点：点了就一直代打，再点一次才交还。',
   },
   {
     key: 'controls',
@@ -64,10 +64,10 @@ export interface ArenaHudOptions {
    */
   onQuit?: () => void;
   /**
-   * 视角机位菜单选第 i 档（2026-11-07 用户："给一个斜着的，还有一个正视角、
-   * 斜视角，这些都可以设置"）。清单来自 `app.viewPresets`，这里只报下标。
+   * 视角按钮：点一下切到**下一档**（2026-11-07 傍晚用户："你的视野不要搞得那么复杂，
+   * 点一下就切换的"）。上一版是点开一张清单再选，两步、还多一块浮层挡视线。
    */
-  onPickView: (index: number) => void;
+  onCycleView: () => void;
   /** 工具行「托管」按钮：切手动托管开/关（2026-11-07） */
   onToggleAuto: () => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
@@ -132,12 +132,10 @@ export class ArenaHud {
   private readonly settingsPanes = new Map<SettingsTab, HTMLElement>();
   private settingsHint!: HTMLElement;
   /** 视角机位菜单（斜视 / 正对 / 我方 / 俯视）；默认收起 */
-  private readonly viewMenu: HTMLElement;
   /** 已经退出过一次的手指：两段式「退出」的第二下才真走 */
   private quitArmed = false;
   private quitTimer: number | null = null;
   /** 上一次画菜单高亮用的指纹：20Hz 的 refresh 里不重复刷 DOM */
-  private lastViewKey = '';
   /** 倒计时：数字（一件只建一次，20Hz 里不重建） */
   private readonly clock = make('div', 'ahud__clock');
   private readonly clockNum = make('b', 'ahud__clock__num', '');
@@ -147,8 +145,7 @@ export class ArenaHud {
   private viewBtn!: HTMLButtonElement;
   private quitBtn!: HTMLButtonElement;
   private autoBtn!: HTMLButtonElement;
-  /** 设置面板「托管」区的两个开关（工具行状态变了要一起重画） */
-  private autoIdleBtn!: HTMLButtonElement;
+  /** 设置面板「托管」区的开关（工具行状态变了要一起重画） */
   private autoManualBtn!: HTMLButtonElement;
   private toastTimer: number | null = null;
 
@@ -222,17 +219,16 @@ export class ArenaHud {
     const bottom = make('div', 'ahud__bottom');
     const tools = make('div', 'ahud__tools');
     /**
-     * 视角机位（2026-11-07 用户："手机端额外设置一个视角，给一个斜着的，
-     * 还有一个正视角、斜视角，这些都可以设置"）。
+     * 视角按钮（2026-11-07 傍晚定稿）：**点一下切一档**，不弹清单、不两段式。
      *
-     * 上一版这颗按钮是**循环**切机位，字跟着变但人看不到"还有哪些档"——
-     * 现在点开是一张清单，档位名来自 `app.viewPresets`（PVE 和 1v1 各一份），
-     * UI 不自己维护名字，加一档只改 `Camera.ts`。
+     * 上一版点开是一张浮层清单，用户原话："你的视野不要搞得那么复杂，点一下就切换的"。
+     * 档位名仍来自 `app.viewPresets`（导演那份表），按钮只显示当前档。
+     * 真要精调机位就走 F2 调试面板 —— 那才是"大量数据可以调"的地方。
      */
     const view = make('button', 'ahud__view', '视角 · 斜视');
     this.viewBtn = view;
     view.type = 'button';
-    view.addEventListener('click', () => this.toggleViewMenu());
+    view.addEventListener('click', () => this.opts.onCycleView());
     /**
      * 退出（2026-11-07 用户："这个进游戏之后退不出来"）：
      * 两段式 —— 第一下只把按钮改成「再点一次」，2.6 秒不跟就自己复位。
@@ -252,24 +248,6 @@ export class ArenaHud {
     auto.type = 'button';
     auto.addEventListener('click', () => this.opts.onToggleAuto());
     tools.append(view, auto, quit);
-    /**
-     * 视角清单（浮在工具行上方，点一下就走）。
-     * 条目在这里按 `app.viewPresets` 生成一次 —— 机位表是**每个模式一份**
-     * （1v1 三档、PVE 四档），所以不能在 UI 里写死名字。
-     */
-    this.viewMenu = make('div', 'ahud__viewmenu');
-    this.viewMenu.hidden = true;
-    for (let i = 0; i < this.app.viewPresets.length; i++) {
-      const item = make('button', 'ahud__viewmenu__item', this.app.viewPresets[i]!.name);
-      item.type = 'button';
-      item.dataset['index'] = String(i);
-      item.addEventListener('click', () => {
-        this.opts.onPickView(i);
-        this.toggleViewMenu(false);
-      });
-      this.viewMenu.append(item);
-    }
-    tools.append(this.viewMenu);
     /**
      * 设置面板（2026-11-06 用户："这个设置能不能额外准备一个自定义设置里面给他处理"）：
      * 战斗中也能调花色 —— 只攒存档，**下一局生效**（「再来一局」= reload 读新档）。
@@ -320,8 +298,6 @@ export class ArenaHud {
       e.preventDefault();
       this.openSettings();
     });
-    // 手指点回战场：先把视角清单收起来（不然它会一直挂在那儿挡视线）
-    this.app.stage.addEventListener('pointerdown', () => this.toggleViewMenu(false));
     /**
      * 座位只给**玩家阵营**建（2026-11-07 实机纠错，用户："我甚至能看到敌方的卡牌和敌方的经济"）。
      *
@@ -551,16 +527,15 @@ export class ArenaHud {
     });
   }
 
-  /** 设置面板「托管」区的两行说明（状态变了跟着换文案） */
-  private autoIdleDesc!: HTMLElement;
+  /** 设置面板「托管」区的说明（状态变了跟着换文案） */
   private autoManualDesc!: HTMLElement;
 
   /**
-   * 「托管」设置区（2026-11-07 用户："在设置里面可以打开托管"）。
+   * 「托管」设置区。
    *
-   * 两个开关对应两条不同的路径，别合并成一个：
-   *  - **闲置自动**：`controls.idleAuto`，存 localStorage，点屏幕立刻交还控制权；
-   *  - **现在就托管**：`autoPilot.manual`，和工具行那颗按钮是同一个状态，常驻到再点一次。
+   * 2026-11-07 傍晚用户改了口径："托管就是点一下就托管，不要等 5 秒，
+   * 必须玩家自己手动点才会托管" —— 所以这里只剩「现在就托管」一个开关，
+   * 原来那行「闲置 5 秒自动托管」连同 `controls.idleAuto` 那个存档位一起删掉了。
    */
   private buildAutoOptions(): HTMLElement {
     const box = make('div', 'ahud__opts');
@@ -580,34 +555,23 @@ export class ArenaHud {
       box.append(line);
       return [btn, desc];
     };
-    const [idleBtn, idleDesc] = row('闲置 5 秒自动托管', () => {
-      this.app.autoPilot.setIdleAuto(!this.app.controls.idleAuto);
-      saveControls(this.app.controls);
-    });
     const [manualBtn, manualDesc] = row('现在就托管', () => this.opts.onToggleAuto());
-    this.autoIdleBtn = idleBtn;
     this.autoManualBtn = manualBtn;
-    this.autoIdleDesc = idleDesc;
     this.autoManualDesc = manualDesc;
     // 每页只留一句说明（在面板底部 __foot），这里不再重复写一段
     this.paintAuto();
     return box;
   }
 
-  /** 工具行按钮 + 设置面板两个开关，全部读同一个 `autoPilot.state`。 */
+  /** 工具行按钮 + 设置面板开关，读同一个 `autoPilot.state`。 */
   private paintAuto(): void {
-    if (!this.autoBtn || !this.autoIdleBtn) return;
+    if (!this.autoBtn || !this.autoManualBtn) return;
     const s = this.app.autoPilot.state;
-    const label = s.manual ? '托管 · 手' : s.active ? '托管 · 自动' : '托管';
+    const label = s.manual ? '托管 · 开' : '托管';
     if (this.autoBtn.textContent !== label) this.autoBtn.textContent = label;
     this.autoBtn.dataset['on'] = String(s.active);
-    this.autoIdleBtn.dataset['on'] = String(s.idleAuto);
-    this.autoIdleBtn.textContent = s.idleAuto ? '自动 · 开' : '自动 · 关';
-    this.autoIdleDesc.textContent = s.idleAuto
-      ? '5 秒没操作就交给 AI；点一下屏幕立刻拿回控制权'
-      : '关掉了，只在你手动点「托管」时才代打';
     this.autoManualBtn.dataset['on'] = String(s.manual);
-    this.autoManualBtn.textContent = s.manual ? '手动 · 开' : '手动 · 关';
+    this.autoManualBtn.textContent = s.manual ? '托管 · 开' : '托管 · 关';
     this.autoManualDesc.textContent = s.manual
       ? '一直代打，直到再点一次（和工具行「托管」是同一个开关）'
       : '自己打；点一下交给 AI 常驻代打';
@@ -711,30 +675,9 @@ export class ArenaHud {
     if (next) this.selectSettingsTab(this.settingsTab);
   }
 
-  /**
-   * 叫出设置面板（右键 / 长按空地）。
-   * 顺手收掉视角清单：两块浮层叠在同一片右上角，叠着看就是一锅粥。
-   */
+  /** 叫出设置面板（右键 / 长按空地）。 */
   private openSettings(): void {
-    this.toggleViewMenu(false);
     this.toggleSettings(true);
-  }
-
-  /** 视角机位清单开关。 */
-  private toggleViewMenu(on?: boolean): void {
-    const next = on ?? this.viewMenu.hidden;
-    this.viewMenu.hidden = !next;
-    this.viewBtn.dataset['on'] = String(next);
-    if (next) this.paintViewMenu();
-  }
-
-  /** 高亮当前档位。只看 `viewIndex`，名字在 20Hz 里不会变。 */
-  private paintViewMenu(): void {
-    const idx = this.app.viewIndex;
-    for (const node of Array.from(this.viewMenu.children)) {
-      const item = node as HTMLElement;
-      item.dataset['on'] = String(Number(item.dataset['index']) === idx);
-    }
   }
 
   /**
@@ -1094,14 +1037,10 @@ export class ArenaHud {
     this.refresh();
   }
 
-  /** 视角按钮上的那行字（自动/手动 + 机位名），顺带刷新菜单高亮。 */
+  /** 视角按钮上的那行字（当前机位名）。 */
   setViewStatus(status: string): void {
     const text = `视角 · ${status}`;
     if (this.viewBtn && this.viewBtn.textContent !== text) this.viewBtn.textContent = text;
-    const key = `${this.app.viewIndex}:${status}`;
-    if (key === this.lastViewKey) return;
-    this.lastViewKey = key;
-    this.paintViewMenu();
   }
 
   /** 给外部（比如实机探针）读一眼当前卡面文案（第 0 号座位）。 */

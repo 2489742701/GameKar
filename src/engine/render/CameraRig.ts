@@ -196,6 +196,11 @@ export class CameraRig {
     this.applyFrustum();
   }
 
+  /** 当前镜头中心（世界坐标；`desired` 是阻尼目标，玩家看到的就是它收敛到的位置）。 */
+  get center(): { x: number; z: number } {
+    return { x: this.desired.x, z: this.desired.z };
+  }
+
   centerOnWorld(x: number, z: number, instant = false): void {
     this.desired.set(x, this.groundY, z);
     this.clampDesired();

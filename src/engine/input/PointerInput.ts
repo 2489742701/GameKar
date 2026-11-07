@@ -9,8 +9,18 @@
 export interface PointerHandlers {
   onPan?(dx: number, dy: number): void;
   onTap?(x: number, y: number): void;
-  /** 按住不动超过 LONG_PRESS_MS：查详情用的手势，跟"点一下"互斥 */
-  onLongPress?(x: number, y: number): void;
+  /**
+   * 按住不动超过 LONG_PRESS_MS：查详情用的手势，跟"点一下"互斥。
+   *
+   * **返回 true = 这次手势被上层接管**（2026-11-07：选中手牌后长按地图要出影子放牌）：
+   * 接管之后这一根手指的 move/up 不再走平移与点击，而是转给
+   * `onGrabMove` / `onGrabEnd` —— 否则玩家一边挪影子、镜头一边跟着平移。
+   */
+  onLongPress?(x: number, y: number, pointerType: string): boolean | void;
+  /** 接管期间手指移动（客户端相对画布坐标）。 */
+  onGrabMove?(x: number, y: number, pointerType: string): void;
+  /** 接管期间松手（x/y 是松手位置）。 */
+  onGrabEnd?(x: number, y: number, pointerType: string): void;
   onZoom?(factor: number, x: number, y: number): void;
   onRotate?(degrees: number, x: number, y: number): void;
   /**
@@ -45,6 +55,10 @@ export class PointerInput {
   private attached = false;
   private longPressTimer: number | null = null;
   private longPressFired = false;
+  /** 长按被上层接管（放牌）：这一根手指后续的 move/up 不再走平移与点击 */
+  private grabbed = false;
+  /** 当前指针类型（长按定时器里拿不到事件对象，只能先记下来） */
+  private pointerType = 'mouse';
 
   constructor(
     private readonly el: HTMLElement,
@@ -89,6 +103,7 @@ export class PointerInput {
     // 先登记，再抢捕获：setPointerCapture 对"当前不活跃的 pointerId"会抛 NotFoundError，
     // 写在前面会让这根手指根本进不了表 —— 双指捻合就是这么变成空手势的
     this.pointers.set(e.pointerId, { x, y, startX: x, startY: y, startAt: performance.now() });
+    this.pointerType = e.pointerType || 'mouse';
     this.dragging = false;
 
     try {
@@ -112,7 +127,8 @@ export class PointerInput {
     this.longPressTimer = window.setTimeout(() => {
       if (this.dragging || this.pointers.size !== 1) return;
       this.longPressFired = true;
-      this.h.onLongPress?.(x, y);
+      const tracked = this.pointers.values().next().value as Tracked | undefined;
+      this.grabbed = this.h.onLongPress?.(tracked?.x ?? x, tracked?.y ?? y, this.pointerType) === true;
     }, LONG_PRESS_MS);
   };
 
@@ -144,6 +160,12 @@ export class PointerInput {
     const dy = y - tracked.y;
     tracked.x = x;
     tracked.y = y;
+
+    // 长按已被接管（放牌）：影子跟着手指走，**不**平移镜头
+    if (this.grabbed) {
+      this.h.onGrabMove?.(x, y, this.pointerType);
+      return;
+    }
 
     if (!this.dragging && Math.hypot(x - tracked.startX, y - tracked.startY) > TAP_SLOP) {
       this.dragging = true;
@@ -199,6 +221,14 @@ export class PointerInput {
       this.pinchCy = 0;
     }
     if (!tracked) return;
+
+    if (this.grabbed) {
+      this.grabbed = false;
+      this.longPressFired = false;
+      this.dragging = false;
+      this.h.onGrabEnd?.(tracked.x, tracked.y, this.pointerType);
+      return;
+    }
 
     const moved = Math.hypot(tracked.x - tracked.startX, tracked.y - tracked.startY);
     const held = performance.now() - tracked.startAt;
