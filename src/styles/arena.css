@@ -1141,6 +1141,78 @@
   color: var(--text-faint);
 }
 
+/**
+ * 「操作 · 方向」四个反转开关（2026-11-07）。
+ * 每行左侧写清**当前这一侧到底会怎样**，右侧是开关 —— 反转类设置只给
+ * 「开 / 关」两个字的下场就是用户开着面板还得猜自己拨到了哪边。
+ */
+.ahud__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 10px;
+  border-bottom: 1px solid var(--wood-1);
+}
+
+.ahud__opts__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--gold-hi);
+}
+
+.ahud__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(246, 220, 156, 0.12);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.ahud__opt__txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ahud__opt__name {
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.ahud__opt__desc {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
+
+.ahud__opt__btn {
+  flex: none;
+  min-height: 32px;
+  min-width: 84px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--wood-6);
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  cursor: pointer;
+  background: var(--wood-3);
+}
+
+.ahud__opt__btn[data-on='true'] {
+  border-color: var(--gold);
+  color: var(--gold-hi);
+  background: rgba(246, 220, 156, 0.14);
+}
+
+.ahud__opt__btn:active {
+  transform: translateY(1px);
+}
+
 /* 视角按钮在被点开时点亮（清单开着，别让人以为没反应） */
 .ahud__view[data-on='true'] {
   border-color: var(--gold-hi);

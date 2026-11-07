@@ -16,6 +16,7 @@ import { BREAD_ICON, COIN_ICON, POP_ICON } from './supplyIcons';
 import { supplyRowsHtml } from './visuals/supplyRows';
 import { needsStaffing } from './visuals/labels';
 import { createBannerEditor } from './bannerEditor';
+import { saveControls, type ControlPrefs } from './controls';
 
 
 
@@ -232,7 +233,8 @@ export class ArenaHud {
     this.settingsPanel = make('div', 'ahud__settings');
     this.settingsPanel.hidden = true;
     const settingsHead = make('div', 'ahud__settings__head');
-    const settingsTitle = make('span', 'ahud__settings__title', '自定义 · 你的旗帜');
+    // 面板现在装两样东西（方向偏好 + 花色），标题别再写死成"你的旗帜"
+    const settingsTitle = make('span', 'ahud__settings__title', '设置');
     const settingsClose = make('button', 'ahud__settings__close', '×');
     settingsClose.type = 'button';
     settingsClose.addEventListener('click', () => this.toggleSettings(false));
@@ -240,9 +242,9 @@ export class ArenaHud {
     const settingsNote = make(
       'p',
       'ahud__settings__note',
-      '游戏里右键（手机长按空地）随时叫出这一页 · 改完存档，点「再来一局」就能带上新旗上场',
+      '游戏里右键（手机长按空地）随时叫出这一页 · 操作方向改完立刻生效并常驻；花色存档后下一局上场',
     );
-    this.settingsPanel.append(settingsHead, settingsNote, createBannerEditor());
+    this.settingsPanel.append(settingsHead, settingsNote, this.buildControlOptions(), createBannerEditor());
     /**
      * 右键 = 设置。`PointerInput` 在画布上已经 `preventDefault` 掉了浏览器菜单，
      * 但那是"别弹系统菜单"，不会吃掉别的监听者，这里照收。
@@ -478,6 +480,80 @@ export class ArenaHud {
       this.dragFrom.delete(e.pointerId);
       this.dragging.delete(e.pointerId);
     });
+  }
+
+  /**
+   * 「操作 · 方向」四个开关（2026-11-07 用户："把操作反转之类的都设置好，
+   * 可以常态化保存"）。
+   *
+   * 不做事件总线、不重载页面：`ArenaApp.controls` 是**同一个可变对象**，
+   * 四个手势回调每次事件都直接读它，所以改完下一个手势就是新方向；
+   * `saveControls()` 写 localStorage，下次启动 `loadControls()` 读回来。
+   *
+   * 每行都写清"当前这个方向到底会怎样"，而不是只给一个含糊的「开 / 关」——
+   * 反转类设置最怕的就是用户开着面板还得猜自己拨到了哪一边。
+   */
+  private buildControlOptions(): HTMLElement {
+    const box = make('div', 'ahud__opts');
+    box.append(make('div', 'ahud__opts__title', '操作 · 方向'));
+    const rows: {
+      key: keyof ControlPrefs;
+      name: string;
+      normal: string;
+      inverted: string;
+    }[] = [
+      {
+        key: 'tiltInvert',
+        name: '双指上下推 · 俯仰',
+        normal: '往下滑 = 更俯视，往上滑 = 更平',
+        inverted: '往下滑 = 更平，往上滑 = 更俯视',
+      },
+      {
+        key: 'panInvert',
+        name: '单指拖 · 平移',
+        normal: '手指往哪拖，地图就往哪走',
+        inverted: '反向拖拽（镜头跟着手指走）',
+      },
+      {
+        key: 'rotateInvert',
+        name: '双指拧 · 转视角',
+        normal: '顺时针拧 = 镜头右转',
+        inverted: '顺时针拧 = 镜头左转',
+      },
+      {
+        key: 'zoomInvert',
+        name: '捏合 / 滚轮 · 缩放',
+        normal: '张开 = 拉近，捏合 = 拉远',
+        inverted: '张开 = 拉远，捏合 = 拉近',
+      },
+    ];
+    const status = make('p', 'ahud__settings__note', '改完立刻生效，存在本机；下次进游戏还是这个方向。');
+    for (const row of rows) {
+      const line = make('div', 'ahud__opt');
+      const txt = make('div', 'ahud__opt__txt');
+      const desc = make('span', 'ahud__opt__desc');
+      const btn = make('button', 'ahud__opt__btn');
+      btn.type = 'button';
+      const paint = (): void => {
+        const on = this.app.controls[row.key];
+        btn.dataset['on'] = String(on);
+        btn.textContent = on ? '反转 · 开' : '反转 · 关';
+        btn.setAttribute('aria-pressed', String(on));
+        desc.textContent = on ? row.inverted : row.normal;
+      };
+      btn.addEventListener('click', () => {
+        this.app.controls[row.key] = !this.app.controls[row.key];
+        saveControls(this.app.controls);
+        paint();
+        status.textContent = `已保存「${row.name}」· 立刻生效，下次进游戏还是这个方向`;
+      });
+      txt.append(make('span', 'ahud__opt__name', row.name), desc);
+      line.append(txt, btn);
+      box.append(line);
+      paint();
+    }
+    box.append(status);
+    return box;
   }
 
   /** 设置面板开关。开着的时候战斗照跑（面板浮在上面，不挡逻辑）。 */

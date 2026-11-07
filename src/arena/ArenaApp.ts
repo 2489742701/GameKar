@@ -29,6 +29,7 @@ import { TileMap } from '@game/world/TileMap';
 import { ArenaWorld, statsOf, type ArenaBuilding, type ArenaUnit, type PlayResult, type Side } from './ArenaWorld';
 import { AmbientDust } from './ambient';
 import { ArenaDirector, PVE_VIEW_PRESETS, type ViewPreset } from './Camera';
+import { loadControls, panDelta, pitchDelta, rotateDelta, zoomDelta } from './controls';
 import { ARENA_CAMERA, BUILDING_SPECS, BUILDING_SCALE, NO_BUILD, RUIN, UNIT_HEIGHT } from './config';
 import { DamageFx } from './damage';
 import { ARENA_FLAGS, ARENA_MODELS, type ArenaModelName } from './models';
@@ -245,6 +246,12 @@ export class ArenaApp {
   /** 已经放过粒子效果的近战命中 id（world.hits 是逐帧还在的事件，别重复放） */
   private readonly seenHits = new Set<number>();
   readonly director = new ArenaDirector();
+  /**
+   * 操作方向偏好（2026-11-07）：从 localStorage 读，**四个手势回调每帧直接读它**。
+   * 设置面板改的是同一个对象并立刻 `saveControls()`，所以不用重载、不用事件总线：
+   * 下一次指针事件就是新方向，下次进游戏也还是这个方向。
+   */
+  readonly controls = loadControls();
   /** 所有声音都从这里发：合成音，不加载素材（见 `@audio/sfx`） */
   readonly sfx = new Sfx();
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
@@ -377,27 +384,30 @@ export class ArenaApp {
        */
       onPan: (dx, dy) => {
         this.director.userTouched();
-        this.rig.panByPixels(dx, dy);
+        const [px, py] = panDelta(dx, dy, this.controls);
+        this.rig.panByPixels(px, py);
       },
       onZoom: (factor, x, y) => {
         this.director.userTouched();
-        this.rig.zoomBy(factor, x, y);
+        this.rig.zoomBy(zoomDelta(factor, this.controls), x, y);
       },
       onRotate: (deg) => {
         this.director.userTouched();
-        this.rig.rotateBy(deg);
+        this.rig.rotateBy(rotateDelta(deg, this.controls));
       },
       /**
-       * 双指整体上下推 = 调俯仰角（2026-11-07 用户："还有上下转……最大可以转到平行"）。
-       * 往上推 = 更俯视（看得见全场布局），往下拉 = 更平（贴近地面看兵线）。
+       * 双指整体上下推 = 调俯仰角（2026-11-07 用户："还有上下转……最大可以转到平行"，
+       * 下午又追加"向上滑和向下滑反转一下"）。
+       *
+       * **默认方向按用户偏好改过**：往下滑 = 更俯视（看得见全场），
+       * 往上滑 = 更平（贴近地面看兵线）。上一版是反的（`pitch - dy·k`），
+       * 现在把符号搬进 `controls.ts` 的 `pitchDelta()`，设置里勾「反转」才回到旧方向。
        *
        * 上下限在 `CameraRig`：6°（几乎与地面平行）~ 88°（几乎正上方）。
-       * 0.22°/px 是按手感定的：一根手指走 300px 能扫完大半段行程，
-       * 再快就一碰就过头，再慢就要站起来划两下。
        */
       onTilt: (dy) => {
         this.director.userTouched();
-        this.rig.setPitch(this.rig.pitch - dy * 0.22);
+        this.rig.setPitch(this.rig.pitch + pitchDelta(dy, this.controls));
       },
       onTap: (x, y) => this.handleTap(x, y),
       onLongPress: (x, y) => this.handleLongPress(x, y),
