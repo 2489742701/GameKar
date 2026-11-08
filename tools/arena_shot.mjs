@@ -9,6 +9,9 @@
  *
  * 例：
  *   node tools/arena_shot.mjs http://localhost:5173/arena.html?auto=1 14 shot.png
+ *   # 开发者模式默认关：要截相机调试面板，URL 必须带 &debug=1（见 src/arena/devMode.ts）
+ *   node tools/arena_shot.mjs "http://localhost:5173/arena.html?auto=1&debug=1" 3 dbg.png \
+ *     "window.__dbg && window.__dbg.show()"
  *   # 把时钟拨到快结束，验结算面板：
  *   node tools/arena_shot.mjs "http://localhost:5173/arena.html?auto=1" 5 end.png \
  *     "new Promise(r=>setInterval(()=>{if(window.arena){window.arena.world.elapsed=178.5;r('set')}},100))"

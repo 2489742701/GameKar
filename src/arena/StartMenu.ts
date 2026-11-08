@@ -13,8 +13,8 @@ import { el } from '@ui/dom';
 import type { Sfx } from '@audio/sfx';
 import { createBannerEditor } from './bannerEditor';
 
-/** 菜单上的三个模式。`pve1` = 单人守城，`pve2` = 双人同屏守城。 */
-export type MenuMode = 'arena' | 'pve1' | 'pve2';
+/** 菜单上的四个模式。`pve1` = 单人守城，`pve2` = 双人同屏守城，`endless` = 1v1 不限时。 */
+export type MenuMode = 'arena' | 'pve1' | 'pve2' | 'endless';
 
 export interface StartMenuOptions {
   seed: number;
@@ -59,7 +59,11 @@ const RULES: { title: string; body: string }[] = [
   },
   {
     title: '兵种',
-    body: '近战扛线、远程输出、攻城拆楼。移动火炮射程 7.2 格，比箭塔还远 —— 它能站在塔外面把塔拆掉。',
+    body: '近战扛线、远程输出、攻城拆楼。移动火炮射程 7.2 格，能白嫖炮塔和大本营，但压不住箭塔（7.8 格）。',
+  },
+  {
+    title: '1v1 无尽',
+    body: '和对战同一套规则，但**没有倒计时也没有加时**：一直打，直到某一方大本营被拆。顶上的时钟改成向上计时。',
   },
 ];
 
@@ -78,20 +82,24 @@ export class StartMenu {
 
     // ---- 标题
     const mode: MenuMode = this.opts.mode ?? 'arena';
-    const inPve = mode !== 'arena';
+    const inPve = mode === 'pve1' || mode === 'pve2';
+    const inEndless = mode === 'endless';
     const title = el('div', 'start__title');
     title.append(
       el('h1', 'start__name', 'GAMEKAR'),
       el(
         'p',
         'start__sub',
-        inPve ? '守城模式 · 五波守住大本营' : '建筑战场 · 三分钟一局',
+        inEndless
+          ? '1v1 无尽 · 不限时间，拆掉对面大本营才结束'
+          : inPve ? '守城模式 · 五波守住大本营' : '建筑战场 · 三分钟一局',
       ),
     );
 
     // ---- 按钮
     const actions = el('div', 'start__actions');
-    const play = el('button', 'start__btn start__btn--primary', inPve ? '开始守关' : '开始对战');
+    const playLabel = inEndless ? '开始无尽' : inPve ? '开始守关' : '开始对战';
+    const play = el('button', 'start__btn start__btn--primary', playLabel);
     play.type = 'button';
     play.addEventListener('click', () => this.opts.onStart());
 
@@ -106,6 +114,7 @@ export class StartMenu {
      */
     const allModes: { key: MenuMode; label: string }[] = [
       { key: 'arena', label: '普通对战' },
+      { key: 'endless', label: '1v1 无尽' },
       { key: 'pve1', label: '守城 PVE' },
       { key: 'pve2', label: '双人同屏' },
     ];

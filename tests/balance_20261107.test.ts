@@ -142,9 +142,9 @@ describe('唯一入口：只有 hurtBuilding 改建筑血量，且只有 arena �
     expect(writes[0]).toContain('damageOf(attack * scale, 0)');
   });
 
-  it('倍率的读取写死在模式判断里（`mode === arena` 才乘，门不开在别处）', () => {
+  it('倍率的读取写死在模式判断里（只有 PVE 不乘，1v1 与 1v1 无尽都乘）', () => {
     const world = readFileSync(join(ARENA_SRC, 'ArenaWorld.ts'), 'utf8');
-    expect(world).toContain("const scale = this.mode === 'arena' ? BUILDING_DAMAGE_SCALE : 1;");
+    expect(world).toContain("const scale = this.mode === 'pve' ? 1 : BUILDING_DAMAGE_SCALE;");
   });
 
   it('常数只在 config.ts 里定义一次（不许多处写 2.2）', () => {

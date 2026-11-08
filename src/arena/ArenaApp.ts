@@ -69,8 +69,8 @@ export interface ArenaAppOptions {
   container: HTMLElement;
   canvas: HTMLCanvasElement;
   seed?: number;
-  /** 玩法模式（2026-11-07）：`pve` = 守波次，场地与判据都换一套；默认对战 */
-  mode?: 'arena' | 'pve';
+  /** 玩法模式（2026-11-07）：默认对战；`pve` 守波次；`endless` 1v1 无尽（不限时） */
+  mode?: 'arena' | 'pve' | 'endless';
   /** PVE 关卡 id（不给就用第一关） */
   level?: string;
   /** PVE 玩家人数（1 或 2，两人都在 blue 一侧） */

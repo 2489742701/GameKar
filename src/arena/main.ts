@@ -15,6 +15,7 @@ import { ArenaHud } from './ArenaHud';
 import { DebugPanel } from './DebugPanel';
 import { StartMenu } from './StartMenu';
 import { loadSettings, resolveEnemyBanner, settingsFromParam } from './banner';
+import { loadDevMode, saveDevMode } from './devMode';
 import { setSideBanners } from './theme';
 
 const required = <T extends Element>(id: string): T => {
@@ -46,7 +47,13 @@ const skipMenu = params.get('play') === '1' || params.get('auto') === '1' || par
  * APK 与桌面 HTML 都不用多打一份。
  * `?level=outpost` 选关卡，`?players=2` 开双人同屏。
  */
-const mode = params.get('mode') === 'pve' ? 'pve' : 'arena';
+const modeParam = params.get('mode');
+/**
+ * `?mode=endless`：**1v1 无尽**（2026-11-08 用户："不限时间一直打"）。
+ * 和对战同一张图、同一个 AI，只去掉时限与加时；唯一出口是拆掉对面大本营。
+ */
+const mode: 'arena' | 'pve' | 'endless' =
+  modeParam === 'pve' ? 'pve' : modeParam === 'endless' ? 'endless' : 'arena';
 const level = params.get('level') ?? undefined;
 const players = Math.min(2, Math.max(1, Number(params.get('players') ?? 1) || 1));
 /**
@@ -73,6 +80,25 @@ installTheme();
 
 let hud: ArenaHud | null = null;
 let debug: DebugPanel | null = null;
+
+/**
+ * **开发者模式**（2026-11-08 用户："把调试默认设为看不见，
+ * 在设置里面，将'开发者模式'开关默认设为关闭"）。
+ *
+ * 状态只在这一处：设置页的开关、`F2`、工具行「调试」按钮、调试面板的可用性
+ * 全读同一个 `devMode`。默认关；`?debug=1` 只给开发机 / 无头探针强制开一次，
+ * 不写进存档，所以在设置里照样能关掉。
+ */
+const forcedDebug = params.get('debug') === '1';
+let devMode = forcedDebug || loadDevMode();
+
+function setDevMode(on: boolean): void {
+  devMode = on;
+  saveDevMode(on);
+  hud?.setDevMode(on);
+  debug?.setEnabled(on);
+  hud?.say(on ? '开发者模式已开：F2 /「调试」可用' : '开发者模式已关');
+}
 
 const app = await ArenaApp.boot({
   container,
@@ -147,6 +173,9 @@ hud = new ArenaHud(container, app, {
    * 面板本身是临时件，定稿机位后跟它一起删。
    */
   onToggleDebug: () => debug?.toggle(),
+  /** 设置页「开发者模式」开关：读同一份状态、改同一份状态 */
+  devMode: () => devMode,
+  onDevModeChange: (on) => setDevMode(on),
   onReroll: (player = 0) => {
     const res = app.rerollHand(player);
     if (res.ok) {
@@ -177,7 +206,7 @@ if (!skipMenu && !autoStart) {
   const menu = new StartMenu(container, {
     seed: seedFromUrl(20261027),
     // 当前模式只决定"主按钮开始的是哪一局"，另外两个模式的入口永远都在
-    mode: mode === 'pve' ? (players >= 2 ? 'pve2' : 'pve1') : 'arena',
+    mode: mode === 'pve' ? (players >= 2 ? 'pve2' : 'pve1') : mode,
     sfx: app.sfx,
     /**
      * 切模式 = 重开一局，所以走**跳转**而不是原地切。
@@ -189,6 +218,8 @@ if (!skipMenu && !autoStart) {
       sessionStorage.setItem(AUTOSTART_KEY, '1');
       if (m === 'arena') {
         location.search = '';
+      } else if (m === 'endless') {
+        location.search = '?mode=endless';
       } else {
         location.search = m === 'pve2' ? '?mode=pve&players=2' : '?mode=pve';
       }
@@ -229,7 +260,9 @@ if (autoParam === '1' || autoParam === 'blue') {
 
 // 调试面板：F2 开关。用户在这里调机位、把喜欢的机位码与"要删的东西"记下来发我。
 debug = new DebugPanel(app);
+debug.setEnabled(devMode);
 container.append(debug.el);
+hud?.setDevMode(devMode);
 /**
  * 挂到 window 上只为一件事：**无头探针要能开面板**（`tools/_probe_*.js` 走 CDP eval）。
  * 面板本来就是临时调试件，跟着它一起删；不是给产品逻辑用的入口。
@@ -242,7 +275,8 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'v' || e.key === 'V') hud?.setViewStatus(app.nextView());
   if (e.key === 'F2') {
     e.preventDefault();
-    debug?.toggle();
+    // 开发者模式关着时 F2 完全没反应（不是"按了没面板但也不拦默认行为"）
+    if (devMode) debug?.toggle();
   }
 });
 

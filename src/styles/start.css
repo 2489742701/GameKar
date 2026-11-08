@@ -406,12 +406,15 @@
  */
 .start__row {
   display: flex;
+  /* 四个模式（对战 / 无尽 / 守城 / 双人）时当前模式会被过滤掉，仍剩三颗；
+   * 给个最小宽度让它窄屏自动换行，别把三颗压成看不清的细条。 */
+  flex-wrap: wrap;
   gap: 8px;
   width: 100%;
 }
 
 .start__row .start__btn {
-  flex: 1;
+  flex: 1 1 92px;
 }
 
 .start__btn--pve {

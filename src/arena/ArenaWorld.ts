@@ -162,8 +162,11 @@ export class ArenaWorld {
    * **不再有第二处写死尺寸的地方** —— 视图也读 `world.fieldSize`。
    */
   readonly field: FieldSpec;
-  /** 玩法模式：`arena` 是对战（默认），`pve` 是守波次（场地更大、怪按波次来） */
-  readonly mode: 'arena' | 'pve';
+  /**
+   * 玩法模式：`arena` 对战（默认，3 分钟 + 加时）、`pve` 守波次、
+   * `endless` **1v1 无尽**（同一张 1v1 图、同一个 AI，只是没有时限）。
+   */
+  readonly mode: 'arena' | 'pve' | 'endless';
   /**
    * PVE 的波次进度（`mode === 'arena'` 时是 null）。
    *
@@ -455,12 +458,16 @@ export class ArenaWorld {
    * HUD 拿 `summary().overtime` 区分「最后 30 秒告急」和「加时告急」，两边都是红的。
    */
   get timeLeft(): number {
+    // 无尽没有倒计时：返回 Infinity 而不是 MATCH.seconds − elapsed 的负数，
+    // 免得别处拿这个数当"还剩多久"报一个假读数。HUD 改显示 elapsed（向上计时）。
+    if (this.mode === 'endless') return Number.POSITIVE_INFINITY;
     const total = this.elapsed >= MATCH.seconds ? MATCH.seconds + MATCH.overtimeSeconds : MATCH.seconds;
     return Math.max(0, total - this.elapsed);
   }
 
-  /** 是不是已经进了加时赛（读数用；判负在 `checkOutcome`）。 */
+  /** 是不是已经进了加时赛（判负在 `checkOutcome`）。无尽永远不进加时。 */
   get overtime(): boolean {
+    if (this.mode === 'endless') return false;
     return this.elapsed >= MATCH.seconds && this.outcome === 'playing';
   }
 
@@ -1592,8 +1599,9 @@ export class ArenaWorld {
     //
     // **PVE 不吃这个倍率**：PVE 没有敌方建筑可拆（连红方大本营都不生成），
     // 会走 hurtBuilding 的只有怪拆玩家的楼 —— 给怪翻倍是单方面削玩家。
-    // 实测 12 局教学关从 9 胜掉到 4 胜就是这么来的。1v1 双方对称才适用。
-    const scale = this.mode === 'arena' ? BUILDING_DAMAGE_SCALE : 1;
+    // 实测 12 局教学关从 9 胜掉到 4 胜就是这么来的。
+    // 1v1 与 **1v1 无尽** 都吃倍率：无尽只是去掉时限，拆楼手感必须和对战一致。
+    const scale = this.mode === 'pve' ? 1 : BUILDING_DAMAGE_SCALE;
     b.hp -= damageOf(attack * scale, 0);
     b.lastHit = kind;
     // 挨打 = 重新进入战斗：脱战计时归零、正在进行的修复立刻打断。
@@ -1839,6 +1847,8 @@ export class ArenaWorld {
    */
   private checkOutcome(): void {
     if (this.mode === 'pve') return this.checkPveOutcome();
+    // 1v1 无尽：只判拆家，不判时间（见 checkEndlessOutcome）
+    if (this.mode === 'endless') return this.checkEndlessOutcome();
     const blueCore = this.coreOf('blue');
     const redCore = this.coreOf('red');
 
@@ -1870,6 +1880,25 @@ export class ArenaWorld {
     const redLost = this.destroyed.red;
     if (blueLost !== redLost) return this.finish(redLost > blueLost ? 'win' : 'lose', 'overtime');
     this.finish('draw', 'draw');
+  }
+
+  /**
+   * **1v1 无尽判据**（2026-11-08 用户："无尽模式是 1V1 无尽，就是不限时间一直打"）。
+   *
+   * 和 `arena` 唯一的区别：**没有时间出口**。
+   * 不读 `MATCH.seconds`、不进加时、不按存活楼数积分 ——
+   * 只有拆掉对方大本营才结束，所以一局可以打十分钟、一小时，直到推平为止。
+   * 场地、双方 AI、出牌、后勤、对楼伤害倍率全都和对战一模一样。
+   *
+   * 反证锁在 `tests/endless_20261108.test.ts`：把 MATCH.seconds 塞回这里会红。
+   */
+  private checkEndlessOutcome(): void {
+    const blueCore = this.coreOf('blue');
+    const redCore = this.coreOf('red');
+    if (!blueCore && !redCore) return this.finish('draw', 'core');
+    if (!redCore) return this.finish('win', 'core');
+    if (!blueCore) return this.finish('lose', 'core');
+    // 两边都还立着 ⇒ 继续打，没有 else
   }
 
   /**
@@ -2002,6 +2031,11 @@ export class ArenaWorld {
       reason: this.outcomeReason,
       /** 倒计时（向上取整：显示 0.4 秒时写 1，写 0 会有"时间到了但还没结束"的一格） */
       timeLeft: Math.ceil(this.timeLeft),
+      /** 1v1 无尽：没有倒计时，HUD 改显示这个「已打了多久」（向上计时） */
+      endless: this.mode === 'endless',
+      // 0.05 为一步累加 120 次会得 5.999999999999998，floor 直接慢一秒；
+      // 加一个远小于帧长的 epsilon 消除浮点误差，不提前跳秒。
+      elapsed: Math.floor(this.elapsed + 1e-6),
       matchSeconds: MATCH.seconds,
       /** 是不是在加时赛里（HUD 拿它把时钟切成红色加时态） */
       overtime: this.overtime,

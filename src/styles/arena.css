@@ -155,6 +155,17 @@
   display: inline-block;
 }
 
+/* 1v1 无尽：复用加时徽标那块 DOM，但换成金色常驻（不闪红、不告急） */
+.ahud__clock[data-endless='1'] .ahud__clock__ot {
+  display: inline-block;
+  background: rgba(146, 104, 42, 0.55);
+  color: #ffe6ad;
+}
+
+.ahud__clock[data-endless='1'] {
+  border-color: rgba(246, 220, 156, 0.35);
+}
+
 /* 加时态：整只时钟进红色告急样式（和最后 30 秒同一套视觉） */
 .ahud__clock[data-ot='true'] {
   border-color: #a83a30;

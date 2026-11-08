@@ -81,6 +81,12 @@ export interface ArenaHudOptions {
    * 手机没有 F2，而用户要自己调机位、把 ID 发回来，所以得有一个能点的入口。
    */
   onToggleDebug?: () => void;
+  /**
+   * **开发者模式**（2026-11-08）：状态由入口 `main.ts` 单点持有，HUD 只读写回调。
+   * 关着时「调试」按钮隐藏、F2 无效、相机面板叫不出来；默认关。
+   */
+  devMode?: () => boolean;
+  onDevModeChange?: (on: boolean) => void;
   /** 花 5 金重抽这个玩家的全部手牌（保底民居） */
   onReroll: (player: number) => void;
 }
@@ -175,6 +181,9 @@ export class ArenaHud {
   private readonly endSub = make('div', 'ahud__end__sub', '');
   private viewBtn!: HTMLButtonElement;
   private quitBtn!: HTMLButtonElement;
+  /** 工具行「调试」按钮与设置页「开发者模式」开关（默认都隐藏/关闭） */
+  private devBtn: HTMLButtonElement | null = null;
+  private devModeBtn!: HTMLButtonElement;
   /** 顶栏按钮的文字标签：宽屏才显示，手机上只剩 SVG（时钟才不会被挤偏） */
   private viewBtnText!: HTMLSpanElement;
   private quitBtnText!: HTMLSpanElement;
@@ -307,11 +316,11 @@ export class ArenaHud {
      */
     const settings = iconButton(SETTINGS_ICON, '设置', 'ahud__iconbtn--settings');
     settings.btn.addEventListener('click', () => this.openSettings());
-    /** 相机调试入口（开发期）：手机没有 F2，得有个能点的。只在 dev / ?debug=1 时挂上 */
     const debugBtn = this.opts.onToggleDebug ? make('button', 'ahud__view ahud__debugbtn', '调试') : null;
     if (debugBtn && this.opts.onToggleDebug) {
       debugBtn.type = 'button';
       debugBtn.addEventListener('click', () => this.opts.onToggleDebug?.());
+      this.devBtn = debugBtn;
     }
     topTools.append(view.btn, settings.btn, quit.btn);
     tools.append(auto);
@@ -395,6 +404,8 @@ export class ArenaHud {
     this.el.append(top, bottom, this.toast, this.notice, this.end, this.settingsPanel, this.big, ...tops);
     host.append(this.el);
     this.end.hidden = true;
+    // 默认关：正常玩家看不到「调试」按钮；开了开发者模式才会由 setDevMode 放出来
+    this.setDevMode(this.opts.devMode?.() ?? false);
     /**
      * 结算面板两个出口（2026-11-07 用户："三个模式只变成开始守关"）：
      * 「再来一局」重开当前模式（reload，URL 不动）；
@@ -627,9 +638,31 @@ export class ArenaHud {
     const [manualBtn, manualDesc] = row('现在就托管', () => this.opts.onToggleAuto());
     this.autoManualBtn = manualBtn;
     this.autoManualDesc = manualDesc;
+    /**
+     * 开发者模式（2026-11-08 用户："在设置里面，将开发者模式开关默认设为关闭"）。
+     * 点一下通知入口改状态 + 存档，入口再回调 `setDevMode` 把三处 UI 一起重画 ——
+     * HUD 不自己存这个布尔值。
+     */
+    const [devBtn, devDesc] = row('开发者模式', () =>
+      this.opts.onDevModeChange?.(!(this.opts.devMode?.() ?? false)),
+    );
+    this.devModeBtn = devBtn;
+    devDesc.textContent = '关着时「调试」按钮和 F2 都看不见；开了才显示相机调试面板。';
     // 每页只留一句说明（在面板底部 __foot），这里不再重复写一段
     this.paintAuto();
     return box;
+  }
+
+  /**
+   * 开发者模式的**唯一渲染入口**：入口状态变了就调这里，
+   * 一次把工具行按钮和设置页开关都对齐，不各画各的。
+   */
+  setDevMode(on: boolean): void {
+    if (this.devBtn) this.devBtn.hidden = !on;
+    if (this.devModeBtn) {
+      this.devModeBtn.dataset['on'] = String(on);
+      this.devModeBtn.textContent = on ? '开发者 · 开' : '开发者 · 关';
+    }
   }
 
   /**
@@ -955,9 +988,23 @@ export class ArenaHud {
      * 全部放完之后切成"残余 N 只"（玩家最想知道的就是还剩多少没清）。
      * 判据全部来自 `summary().pve`，UI 不自己算。
      */
-    if (s.pve) {
+    if (s.endless) {
+      /**
+       * 1v1 无尽（2026-11-08）：没有倒计时，时钟改成**向上计时**。
+       * 不读 `timeLeft`（那是 Infinity），也不打告急 / 加时 —— 时间到了不会结束。
+       */
+      const mm = Math.floor(s.elapsed / 60);
+      const ss = s.elapsed % 60;
+      this.clockNum.textContent = `${mm}:${String(ss).padStart(2, '0')}`;
+      this.clockOt.textContent = '无尽';
+      this.clock.dataset['warn'] = 'false';
+      this.clock.dataset['ot'] = 'false';
+      this.clock.dataset['endless'] = '1';
+      this.clock.dataset['pve'] = '0';
+    } else if (s.pve) {
       const { wave, total, nextIn, alive, left, lastWaveOut } = s.pve;
       this.clock.dataset['pve'] = '1';
+      this.clock.dataset['endless'] = '0';
       if (lastWaveOut) {
         this.clockNum.textContent = `${total}/${total} 波`;
         this.clockOt.textContent = `残余 ${alive}`;
@@ -975,6 +1022,7 @@ export class ArenaHud {
       this.clock.dataset['warn'] = String(s.timeLeft <= MATCH.warnSeconds);
       this.clock.dataset['ot'] = String(s.overtime);
       this.clock.dataset['pve'] = '0';
+      this.clock.dataset['endless'] = '0';
     }
 
     // 进加时赛的**一次性**排面：屏幕中央「加时赛」大字闪 2.6 秒 + 两侧彩带
@@ -1048,6 +1096,12 @@ export class ArenaHud {
 
   /** 结算面板第二行。数字一律从 summary 里取，不在这里重算。 */
   private reasonText(s: ReturnType<ArenaApp['world']['summary']>): string {
+    // 1v1 无尽：没有"时间到"这条出口，第二行写战绩（时长 + 双方拆楼数）
+    if (s.endless) {
+      const mm = Math.floor(s.elapsed / 60);
+      const ss = String(s.elapsed % 60).padStart(2, '0');
+      return `无尽 · 打了 ${mm}:${ss} · 拆掉对面 ${s.destroyed.red} 栋 / 自己丢了 ${s.destroyed.blue} 栋`;
+    }
     // PVE：写"守住几波 / 清掉多少 / 大本营剩多少"，不写 1v1 的积分
     if (s.pve) {
       const p = s.pve;

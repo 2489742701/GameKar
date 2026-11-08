@@ -70,6 +70,8 @@ export class DebugPanel {
   private readonly qualityBtns = new Map<string, HTMLButtonElement>();
   private readonly slots: ShotSlot[] = [];
   private open = false;
+  /** 开发者模式关着时，连 F2 / 按钮都不该能叫出面板（P-080） */
+  private enabled = true;
   private readonly labelOf = new Map<HTMLInputElement, HTMLElement>();
 
   constructor(private readonly app: ArenaApp) {
@@ -457,12 +459,20 @@ export class DebugPanel {
     }
   }
 
+  /** 开发者模式开关：关的时候立刻收起面板，且之后 toggle / show 都不生效。 */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    if (!on) this.hide();
+  }
+
   toggle(): void {
+    if (!this.enabled) return;
     if (this.open) this.hide();
     else this.show();
   }
 
   show(): void {
+    if (!this.enabled) return;
     this.open = true;
     this.el.hidden = false;
     this.app.director.userTouched();
