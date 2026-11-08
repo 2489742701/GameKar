@@ -31,6 +31,7 @@ import {
   saveTiltAuto,
 } from './visuals/tiltShift';
 import { RepairButtons } from './visuals/repairButtons';
+import { installArenaBackdrop } from './visuals/backdrop';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
 import { loadPack, type DudePack } from '@game/dudes/pack';
@@ -382,6 +383,10 @@ export class ArenaApp {
     this.damage.onBreach = (x, z, y, dirX, dirZ) => this.fx.spark(x, z, y, dirX, dirZ, 14);
     this.damage.onLand = (x, z, y) => this.fx.dust(x, z, y);
     this.renderer = new Renderer(opts.canvas);
+    // P-082：背景必须是"渲染出来的几何"而不是 gl.clearColor，否则直出与 composer
+    // 对清屏色的色调映射次数不同，一开后期整幅就亮 +10%。详见 visuals/backdrop.ts。
+    // 必须在 composer 之前装好，RenderPass 才会渲到带背景平面的同一场景。
+    installArenaBackdrop(this.scene, this.renderer.instance);
     this.viewport = new Viewport(opts.container);
     /**
      * PVE 的相机初值（2026-11-07）。
@@ -433,10 +438,11 @@ export class ArenaApp {
     this.composer = new EffectComposer(this.renderer.instance);
     this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
     // 顺序很重要：先 OutputPass 完成色调映射 + sRGB 编码，再让风格化 pass 在**显示空间**工作。
-    // 实测两种顺序都还残留约 +10% 的「直出 → 后期」链路差异（three 的线性 render target
-    // 与直出 clearColor 路径不同，未定位到具体一行，读数表见 tiltShift.ts），但前置这版更干净：
-    //   · 景深相对 composer 空转的亮度差 −0.31% → **−0.02%**；
-    //   · dim=1 的压暗 −34% → **−45%**（显示空间乘 0.45，符合「压到 45%」的直觉）。
+    // 前置这版更干净：景深相对 composer 空转的亮度差 −0.31% → −0.02%；
+    // dim=1 是在显示空间按 0.45 倍压暗（符合「压到 45%」的直觉），压暗系数见 DIM_SHADE。
+    // P-082 补：过去还残留的 +10.47%「直出 → 后期」跳变，根因是 gl.clearColor
+    // 绕过色调映射而 OutputPass 又把它映射了一遍；现已由 visuals/backdrop.ts
+    // 把背景改成走材质着色器的全屏平面彻底消掉，读数表见 tiltShift.ts。
     this.composer.addPass(new OutputPass());
     this.tiltPass = new ShaderPass(TILT_SHIFT_SHADER);
     this.tiltPass.uniforms['amount']!.value = this.tiltBase;

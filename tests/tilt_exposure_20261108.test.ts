@@ -11,6 +11,10 @@
  *
  * 这一族锁的是：**景深不改曝光**（含数学反证）、**压暗独立成 dim 通道**、
  * **OutputPass 不许删**。色温/时间轴等第二个昼夜用例出现再加，这一版不实现。
+ *
+ * P-082（2026-11-08）补：P-077 当时还挂着「直出 → 后期」+10.47% 的一次性跳变，
+ * 已定位为 gl.clearColor 绕过色调映射，由 `visuals/backdrop.ts` 的 1×1 线性背景贴图
+ * 收掉（见 `tests/backdrop_20261108.test.ts`）。这里仍锁景深/dim 本身不改曝光。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
