@@ -2193,11 +2193,6 @@ export class ArenaApp {
     return { x: center.x, y: group.position.y + modelTop + 1.1, z: center.z };
   }
 
-  /** 点锤子：只做派单，能不能修全交给 `world.repairEligible / startRepair`。 */
-  requestRepair(id: number): void {
-    if (this.world.startRepair(id, 'blue')) this.opts.onToast?.('工人开始修复这栋楼');
-  }
-
   /** 后期缓冲跟着视口/DPR 走，shader 的 texel 才知道一个像素有多大。 */
   private syncPostFx(cssW: number, cssH: number): void {
     if (!this.composer || !this.tiltPass) return;

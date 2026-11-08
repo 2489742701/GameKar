@@ -1559,8 +1559,12 @@ export class ArenaWorld {
    * **这栋楼现在该不该冒小锤子**。判据全在纯逻辑层，视图只读结果 ——
    * 否则"按钮出现了但点了没反应"这种假读数又会出现。
    */
-  repairEligible(b: ArenaBuilding, side: Side): boolean {
-    if (b.side !== side) return false;                        // 只能修自己的楼
+  /**
+   * `side` 传了 = 额外校验阵营（手动派单 / 玩家侧查询用）；
+   * **不传 = 只看规则本身，给自动派单用** —— 双方对称，AI 也受同一条规则管。
+   */
+  repairEligible(b: ArenaBuilding, side?: Side): boolean {
+    if (side && b.side !== side) return false;
     if (REPAIR.excludeCore && b.kind === 'core') return false; // 大本营是胜负判据
     if (b.hp <= 0 || b.hp >= b.maxHp) return false;           // 满血 / 已拆不修
     if (b.build < 1) return false;                             // 施工中不修
@@ -1573,8 +1577,8 @@ export class ArenaWorld {
   }
 
   /**
-   * 点锤子 = 启动一段修复。返回 false 表示这一下不该被接受
-   *（敌楼 / 满血 / 还在战斗 / 施工 / 大本营 / 已在修）。
+   * 手动派单入口（UI 已经不点了，留给测试与以后可能的手工操作）。
+   * 正常对局里 `tickRepairs` 会自动派单，不经过这里。
    */
   startRepair(id: number, side: Side): boolean {
     const b = this.buildings.get(id);
@@ -1583,10 +1587,18 @@ export class ArenaWorld {
     return true;
   }
 
-  /** 每帧推进修复：按各楼 maxHp 的比例回血，修满自动收工。 */
+  /**
+   * 每帧：脱战够久就**自动开工**（2026-11-08 用户："不需要点按钮，就是自动修复"），
+   * 然后按各楼 maxHp 的比例回血。一段结束还没满就自动接下一段，直到修满或再次挨打。
+   * 挨打时 `hurtBuilding` 会把 `repairLeft` 清零，这一帧就停。
+   */
   private tickRepairs(dt: number): void {
     for (const b of this.buildings.values()) {
-      if (b.repairLeft <= 0) continue;
+      if (b.repairLeft <= 0) {
+        // 不带 side ⇒ 双方对称。放在这里而不是视图层，是为了让托管/AI 局也走同一条规则。
+        if (!this.repairEligible(b)) continue;
+        b.repairLeft = REPAIR.seconds;
+      }
       b.repairLeft = Math.max(0, b.repairLeft - dt);
       b.hp = Math.min(b.maxHp, b.hp + b.maxHp * REPAIR.fractionPerSecond * dt);
       if (b.hp >= b.maxHp) b.repairLeft = 0;
