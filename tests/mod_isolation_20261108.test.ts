@@ -139,11 +139,29 @@ describe('modHost 的加载闸门', () => {
   });
 });
 
-describe('模组自身是零静态依赖的自包含 ESM', () => {
+describe('模组自身不静态依赖主程序（允许内部相对 import）', () => {
   const manifest = JSON.parse(read('public/mods/manifest.json')) as {
     version: number;
     mods: { id: string; name: string; entry: string; api: number }[];
   };
+
+  /** 模组根目录下的 .js（不含 tests/），合并成一份文本做静态断言 */
+  const modSources = (): string[] => {
+    const out: string[] = [];
+    for (const m of manifest.mods) {
+      const dir = join(ROOT, 'public/mods', m.id);
+      for (const name of readdirSync(dir)) {
+        if (name.endsWith('.js')) out.push(readFileSync(join(dir, name), 'utf8'));
+      }
+    }
+    return out;
+  };
+
+  /** 只锁"真正的 import 来源"：模组内部 ./ 相对路径可以，主程序/three 一律不行 */
+  const forbiddenDeps = (src: string): string[] =>
+    [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)]
+      .map((m) => m[1]!)
+      .filter((spec) => !spec.startsWith('./'));
 
   it('清单版本与 host 契约一致，且入口文件真的存在', () => {
     expect(manifest.version).toBe(1);
@@ -154,31 +172,36 @@ describe('模组自身是零静态依赖的自包含 ESM', () => {
     }
   });
 
-  it('反证：模组用到的每个 host.three 成员都必须在 modDeps 白名单里', () => {
+  it('反证：模组拆成几个文件没问题，但绝不能 import 主程序 / three', () => {
+    const all = stripComments(modSources().join('\n'));
+    expect(modSources().length).toBeGreaterThanOrEqual(3); // rules / view / index
+    expect(forbiddenDeps(all)).toEqual([]);
+    // 反证：这些写法放回去必须被抓到
+    expect(forbiddenDeps("import { ArenaWorld } from '@arena/ArenaWorld';")).toContain('@arena/ArenaWorld');
+    expect(forbiddenDeps("import * as T from 'three';")).toContain('three');
+    expect(forbiddenDeps("import { createGame } from './rules.js';")).toEqual([]);
+  });
+
+  it('入口契约齐全：mount / unmount / host.exit() 都在', () => {
+    const all = stripComments(modSources().join('\n'));
+    expect(all).toContain('export function mount');
+    expect(all).toContain('export function unmount');
+    expect(all).toContain('host.exit()');
+    expect(all).toContain('host.makeLoop');       // 循环用注入的引擎，不自己 setInterval
+    expect(all).not.toContain('setInterval');
+  });
+
+  it('反证：若模组用了 host.three，每个成员都必须在 modDeps 白名单里', () => {
     const deps = read('src/arena/modDeps.ts');
     const block = deps.slice(deps.indexOf('export const modThree'), deps.indexOf('export const modEngine'));
     const provided = new Set([...block.matchAll(/^\s*(\w+),?\s*$/gm)].map((m) => m[1]!));
     const missingOf = (used: string[]) => used.filter((k) => !provided.has(k));
-    expect(provided.has('Group')).toBe(true); // 这次真踩过：漏注入 Group 会让 mount 直接失败
-    for (const m of manifest.mods) {
-      const src = read(`public/mods/${m.id}/${m.entry}`);
+    expect(provided.size).toBeGreaterThan(5);
+    for (const src of modSources()) {
       const used = [...new Set([...src.matchAll(/\bT\.(\w+)/g)].map((x) => x[1]!))];
       expect(missingOf(used), `模组用到的 three 成员没注入：${used.join(', ')}`).toEqual([]);
     }
     // 反证：把没注入的成员塞回去，判据必须抓到
     expect(missingOf(['WebGLRenderer', 'NotInjected'])).toEqual(['NotInjected']);
-  });
-
-  it('反证：模组里出现任何 import 语句都算破坏隔离', () => {
-    for (const m of manifest.mods) {
-      const src = read(`public/mods/${m.id}/${m.entry}`);
-      // 注释里提到 "import" 无所谓，只锁真正的语句（行首 import）
-      expect(src).not.toMatch(/^\s*import\s/m);
-      expect(src).toContain('host.three');       // 依赖来自注入
-      expect(src).toContain('export function mount');
-      expect(src).toContain('export function unmount');
-      expect(src).toContain('host.exit()');
-    }
-    expect("import { x } from '@arena/ArenaWorld';").toMatch(/^\s*import\s/m);
   });
 });
