@@ -3,7 +3,9 @@
  * 在设置里面，将'开发者模式'开关默认设为关闭"）。
  *
  * 一个开关管三样：F2、工具行「调试」按钮、相机调试面板的可用性。
- * 状态只在 `main.ts` 一处，HUD / DebugPanel 都只是被通知的一方。
+ * 状态只在入口一处，HUD / DebugPanel 都只是被通知的一方。
+ * 2026-11-08 模组化后 `main.ts` 变成薄分流器，原入口**原样**搬到了 `vanilla.ts`
+ * —— 判据一个没松，只是改读新位置（见 `tests/mod_isolation_20261108.test.ts`）。
  * 最要紧的反证：把 F2 里那句 `if (devMode)` 删掉，正常玩家又能按出调试面板。
  */
 import { readFileSync } from 'node:fs';
@@ -13,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEV_KEY, loadDevMode, saveDevMode } from '@arena/devMode';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const entry = readFileSync(join(ROOT, 'src/arena/main.ts'), 'utf8');
+const entry = readFileSync(join(ROOT, 'src/arena/vanilla.ts'), 'utf8');
 const hud = readFileSync(join(ROOT, 'src/arena/ArenaHud.ts'), 'utf8');
 const panel = readFileSync(join(ROOT, 'src/arena/DebugPanel.ts'), 'utf8');
 const dev = readFileSync(join(ROOT, 'src/arena/devMode.ts'), 'utf8');
@@ -49,7 +51,7 @@ describe('开发者模式：默认关', () => {
 });
 
 describe('开发者模式：单一状态源与三处入口', () => {
-  it('main.ts 是唯一持有者：默认关 + ?debug=1 只强制初值、不写存档', () => {
+  it('vanilla.ts（原入口）是唯一持有者：默认关 + ?debug=1 只强制初值、不写存档', () => {
     expect(entry).toContain("const forcedDebug = params.get('debug') === '1'");
     expect(entry).toContain('let devMode = forcedDebug || loadDevMode();');
     expect(entry).toContain('devMode: () => devMode');

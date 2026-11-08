@@ -20,7 +20,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const world = readFileSync(join(ROOT, 'src/arena/ArenaWorld.ts'), 'utf8');
 const hud = readFileSync(join(ROOT, 'src/arena/ArenaHud.ts'), 'utf8');
 const menu = readFileSync(join(ROOT, 'src/arena/StartMenu.ts'), 'utf8');
-const entry = readFileSync(join(ROOT, 'src/arena/main.ts'), 'utf8');
+// 2026-11-08 模组化：main.ts 变薄分流器，原入口原样搬到 vanilla.ts，判据不变
+const entry = readFileSync(join(ROOT, 'src/arena/vanilla.ts'), 'utf8');
 const css = readFileSync(join(ROOT, 'src/styles/arena.css'), 'utf8');
 const types = readFileSync(join(ROOT, 'src/arena/types.ts'), 'utf8');
 const app = readFileSync(join(ROOT, 'src/arena/ArenaApp.ts'), 'utf8');
