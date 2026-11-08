@@ -20,7 +20,16 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { TILT_SHIFT_SHADER, loadDim, loadTilt, saveDim, saveTilt } from './visuals/tiltShift';
+import {
+  TILT_SHIFT_SHADER,
+  TILT_ZOOM_SLOPE,
+  loadDim,
+  loadTilt,
+  loadTiltAuto,
+  saveDim,
+  saveTilt,
+  saveTiltAuto,
+} from './visuals/tiltShift';
 import { RepairButtons } from './visuals/repairButtons';
 import { Viewport } from '@engine/viewport/Viewport';
 import { DEFAULT_APPEARANCE, DudeGallery, DudeSprite, facingFlip } from '@game/dudes/DudeView';
@@ -290,8 +299,15 @@ export class ArenaApp {
    * 手机上反而自动降档 —— 现在三档可选、存在 localStorage，调试面板里能现场切。
    */
   private qualityPreset: QualityPreset = loadQuality();
-  /** 微缩景深强度 0~1，默认关（0）：关的时候完全跳过后期 composer */
-  private tiltAmount = loadTilt();
+  /**
+   * 景深**用户基准** 0~1（存档，默认 0.55 偏高）：设置页/F2 滑杆拖的是这个。
+   * 实际生效值另见 `tiltEffective` —— 两者不能混，否则自动联动会把滑杆拽回去。
+   */
+  private tiltBase = loadTilt();
+  /** 「跟随镜头」开关：拉近更强、拉远更弱（用户 2026-11-08 提的联动） */
+  private tiltAuto = loadTiltAuto();
+  /** 本帧真正灌进 shader 的值 = 基准 + 镜头联动，draw() 每帧重算 */
+  private tiltEffective = 0;
   /**
    * 昼夜氛围压暗 0~1，默认 0（白天）。**和景深完全解耦**：
    * 用户 2026-11-08 明确"景深不该让画面变暗，但变暗要留着"，后续
@@ -423,7 +439,7 @@ export class ArenaApp {
     //   · dim=1 的压暗 −34% → **−45%**（显示空间乘 0.45，符合「压到 45%」的直觉）。
     this.composer.addPass(new OutputPass());
     this.tiltPass = new ShaderPass(TILT_SHIFT_SHADER);
-    this.tiltPass.uniforms['amount']!.value = this.tiltAmount;
+    this.tiltPass.uniforms['amount']!.value = this.tiltBase;
     this.tiltPass.uniforms['dim']!.value = this.dimAmount;
     this.composer.addPass(this.tiltPass);
 
@@ -1030,8 +1046,10 @@ export class ArenaApp {
       ? cellToWorld(pos(shot.center.col, shot.center.row))
       : this.fieldCenter();
     this.director.update(info.delta, this.rig, this.fitZoom, center);
-    // 景深和昼夜压暗都关着才直出；只要有一个开着就走 composer（OutputPass 会补色彩编码）
-    const postFx = this.tiltAmount > 0.001 || this.dimAmount > 0.001;
+    // 导演刚更新完 zoom，这时读到的才是本帧机位；景深联动必须排在它之后
+    this.syncTiltToCamera();
+    // 两个旋钮实际生效值都为 0 才直出，白天零后期开销
+    const postFx = this.tiltEffective > 0.001 || this.dimAmount > 0.001;
     if (postFx && this.composer) this.composer.render(info.delta);
     else this.renderer.render(this.scene, this.rig.camera);
     // 世界空间 DOM 覆盖层：每帧投影一次，相机转动时锤子不会飘在原地
@@ -2189,15 +2207,47 @@ export class ArenaApp {
     (this.tiltPass.uniforms['resolution']!.value as THREE.Vector2).set(cssW * pr, cssH * pr);
   }
 
-  /** 调试面板现场调微缩景深：0 = 关，1 = 最糊。**不改画面亮度**。 */
-  setTilt(amount: number): void {
-    this.tiltAmount = Math.min(1, Math.max(0, amount));
-    saveTilt(this.tiltAmount);
-    if (this.tiltPass) this.tiltPass.uniforms['amount']!.value = this.tiltAmount;
+  /**
+   * **景深跟随镜头**（2026-11-08 用户："把屏幕拉大/靠得近的时候景深高一点，
+   * 拉远就低一点，这样应该有意思一些"）。
+   *
+   * `rig.zoom` 是**视野横跨格数**：值越小 = 看得越少格 = 越近/越放大。
+   * 所以 `ratio = zoom / fitZoom`，拉近（ratio<1）⇒ amount 升，拉远（ratio>1）⇒ 降。
+   * 关掉跟随以后 amount 恒等于用户拖的基准，滑杆就是全部。
+   */
+  private syncTiltToCamera(): void {
+    const raw = this.tiltAuto ? this.tiltBase + (1 - this.zoomRatio) * TILT_ZOOM_SLOPE : this.tiltBase;
+    this.tiltEffective = Math.min(1, Math.max(0, raw));
+    if (this.tiltPass) this.tiltPass.uniforms['amount']!.value = this.tiltEffective;
   }
 
+  get zoomRatio(): number {
+    return this.rig.zoom / Math.max(1e-6, this.fitZoom);
+  }
+
+  /** 设置页 / F2 现场调景深基准：0 = 关，1 = 最糊。**仍不改画面亮度**。 */
+  setTilt(amount: number): void {
+    this.tiltBase = Math.min(1, Math.max(0, amount));
+    saveTilt(this.tiltBase);
+  }
+
+  /** 实际生效值（含镜头联动）：遥测、亮度探针读这个 */
   get tilt(): number {
-    return this.tiltAmount;
+    return this.tiltEffective;
+  }
+
+  /** 滑杆读这个：用户拖出来的基准，不会被自动联动拽回去 */
+  get tiltKnob(): number {
+    return this.tiltBase;
+  }
+
+  get tiltFollowsCamera(): boolean {
+    return this.tiltAuto;
+  }
+
+  setTiltAuto(on: boolean): void {
+    this.tiltAuto = on;
+    saveTiltAuto(on);
   }
 
   /**
@@ -2236,7 +2286,10 @@ export class ArenaApp {
       drawCalls: this.renderer.drawCalls,
       triangles: this.renderer.triangles,
       quality: this.qualityPreset,
-      tilt: this.tiltAmount,
+      tilt: this.tiltEffective,
+      tiltBase: this.tiltBase,
+      tiltAuto: this.tiltAuto,
+      zoomRatio: this.zoomRatio,
       dim: this.dimAmount,
       dpr: this.viewport.snapshot.dpr,
     };

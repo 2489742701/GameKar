@@ -6,7 +6,7 @@
  * 这里是**正交相机**，成本和兼容都不划算。改走移轴微缩的经典做法：
  *   ① 画面中间一条清晰带，越往上下越糊（假装浅景深）；
  *   ② 轻微提饱和（玩具模型的塑料感）。
- * 只需要一个全屏 ShaderPass，8~10 次采样，默认关、强度可调。
+ * 只需要一个全屏 ShaderPass，8~10 次采样，强度可调（默认基准偏高，用户偏好）。
  *
  * **2026-11-08 修曝光**：用户"画面理论上不应该是变暗的"。
  * 实测景深开到 1，整幅平均亮度 0.275 → 0.138（**掉了 50%**），有两个独立的病根：
@@ -31,8 +31,11 @@
  * 的夕阳 / 夜晚。到时候时间轴只要调 `ArenaApp.setDim(t)`，白天 0 仍然是零后期开销。
  * 色温（暖橙 / 冷蓝）等第二个昼夜用例出现再加，这一版只做曝光。
  *
- * 关键：`amount = 0 && dim = 0` 时 ArenaApp 会**完全跳过 composer**，直接 renderer.render ——
- * 不开这两个功能的人一帧额外开销都没有。
+ * 关键：实际生效值 `tiltEffective` 为 0 且 `dim = 0` 时 ArenaApp 会**完全跳过 composer**，
+ * 直接 renderer.render —— 把景深滑杆拉到 0、压暗也归零的人一帧额外开销都没有。
+ * 2026-11-08 起默认基准 0.55（用户"偏向高一点好看"），所以默认会走后期；
+ * 想要零开销就手动把两根滑杆都拉到 0，或把画质切到「省电」。
+ * 另外 amount 还会**跟随镜头缩放**：拉近更强、拉远更弱（见 TILT_ZOOM_SLOPE）。
  */
 import * as THREE from 'three';
 
@@ -130,17 +133,37 @@ export const TILT_SHIFT_SHADER: TiltShiftShaderDef = {
 export const TILT_KEY = 'gamekar.tilt.v1';
 /** 昼夜压暗独立存档：不和景深共用 key，调景深不会把昼夜档冲掉 */
 export const DIM_KEY = 'gamekar.dim.v1';
+/** 「景深跟随镜头」开关独立存档；默认开 */
+export const TILT_AUTO_KEY = 'gamekar.tiltAuto.v1';
+
+/**
+ * 景深**基准**（用户 2026-11-08："景深我觉得可以高一点或者低一点，也可以让用户自己调。
+ * 个人偏向可以高一点，看起来好看一点"）。
+ * 0.55 是"没有存档时"的起点；拖过滑杆的用户仍以存档为准。
+ */
+export const TILT_DEFAULT = 0.55;
+
+/**
+ * 镜头联动斜率：`amount = tiltBase + (1 − zoomRatio) × TILT_ZOOM_SLOPE`。
+ * `zoomRatio = rig.zoom / fitZoom`，rig.zoom 是**视野横跨格数**：
+ * 拉近（格数少、ratio<1）⇒ amount 升；拉远（ratio>1）⇒ amount 降。
+ * 0.55 让自选 4 档（zoomFactor 0.53）从 0.55 升到约 0.81，拉到 1.4 倍时降到约 0.33。
+ */
+export const TILT_ZOOM_SLOPE = 0.55;
 
 const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 
-function readStored(key: string): number {
+function readStored(key: string, fallback = 0): number {
   try {
-    const raw = Number(localStorage.getItem(key));
-    if (Number.isFinite(raw)) return clamp01(raw);
+    const raw = localStorage.getItem(key);
+    // 旧写法 `Number(getItem(...))` 遇到 null 会得 0，等于永远读不到"默认偏高"这个值
+    if (raw === null) return fallback;
+    const n = Number(raw);
+    if (Number.isFinite(n)) return clamp01(n);
   } catch {
-    // 无头 / 隐私模式：默认关
+    // 无头 / 隐私模式：返回默认
   }
-  return 0;
+  return fallback;
 }
 
 function writeStored(key: string, value: number): void {
@@ -151,13 +174,30 @@ function writeStored(key: string, value: number): void {
   }
 }
 
-/** 景深强度 0~1；默认 0（关），存 localStorage。 */
+/** 景深基准 0~1，默认 `TILT_DEFAULT`（偏高），存 localStorage。 */
 export function loadTilt(): number {
-  return readStored(TILT_KEY);
+  return readStored(TILT_KEY, TILT_DEFAULT);
 }
 
 export function saveTilt(value: number): void {
   writeStored(TILT_KEY, value);
+}
+
+/** 跟随镜头开关：关掉之后 amount 恒等于用户拖的基准值。 */
+export function loadTiltAuto(): boolean {
+  try {
+    return localStorage.getItem(TILT_AUTO_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function saveTiltAuto(on: boolean): void {
+  try {
+    localStorage.setItem(TILT_AUTO_KEY, on ? '1' : '0');
+  } catch {
+    // 存不下不影响这一局
+  }
 }
 
 /** 昼夜压暗 0~1；默认 0（白天/不改画面），独立存档。 */

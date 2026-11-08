@@ -13,6 +13,7 @@ import type { ArenaApp } from './ArenaApp';
 import { el as make } from '@ui/dom';
 import { iconOf } from './cardIcons';
 import { BREAD_ICON, COIN_ICON, POP_ICON } from './supplyIcons';
+import { QUIT_ICON, SETTINGS_ICON, VIEW_ICON } from './topbarIcons';
 import { supplyRowsHtml } from './visuals/supplyRows';
 import { needsStaffing } from './visuals/labels';
 import { createBannerEditor } from './bannerEditor';
@@ -28,7 +29,7 @@ import { saveControls, type ControlPrefs } from './controls';
  * 且常驻保存，花色是下一局生效。之前三样堆在一条滚动栏里，这句说明混在一起
  * 反而谁都没说清。
  */
-type SettingsTab = 'auto' | 'controls' | 'banner';
+type SettingsTab = 'auto' | 'controls' | 'banner' | 'post';
 
 const SETTINGS_TABS: { key: SettingsTab; label: string; hint: string }[] = [
   {
@@ -45,6 +46,11 @@ const SETTINGS_TABS: { key: SettingsTab; label: string; hint: string }[] = [
     key: 'banner',
     label: '旗帜',
     hint: '改完存档；点「再来一局」带上新旗上场（花色下一局生效）。',
+  },
+  {
+    key: 'post',
+    label: '后期',
+    hint: '改完立刻生效、存在本机。景深默认偏高，拉近镜头会自动再加一点；两根滑杆都拉到 0 就不跑后期。',
   },
 ];
 
@@ -110,6 +116,26 @@ interface HudSeat {
   playTimers: (number | null)[];
 }
 
+/**
+ * 顶栏按钮：**SVG 图标 + 可选文字**。图标永远在，文字只在宽屏露出来。
+ * 文字单独一个 span，`setViewStatus` / 两段式退出只改这个 span，
+ * 不会像以前 `textContent = …` 那样把 SVG 一起冲掉。
+ */
+function iconButton(
+  icon: string,
+  label: string,
+  extraClass: string,
+): { btn: HTMLButtonElement; text: HTMLSpanElement } {
+  const btn = make('button', `ahud__iconbtn ${extraClass}`) as HTMLButtonElement;
+  btn.type = 'button';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.innerHTML = icon;
+  const text = make('span', 'ahud__iconbtn__txt') as HTMLSpanElement;
+  btn.append(text);
+  return { btn, text };
+}
+
 export class ArenaHud {
   readonly el = make('div', 'ahud');
   /** 每个玩家一个座位（1v1 / PVE 单人 = 1 个，PVE 双人 = 2 个） */
@@ -149,10 +175,21 @@ export class ArenaHud {
   private readonly endSub = make('div', 'ahud__end__sub', '');
   private viewBtn!: HTMLButtonElement;
   private quitBtn!: HTMLButtonElement;
+  /** 顶栏按钮的文字标签：宽屏才显示，手机上只剩 SVG（时钟才不会被挤偏） */
+  private viewBtnText!: HTMLSpanElement;
+  private quitBtnText!: HTMLSpanElement;
   private autoBtn!: HTMLButtonElement;
   /** 设置面板「托管」区的开关（工具行状态变了要一起重画） */
   private autoManualBtn!: HTMLButtonElement;
   private toastTimer: number | null = null;
+  /** 设置页「后期」的三件控件：两根滑杆 + 跟随镜头开关（和 F2 面板读同一份状态） */
+  private postControls?: {
+    tilt: HTMLInputElement;
+    tiltNum: HTMLElement;
+    dim: HTMLInputElement;
+    dimNum: HTMLElement;
+    follow: HTMLButtonElement;
+  };
 
   constructor(
     host: HTMLElement,
@@ -239,19 +276,19 @@ export class ArenaHud {
      * 档位名仍来自 `app.viewPresets`（导演那份表），按钮只显示当前档。
      * 真要精调机位就走 F2 调试面板 —— 那才是"大量数据可以调"的地方。
      */
-    const view = make('button', 'ahud__view', '视角 · 斜视');
-    this.viewBtn = view;
-    view.type = 'button';
-    view.addEventListener('click', () => this.opts.onCycleView());
+    const view = iconButton(VIEW_ICON, '视角：点一下切下一档机位', 'ahud__iconbtn--view');
+    this.viewBtn = view.btn;
+    this.viewBtnText = view.text;
+    view.btn.addEventListener('click', () => this.opts.onCycleView());
     /**
      * 退出（2026-11-07 用户："这个进游戏之后退不出来"）：
      * 两段式 —— 第一下只把按钮改成「再点一次」，2.6 秒不跟就自己复位。
      * 战斗中误触一下就把一局丢了，代价太大；弹模态框又太重，两段式最省事。
      */
-    const quit = make('button', 'ahud__view ahud__quit', '退出');
-    this.quitBtn = quit;
-    quit.type = 'button';
-    quit.addEventListener('click', () => this.confirmQuit());
+    const quit = iconButton(QUIT_ICON, '退出这一局，回主菜单', 'ahud__iconbtn--quit');
+    this.quitBtn = quit.btn;
+    this.quitBtnText = quit.text;
+    quit.btn.addEventListener('click', () => this.confirmQuit());
     /**
      * 托管按钮（2026-11-07 用户："我们直接在那个'托管'上面点一下就可以托管"）。
      * 常驻在工具行，三态分别写「托管 / 托管 · 自动 / 托管 · 手」，
@@ -268,16 +305,15 @@ export class ArenaHud {
      * 用户实际用下来不认：右键是**隐藏入口**，手机长按空地又跟"长按放牌"抢手势。
      * 现在恢复成顶栏的可见按钮，右键与长按照样能用（三条路都通，不是二选一）。
      */
-    const settings = make('button', 'ahud__view ahud__settingsbtn', '设置');
-    settings.type = 'button';
-    settings.addEventListener('click', () => this.openSettings());
+    const settings = iconButton(SETTINGS_ICON, '设置', 'ahud__iconbtn--settings');
+    settings.btn.addEventListener('click', () => this.openSettings());
     /** 相机调试入口（开发期）：手机没有 F2，得有个能点的。只在 dev / ?debug=1 时挂上 */
     const debugBtn = this.opts.onToggleDebug ? make('button', 'ahud__view ahud__debugbtn', '调试') : null;
     if (debugBtn && this.opts.onToggleDebug) {
       debugBtn.type = 'button';
       debugBtn.addEventListener('click', () => this.opts.onToggleDebug?.());
     }
-    topTools.append(view, settings, quit);
+    topTools.append(view.btn, settings.btn, quit.btn);
     tools.append(auto);
     if (debugBtn) tools.append(debugBtn);
     top.append(supply, this.clock, topTools);
@@ -305,6 +341,7 @@ export class ArenaHud {
       auto: this.buildAutoOptions(),
       controls: this.buildControlOptions(),
       banner: createBannerEditor({ hint: '下一局生效' }),
+      post: this.buildPostOptions(),
     };
     for (const def of SETTINGS_TABS) {
       const btn = make('button', 'ahud__settings__tab', def.label);
@@ -595,6 +632,81 @@ export class ArenaHud {
     return box;
   }
 
+  /**
+   * 设置面板「后期」页（2026-11-08 用户："后期也加一个后期的设置栏…
+   * 景深可以高一点或者低一点，也可以让用户自己调"）。
+   *
+   * 三件控件都**直连 App 的公开接口**，不在 HUD 里另存一份数值；
+   * `refresh()` 每 10Hz 调 `paintPostOptions()`，所以 F2 面板改了这里也跟着动，
+   * 不会出现两个入口各报一个数的假读数。
+   */
+  private buildPostOptions(): HTMLElement {
+    const box = make('div', 'ahud__opts');
+    box.append(make('div', 'ahud__opts__title', '后期效果'));
+
+    const slider = (
+      name: string,
+      desc: string,
+      value: number,
+      onInput: (v: number) => void,
+    ): { input: HTMLInputElement; num: HTMLElement } => {
+      const line = make('div', 'ahud__opt ahud__opt--range');
+      const txt = make('div', 'ahud__opt__txt');
+      txt.append(make('span', 'ahud__opt__name', name), make('span', 'ahud__opt__desc', desc));
+      const input = make('input', 'ahud__opt__range') as HTMLInputElement;
+      input.type = 'range';
+      input.min = '0';
+      input.max = '1';
+      input.step = '0.05';
+      input.value = String(value);
+      const num = make('span', 'ahud__opt__num num', value.toFixed(2));
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        num.textContent = v.toFixed(2);
+        onInput(v);
+      });
+      line.append(txt, input, num);
+      box.append(line);
+      return { input, num };
+    };
+
+    const tilt = slider('微缩景深', '越高越糊。默认偏高，镜头拉近时还会自动再加一点。', this.app.tiltKnob, (v) => this.app.setTilt(v));
+    const dim = slider('氛围压暗', '夕阳 / 夜晚预留。0 = 白天，两根都归零就不跑后期。', this.app.dim, (v) => this.app.setDim(v));
+
+    const row = make('div', 'ahud__opt');
+    const txt = make('div', 'ahud__opt__txt');
+    txt.append(
+      make('span', 'ahud__opt__name', '跟随镜头'),
+      make('span', 'ahud__opt__desc', '拉近视距 ⇒ 景深更高；拉远 ⇒ 更低。关掉就只看上面那根滑杆。'),
+    );
+    const follow = make('button', 'ahud__opt__btn') as HTMLButtonElement;
+    follow.type = 'button';
+    follow.addEventListener('click', () => {
+      this.app.setTiltAuto(!this.app.tiltFollowsCamera);
+      this.paintPostOptions();
+    });
+    row.append(txt, follow);
+    box.append(row);
+
+    this.postControls = { tilt: tilt.input, tiltNum: tilt.num, dim: dim.input, dimNum: dim.num, follow };
+    this.paintPostOptions();
+    return box;
+  }
+
+  /** F2 面板和设置页共用一份状态，10Hz 同步一次。 */
+  private paintPostOptions(): void {
+    const c = this.postControls;
+    if (!c) return;
+    const t = String(this.app.tiltKnob);
+    if (c.tilt.value !== t) c.tilt.value = t;
+    c.tiltNum.textContent = this.app.tiltKnob.toFixed(2);
+    const d = String(this.app.dim);
+    if (c.dim.value !== d) c.dim.value = d;
+    c.dimNum.textContent = this.app.dim.toFixed(2);
+    c.follow.dataset['on'] = String(this.app.tiltFollowsCamera);
+    c.follow.textContent = this.app.tiltFollowsCamera ? '跟随 · 开' : '跟随 · 关';
+  }
+
   /** 工具行按钮 + 设置面板开关，读同一个 `autoPilot.state`。 */
   private paintAuto(): void {
     if (!this.autoBtn || !this.autoManualBtn) return;
@@ -723,7 +835,8 @@ export class ArenaHud {
     }
     this.quitArmed = true;
     this.quitBtn.dataset['armed'] = '1';
-    this.quitBtn.textContent = '再点一次';
+    this.quitBtnText.textContent = '再点一次';
+    this.quitBtn.title = '再点一次「退出」回主菜单';
     this.say('再点一次「退出」回主菜单，这一局不保存', 'warn');
     if (this.quitTimer !== null) window.clearTimeout(this.quitTimer);
     this.quitTimer = window.setTimeout(() => this.resetQuit(), 2600);
@@ -736,7 +849,8 @@ export class ArenaHud {
     }
     this.quitArmed = false;
     this.quitBtn.dataset['armed'] = '0';
-    this.quitBtn.textContent = '退出';
+    this.quitBtnText.textContent = '';
+    this.quitBtn.title = '退出这一局，回主菜单';
   }
 
   // ---------------------------------------------------------------- 中央大字
@@ -830,6 +944,7 @@ export class ArenaHud {
   /** 10Hz 由 App 的 onState 调；内容便宜，全量重画。 */
   refresh(): void {
     this.paintAuto();
+    this.paintPostOptions();
     const s = this.app.world.summary();
     // 每个座位各画各的：手牌、金币条、科技前置提示都是按玩家的
     for (const seat of this.seats) this.paintSeat(seat);
@@ -1069,10 +1184,12 @@ export class ArenaHud {
     this.refresh();
   }
 
-  /** 视角按钮上的那行字（当前机位名）。 */
+  /** 视角按钮上的那行短字（当前机位名）；宽屏才显示，手机只留 SVG。 */
   setViewStatus(status: string): void {
-    const text = `视角 · ${status}`;
-    if (this.viewBtn && this.viewBtn.textContent !== text) this.viewBtn.textContent = text;
+    const label = `视角 · ${status}（点一下切下一档）`;
+    if (this.viewBtn.title !== label) this.viewBtn.title = label;
+    this.viewBtn.setAttribute('aria-label', label);
+    if (this.viewBtnText.textContent !== status) this.viewBtnText.textContent = status;
   }
 
   /** 给外部（比如实机探针）读一眼当前卡面文案（第 0 号座位）。 */

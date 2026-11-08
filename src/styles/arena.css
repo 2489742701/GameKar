@@ -13,25 +13,30 @@
 
 .ahud__top {
   /**
-   * 三段式（2026-11-07 晚用户："时间放在中间"）：
-   * 左右两列都是 `1fr`，中间 `auto` —— 只有等宽的两侧才能把时钟真正压在屏幕中线上。
-   * 原来 flex 的 space-between 会把时钟推到"左边三个读数的右边"，
-   * 读数一变多就偏，看起来像没居中。
+   * 2026-11-08 返工：`1fr auto 1fr` 看着对称，其实右列三颗**文字**按钮的
+   * min-content 会把 `1fr` 撑开，中间列被挤到屏幕 36% 处（真机截图量过），
+   * 手机窄屏更是直接卡成一团。
+   * 现在左右用 flex 各贴一边，**时钟绝对居中** —— 谁变宽都动不了它。
+   * 三颗按钮同时改成 SVG 图标（见 topbarIcons.ts），右列从 ~170px 缩到 ~110px。
    */
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  position: relative;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
   pointer-events: auto;
 }
 
+/* 绝对居中，不参与任何列宽计算：这是"始终居中"唯一靠谱的做法 */
 .ahud__top > .ahud__clock {
-  justify-self: center;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .ahud__top > .ahud__tools {
-  justify-self: end;
+  margin-left: auto;
 }
 
 .ahud__hp {
@@ -1049,17 +1054,55 @@
 }
 
 /**
- * 顶栏那一排（视角 / 设置 / 退出，2026-11-07 晚）。
- * 手机上这三颗要挤进顶栏右列，所以比底部按钮矮一档、内边距也收一档；
- * `align-self` 要重置 —— `.ahud__view` 原来写的是 `flex-end`（给底部行用的），
- * 在顶栏会把按钮压到格子底边，看起来像掉了一截。
+ * 顶栏三颗：SVG 图标常驻 + 文字标签（宽屏才显示）。
+ * 手机上文字收掉，只剩三枚 30px 的木牌 —— "卡在一起"就是被文字撑出来的。
  */
-.ahud__tools--top .ahud__view {
-  align-self: center;
-  min-height: 26px;
-  padding: 0 8px;
+.ahud__tools--top {
+  gap: 5px;
+}
+
+.ahud__iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--wood-1);
+  font: inherit;
   font-size: 11px;
+  letter-spacing: 0.04em;
   white-space: nowrap;
+  color: var(--text);
+  cursor: pointer;
+  background-color: var(--wood-4);
+  background-image: var(--tex-wood), linear-gradient(180deg, var(--wood-6), var(--wood-2));
+  background-size: var(--tex-wood-tile), cover;
+  image-rendering: pixelated;
+  box-shadow: inset 0 1px 0 var(--panel-edge), 0 2px 0 rgba(0, 0, 0, 0.45);
+}
+
+.ahud__iconbtn svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+}
+
+.ahud__iconbtn:active {
+  transform: translateY(1px);
+}
+
+/* 两段式退出的第一下：文字标签换成「再点一次」，图标外加一圈警示 */
+.ahud__iconbtn[data-armed='1'] {
+  border-color: #d06b52;
+  color: #ffd9cd;
+  box-shadow: 0 0 0 2px rgba(208, 107, 82, 0.35);
+}
+
+.ahud__iconbtn__txt {
+  font-size: 10px;
 }
 
 /**
@@ -1432,6 +1475,31 @@
   transform: translateY(1px);
 }
 
+/* 后期页的两根滑杆：文字+读数一行、滑杆独占一行，窄面板也不会挤成一团 */
+.ahud__opt--range {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'txt num' 'range range';
+  row-gap: 4px;
+}
+
+.ahud__opt--range .ahud__opt__txt { grid-area: txt; }
+.ahud__opt--range .ahud__opt__num { grid-area: num; }
+.ahud__opt--range .ahud__opt__range { grid-area: range; width: 100%; }
+
+.ahud__opt__range {
+  height: 18px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.ahud__opt__num {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--gold-hi);
+  white-space: nowrap;
+}
+
 /* 视角按钮在被点开时点亮（清单开着，别让人以为没反应） */
 .ahud__view[data-on='true'] {
   border-color: var(--gold-hi);
@@ -1694,10 +1762,24 @@
     bottom: 140px;
   }
 
-  /* 居中弹层不按 bottom 定位；手机上只把最大高度再收一档 */
+  /* 居中弹层不按 bottom 定位；短横屏下多给一点高度，否则「后期」页第三行被切一半 */
   .ahud__settings {
-    max-height: 82vh;
+    max-height: 92vh;
+    gap: 4px;
+    padding: 8px;
   }
+
+  /* 四个标签 + 两根滑杆 + 跟随开关 + 说明，一屏放下（不再只靠滚动才能看到最后一行） */
+  .ahud__settings__body { max-height: 62vh; }
+  .ahud__settings__tabs { padding-bottom: 4px; }
+  .ahud__settings__tab { min-height: 26px; font-size: 10px; }
+  .ahud__settings__pane .ahud__opts { gap: 3px; padding: 2px 0 4px; }
+  .ahud__settings__pane .ahud__opt { padding: 3px 6px; }
+  .ahud__opt__desc { font-size: 9px; line-height: 1.2; }
+  .ahud__opt--range { row-gap: 2px; }
+  .ahud__opt__range { height: 14px; }
+  .ahud__opt__btn { min-height: 28px; }
+  .ahud__settings__foot { padding-top: 3px; }
 
   .ahud__end {
     gap: 8px;
@@ -1855,4 +1937,17 @@
   .rp__icon { width: 16px; height: 16px; }
   .rp__svg { width: 50px; height: 40px; }
   .rp__txt { font-size: 9px; }
+}
+
+/* ---------- 顶栏图标：手机上只留简要 SVG（P-079） ---------- */
+
+@media (max-width: 620px) {
+  .ahud__iconbtn__txt { display: none; }
+  .ahud__iconbtn { width: 30px; padding: 0; }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .ahud__iconbtn__txt { display: none; }
+  .ahud__iconbtn { width: 28px; height: 26px; padding: 0; }
+  .ahud__iconbtn svg { width: 15px; height: 15px; }
 }

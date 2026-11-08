@@ -129,7 +129,7 @@ describe('变暗独立保存：dim 通道（给后续夕阳 / 夜晚留的接口
     expect(panel).toContain('(v) => this.app.setDim(v)');
     expect(panel).toContain('this.dimInput.parentElement!');
     expect(panel).toContain('const postFx = t.tilt > 0 || t.dim > 0');
-    expect(app).toContain('const postFx = this.tiltAmount > 0.001 || this.dimAmount > 0.001;');
+    expect(app).toContain('const postFx = this.tiltEffective > 0.001 || this.dimAmount > 0.001;');
   });
 
   it('反证：dim 初始化时也必须灌进 shader（只存 localStorage 不上屏就等于没接）', () => {

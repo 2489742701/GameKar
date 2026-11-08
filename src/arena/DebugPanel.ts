@@ -57,6 +57,7 @@ export class DebugPanel {
   private readonly rowInput: HTMLInputElement;
   private readonly tiltInput: HTMLInputElement;
   private readonly dimInput: HTMLInputElement;
+  private tiltAutoBtn!: HTMLButtonElement;
   private readonly idText = make('code', 'dbg__id');
   private readonly log = make('textarea', 'dbg__log');
   private readonly slotsBox = make('div', 'dbg__slots');
@@ -88,8 +89,8 @@ export class DebugPanel {
     this.zoomInput = this.slider('缩放 zoom', 0.5, 1.4, 0.01, DEFAULT_SHOT.zoom);
     this.colInput = this.slider('中心 col', 0, fs.cols, 0.25, fs.cols / 2);
     this.rowInput = this.slider('中心 row', 0, fs.rows, 0.25, fs.rows / 2);
-    /** 微缩景深（移轴）：0 = 关，1 = 最糊。中间清晰带 + 上下模糊 + 提饱和 = 玩具模型感 */
-    this.tiltInput = this.slider('微缩景深', 0, 1, 0.05, this.app.tilt, (v) => this.app.setTilt(v));
+    /** 微缩景深（移轴）：滑杆调的是**基准**，镜头拉近时实际值还会自动往上走 */
+    this.tiltInput = this.slider('微缩景深', 0, 1, 0.05, this.app.tiltKnob, (v) => this.app.setTilt(v));
     /**
      * 昼夜氛围压暗（2026-11-08 用户："变暗可以保存，后续要加夕阳和夜晚"）。
      * 和景深分开两根滑杆：景深开到底也不掉亮度；这根才是管曝光的。
@@ -152,6 +153,17 @@ export class DebugPanel {
       qualityRow.append(btn);
     }
 
+    /** 后期开关：景深要不要跟着镜头缩放走（设置面板「后期」页里也有同一个开关） */
+    const fxRow = make('div', 'dbg__row');
+    fxRow.append(make('span', 'dbg__k', '镜头联动'));
+    this.tiltAutoBtn = make('button', 'dbg__btn dbg__btn--ghost', '跟随镜头');
+    this.tiltAutoBtn.type = 'button';
+    this.tiltAutoBtn.addEventListener('click', () => {
+      this.app.setTiltAuto(!this.app.tiltFollowsCamera);
+      this.refresh();
+    });
+    fxRow.append(this.tiltAutoBtn);
+
     const foldBox = make('details', 'dbg__fold');
     foldBox.append(
       make('summary', 'dbg__fold__sum', '要删的东西 / 账本（点开）'),
@@ -183,6 +195,7 @@ export class DebugPanel {
       make('div', 'dbg__label', '性能（PC 上看这个）'),
       this.perfText,
       qualityRow,
+      fxRow,
       /**
        * 可删项 + 账本收进折叠区（2026-11-07 晚）。
        * 五根滑杆 + 槽位 + 8 条可删项 + 账本一屏放不下，手机上"存这一档"会被顶到屏幕外 ——
@@ -427,8 +440,9 @@ export class DebugPanel {
     const row = String(Math.round(c.row * 4) / 4);
     if (this.colInput.value !== col) this.colInput.value = col;
     if (this.rowInput.value !== row) this.rowInput.value = row;
-    if (this.tiltInput.value !== String(this.app.tilt)) this.tiltInput.value = String(this.app.tilt);
+    if (this.tiltInput.value !== String(this.app.tiltKnob)) this.tiltInput.value = String(this.app.tiltKnob);
     if (this.dimInput.value !== String(this.app.dim)) this.dimInput.value = String(this.app.dim);
+    this.tiltAutoBtn.dataset['on'] = String(this.app.tiltFollowsCamera);
     this.paintReadouts();
     const t = this.app.telemetry;
     // 后期接管后 renderer.info 只剩最后一个全屏 quad，别把 1 drawCall 当真实读数报出来
@@ -437,7 +451,7 @@ export class DebugPanel {
       ? '场景计数 —（后期接管）'
       : `${t.drawCalls} drawCalls · ${(t.triangles / 1000).toFixed(1)}k 三角面`;
     this.perfText.textContent =
-      `${t.fps} fps · ${sceneInfo} · dpr ${t.dpr} · 画质 ${t.quality} · 微缩 ${t.tilt.toFixed(2)} · 压暗 ${t.dim.toFixed(2)}`;
+      `${t.fps} fps · ${sceneInfo} · dpr ${t.dpr} · 画质 ${t.quality} · 景深 ${t.tilt.toFixed(2)}(基准 ${t.tiltBase.toFixed(2)}) / 压暗 ${t.dim.toFixed(2)} · 视距 ${t.zoomRatio.toFixed(2)}`;
     for (const [key, btn] of this.qualityBtns) {
       btn.dataset['on'] = String(key === t.quality);
     }
