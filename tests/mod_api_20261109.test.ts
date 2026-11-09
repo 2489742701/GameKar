@@ -74,7 +74,7 @@ describe('主程序玩法文件 0 改动', () => {
 describe('开放 API 是单向出口', () => {
   it('modApi.ts 只读 config / cardIcons，不反向依赖模组', () => {
     const src = stripComments(read('src/arena/modApi.ts'));
-    expect(fromSpecs(src)).toEqual(['./config', './cardIcons']);
+    expect(fromSpecs(src)).toEqual(['./config', './cardIcons', './supplyIcons']);
     expect(src).toContain('MOD_API_VERSION');
     expect(src).toContain('export function createModHand');
     expect(src).toContain('iconOf');
@@ -173,11 +173,14 @@ describe('模组是卡牌驱动的主模式扩展', () => {
     expect(src).not.toContain('window.__grandMap.playCard = (s, c, r) =>');
   });
 
-  it('地图至少 3 倍竞技场：格数由 hexR 算，不是把六芒星当轮廓', () => {
+  it('大档远超竞技场：格数由 hexR 算，不是把六芒星当轮廓', () => {
     const src = map();
-    const hexR = Number(src.match(/hexR:\s*(\d+)/)?.[1]);
+    const radii = [...src.matchAll(/hexR:\s*(\d+)/g)].map((m) => Number(m[1]));
+    expect(radii.length).toBe(3);
+    expect(radii[0]! < radii[1]! && radii[1]! < radii[2]!).toBe(true);
     // 六边形面积 ≈ 2.598·R²，竞技场 44×20 = 880 格
-    expect(2.598 * hexR * hexR).toBeGreaterThan(880 * 3);
+    const largest = 2.598 * radii[2]! * radii[2]!;
+    expect(largest).toBeGreaterThan(880 * 12);
     // 反证：把半径退回 P-086 那版就红
     expect(2.598 * 30 * 30).toBeLessThan(880 * 3);
   });
@@ -232,14 +235,55 @@ describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
     expect(paint).not.toContain("kind === 'center'");
   });
 
-  it('中心 9×9 与规则层 SPEC 逐格对齐（只在一处改数值）', () => {
+  it('中心网格与规则层逐格对齐：数值只在 map.js 的 CENTER 算一次', () => {
     const src = map();
     const rules = stripComments(read('public/mods/grand-map/rules.js'));
-    const size = Number(src.match(/size:\s*(\d+)/)?.[1]);
-    const roadRow = Number(src.match(/roadRow:\s*(\d+)/)?.[1]);
-    expect(size).toBe(Number(rules.match(/centerSize:\s*(\d+)/)?.[1]));
-    expect(roadRow).toBe(Number(rules.match(/roadRow:\s*(\d+)/)?.[1]));
+    expect(src).toContain('size: S.center');
+    expect(src).toContain('roadRow: half');
+    expect(rules).toContain('centerSize: CENTER.size');
+    expect(rules).toContain('roadRow: CENTER.roadRow');
+    // 反证：规则层自己写死一个数字就是对不齐的旧写法
+    expect(rules).not.toContain('centerSize: 17');
+    expect(rules).not.toContain('roadRow: 8,');
     expect(src).toContain('export function toAbstract(');
     expect(src).toContain('export function fromAbstract(');
+  });
+
+  it('小 / 中 / 大三档都在，默认给最大档，形状公式只有一套', () => {
+    const src = map();
+    for (const id of ['sm', 'md', 'lg']) expect(src).toContain(`${id}: {`);
+    expect(src).toContain("return 'lg';");
+    expect(src).toContain('export const VIEW');
+    // 反证：三档各自写一份 inHex 就是复制粘贴，判据要抓到
+    expect((src.match(/export function inHex/g) ?? []).length).toBe(1);
+    expect(view()).toContain('data-action="size"');
+    expect(view()).toContain('location.search = p.toString()');
+  });
+
+  it('顶栏与金币用旧的 UI，不再把金币塞在左上角', () => {
+    const src = view();
+    const api = stripComments(read('src/arena/modApi.ts'));
+    expect(src).toContain('class="ahud__top panel gm-top"');
+    expect(src).toContain('ahud__clock');
+    expect(src).toContain('ahud__tools--top');
+    expect(src).toContain('API.createModBank()');
+    expect(api).toContain('export function createModBank()');
+    expect(api).toContain("className = 'ahud__bank'");
+    expect(api).toContain('COIN_ICON');
+    // 反证：把金币数字放回顶栏就是被否决的那版
+    expect(src).not.toContain('data-gold');
+    expect(src).not.toContain('class="gm-top"><h2>');
+  });
+
+  it('调试控件收在一处，且明确标了「后面要改回」', () => {
+    const src = view();
+    const raw = read('public/mods/grand-map/view.js');
+    expect(src).toContain('DEBUG_DEFAULT_OPEN = true');
+    expect(raw).toContain('待改回'); // 注释里的说明文字要从原文读，结构锁才不误伤
+    expect(src).toContain('data-debug');
+    expect(src).toContain('data-action="debug"');
+    // 反证：时段按钮散在顶栏（不在调试抽屉里）必须被抓到
+    expect(src).toContain('class="gm-debug"');
+    expect(src).toContain('DEBUG_DEFAULT_OPEN');
   });
 });

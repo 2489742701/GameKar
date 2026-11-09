@@ -1,46 +1,69 @@
 /**
- * 大地图的地形与路网（2026-11-09，P-087 重新设计）。
+ * 大地图的地形与路网（2026-11-09，P-089 起支持小/中/大三档）。
  *
  * 用户口径：「整个地图是一个大的六边形，里面是六芒星形状的道路；
  * 六个人坐在六芒星的六个尖角，边角也合上了；相邻两人最近的那条路还有小道」。
+ * 后来又两次嫌小：「还是有点小了……保留一个小、中、大地图吧，然后可以更大一点」。
  *
- * 所以：
- *  · 地形 = **大六边形**范围内的像素方块（尖角朝上下），凹角全部补成陆地；
+ * 所以三档只改**半径**，形状/路网/规则全不变：
+ *  · 地形 = 大六边形范围内的像素方块（尖角朝上下），凹角全部补成陆地；
  *  · 六芒星 = 两个交叠三角形的 6 条边，是**道路**，不是地形轮廓；
  *  · 内六边形 = 相邻尖角之间的近路小道（近、安全、钱少）；
  *  · 三条对径 = 穿过中心的远路（钱多，要护航）；
- *  · 中心公共区 = 9×9 方块，与 rules.js 的抽象网格**逐格一一对应**，
- *    主干道那一行恒不可建（道路格），两侧皆敌 ⇒ 封死。
+ *  · 中心公共区 = 随档位放大的方块，与 rules.js 的抽象网格**逐格一一对应**。
  *
+ * 档位由 `?size=sm|md|lg` 决定，切换走「改 URL + reload」——项目本来就用这个范式
+ * 切模式/进出模组，不需要运行时重建世界。node 里没有 location，会用默认档跑自测。
  * 纯数据层，无 three / DOM，可 node 直接测。
  */
-/**
- * 2026-11-09 用户：「地图怎么变得这么小？地块要非常非常大，起码比我们的竞技场大大概三四倍」。
- * 竞技场 FIELD 是 44×20 = 880 格；六边形面积约 2.598·R²，
- * 原来 R=30 ⇒ 2311 格（2.6 倍，放几栋楼就满了）；
- * 现在 R=38 ⇒ 约 3750 格（**4.3 倍**），中心公共区也从 9×9 扩到 17×17。
- */
-export const MAP = {
-  cols: 80,
-  rows: 88,
-  cx: 40,
-  cy: 44,
-  hexR: 38,       // 大六边形半径（格）
-  starR: 28,      // 六芒星尖角半径（格，在六边形内部）
+
+/** 三档尺寸：只改半径，六边形/六芒星/中心区按同一套公式生成 */
+export const SIZES = {
+  sm: { label: '小', hexR: 38, starR: 28, center: 17 },   // P-088 那版，保留
+  md: { label: '中', hexR: 54, starR: 40, center: 25 },
+  lg: { label: '大', hexR: 72, starR: 54, center: 33 },   // 默认
 };
 
 /**
- * 中心公共区：17×17，和 `rules.js` 的 `SPEC.centerSize` / `SPEC.roadRow` 对齐。
- * 结构锁会核这两处数值一致 —— 判据只在一处改，不许两份表各写各的。
+ * 局部视角固定 34 格（格子大小不随档位变）；全图视角随地图放大，
+ * 但按俯角投影压缩折算过 —— 直接给 2×hexR 会让六边形上下留一大片空蓝。
  */
-export const CENTER = {
-  col0: MAP.cx - 8,
-  row0: MAP.cy - 8,
-  size: 17,
-  roadRow: 8,
-};
+export const VIEW = { local: 34, sm: 64, md: 88, lg: 112 };
 
+function readSize() {
+  try {
+    const p = new URLSearchParams(globalThis.location?.search ?? '').get('size');
+    if (p && Object.prototype.hasOwnProperty.call(SIZES, p)) return p;
+  } catch { /* node 里没有 location，走默认档 */ }
+  return 'lg';
+}
+
+export const SIZE = readSize();
+const S = SIZES[SIZE];
 const SQRT3 = Math.sqrt(3);
+const cols = Math.ceil(SQRT3 * S.hexR) + 8;
+const rows = 2 * S.hexR + 12;
+
+export const MAP = {
+  cols,
+  rows,
+  cx: Math.round(cols / 2),
+  cy: Math.round(rows / 2),
+  hexR: S.hexR,       // 大六边形半径（格）
+  starR: S.starR,     // 六芒星尖角半径（格，在六边形内部）
+};
+
+/**
+ * 中心公共区：和 `rules.js` 的 `SPEC.centerSize` / `SPEC.roadRow` 对齐。
+ * 两处数值只在**这里**算，规则层直接读 CENTER，不许两份表各写各的。
+ */
+const half = Math.floor(S.center / 2);
+export const CENTER = {
+  col0: MAP.cx - half,
+  row0: MAP.cy - half,
+  size: S.center,
+  roadRow: half,
+};
 
 /** 尖角朝上下的正六边形：|x| <= √3/2·R 且 |y| <= R − |x|/√3 */
 export function inHex(col, row) {
@@ -60,7 +83,7 @@ export const POINTS = Array.from({ length: 6 }, (_, i) => {
   };
 });
 
-/** 中心公共区（9×9 方块，落在六边形内） */
+/** 中心公共区（落在六边形内） */
 export function inCenter(col, row) {
   return col >= CENTER.col0 && col < CENTER.col0 + CENTER.size &&
          row >= CENTER.row0 && row < CENTER.row0 + CENTER.size &&
@@ -81,8 +104,8 @@ export function fromAbstract(r, c) {
 /**
  * 中心主干道：只画中心公共区里那一行（正是规则层「道路格恒不可建 /
  * 两侧皆敌封死」的判据所在）。
- * 2026-11-09 用户：「图中间那个彩色的地块，不需要显示道路的话，就正常显示」——
- * 所以不再横贯整张六边形拉一条突兀的深色带，中心区其余格一律正常草地。
+ * 用户：「图中间那个彩色的地块，不需要显示道路的话，就正常显示」——
+ * 所以不横贯整张六边形拉深色带，中心区其余格一律正常草地。
  */
 export function isMainRoad(col, row) {
   return inCenter(col, row) && row - CENTER.row0 === CENTER.roadRow;
@@ -157,7 +180,7 @@ const FAR_SET = new Set(diameterRoads().map(key));
 
 export const ROAD_SETS = { star: STAR_SET, short: SHORT_SET, far: FAR_SET };
 
-/** 一格属于哪类道路：'main' 主干 / 'star' 六芒星 / 'short' 近路 / 'far' 对径 / 'center' 公共区 / null 陆地 */
+/** 一格属于哪类：'main' 主干 / 'star' 六芒星 / 'short' 近路 / 'far' 对径 / 'center' 公共区 / null 陆地 */
 export function roadKindAt(col, row) {
   const k = key({ col, row });
   if (isMainRoad(col, row)) return 'main';

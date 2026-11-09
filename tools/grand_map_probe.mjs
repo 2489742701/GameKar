@@ -148,12 +148,20 @@ try {
       cardNames: cards.map((c) => c.querySelector('.ahud__card__name')?.textContent ?? ''),
       cardHasArt: cards.every((c) => !!c.querySelector('.ahud__card__art svg')),
       cardWidth: cards[0] ? Math.round(cards[0].getBoundingClientRect().width) : 0,
-      topbar: !!document.querySelector('.gm-top'),
+      topbar: !!document.querySelector('.ahud__top'),
+      oldTopbar: !!document.querySelector('.ahud__top.panel.gm-top .ahud__clock'),
+      bank: !!document.querySelector('.ahud__bankrow[data-mod-bank] .ahud__bank'),
+      bankText: document.querySelector('.ahud__bank__num')?.textContent ?? '',
+      topbarGold: !!document.querySelector('.gm-top [data-gold]'),
+      debugOpen: !document.querySelector('[data-debug]')?.hidden,
+      sizeButtons: document.querySelectorAll('[data-action="size"]').length,
       terrain: M ? M.terrainCells().length : 0,
       star: M ? M.starRoads().length : 0,
       short: M ? M.shortcuts().length : 0,
       far: M ? M.diameterRoads().length : 0,
       centerSize: M ? M.CENTER.size : 0,
+      size: gm?.size ?? null,
+      viewRange: gm?.viewRange ?? null,
       claims: gm?.hand?.claims?.size ?? 0,
       gold: gm?.state?.factions?.[0]?.gold ?? null,
       dudesReady: !!gm?.dudesReady,
@@ -164,14 +172,14 @@ try {
 
   // 干净的第一张图：还没点开任何浮层、还没打牌（默认局部视图，地块明显变大）
   const shotClean = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P088_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P089_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
   const cardDayBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
 
   // 「全图」按钮：一键拉远看整张六边形，验镜头真的能逛
   const overviewShot = await ev(`window.__grandMap.setOverview(true); window.__grandMap.zoom`);
   await sleep(500);
   const shotAll = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P088_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P089_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
   const backZoom = await ev(`window.__grandMap.setOverview(false); window.__grandMap.zoom`);
 
   const play = await ev(`(() => {
@@ -229,7 +237,7 @@ try {
   })()`);
   await sleep(500);
   const shotRally = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P088_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P089_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
 
   const panels = await ev(`(() => {
     const gm = window.__grandMap;
@@ -246,7 +254,7 @@ try {
 
   const shotDay = await send('Page.captureScreenshot', { format: 'png' });
   const dayBuf = Buffer.from(shotDay.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P088_白天_20261109.png`, dayBuf);
+  writeFileSync(`${OUT}/大地图_P089_白天_20261109.png`, dayBuf);
   const day = pngStats(dayBuf);
 
   // 收掉浮层再截夜晚，别让面板挡住战场
@@ -259,17 +267,37 @@ try {
   const uiPeriod = await ev(`document.getElementById('arena-ui').dataset.period`);
   const shotNight = await send('Page.captureScreenshot', { format: 'png' });
   const nightBuf = Buffer.from(shotNight.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P088_夜晚_20261109.png`, nightBuf);
+  writeFileSync(`${OUT}/大地图_P089_夜晚_20261109.png`, nightBuf);
   const night = pngStats(nightBuf);
+
+  // 三档地图：改 URL + reload 之后真的换成小图（截图都拍完了再切，不影响上面的画面）
+  const smallUrl = new URL(PAGE_URL);
+  smallUrl.searchParams.set('size', 'sm');
+  await send('Page.navigate', { url: smallUrl.toString() });
+  await sleep(2600);
+  const small = await ev(`(() => {
+    const gm = window.__grandMap;
+    return gm ? {
+      size: gm.size, terrain: gm.map.terrainCells().length,
+      center: gm.map.CENTER.size, active: window.__modActive,
+    } : null;
+  })()`);
 
   const checks = {
     '模组挂上': base.modActive === 'grand-map' && !base.fallback,
     '四张主模式卡面': base.cards === 4 && base.handRoot && base.cardHasArt && base.cardWidth > 60,
-    '大六边形地形 ≥ 3 倍竞技场': base.terrain > 880 * 3,
-    '中心公共区 17×17': base.centerSize === 17,
+    '默认最大档 / 地图远超竞技场': base.size === 'lg' && base.terrain > 880 * 12,
+    '中心公共区随档位放大': base.centerSize === 33,
+    '小 / 中 / 大三档按钮': base.sizeButtons === 3,
+    '三档切换真的换图': small?.size === 'sm' && small.active === 'grand-map' &&
+      small.terrain < base.terrain && small.center < base.centerSize,
     '内部六芒星 / 近路 / 对径': base.star > 50 && base.short > 50 && base.far > 20,
     '六方起点': base.claims === 12,
-    '默认局部视图 / 全图可切': base.zoom === 34 && overviewShot === 84 && backZoom === 34,
+    '局部 / 全图镜头': base.zoom === 34 && base.viewRange?.local === 34 &&
+      overviewShot === base.viewRange?.lg && backZoom === 34,
+    '旧 UI 顶栏': base.topbar && base.oldTopbar && !base.topbarGold,
+    '金币条回到手牌下方': base.bank && base.bankText !== '',
+    '调试抽屉默认展开': base.debugOpen === true,
     '点击地面插旗': rallyProbe.drop && rallyProbe.flag?.col === rallyProbe.expectedFlag.col && rallyProbe.flag?.row === rallyProbe.expectedFlag.row,
     '军队卡出兵': rallyProbe.played?.ok === true && rallyProbe.unitsAfter > rallyProbe.unitsBefore,
     '士兵真的往旗子走': rallyProbe.moved > 1,
@@ -293,6 +321,7 @@ try {
   console.log('PLAY      ', JSON.stringify(play));
   console.log('RALLY     ', JSON.stringify(rallyProbe));
   console.log('OVERVIEW  ', JSON.stringify({ overviewShot, backZoom }));
+  console.log('SMALL     ', JSON.stringify(small));
   console.log('PANELS    ', JSON.stringify(panels));
   console.log('DAY/NIGHT ', JSON.stringify({ day, night, nightTint }));
   console.log('ERRORS    ', JSON.stringify(errors));

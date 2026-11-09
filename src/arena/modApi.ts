@@ -15,6 +15,7 @@
  */
 import { CARDS, ECONOMY, HAND, type ArenaCard } from './config';
 import { iconOf } from './cardIcons';
+import { COIN_ICON } from './supplyIcons';
 
 export const MOD_API_VERSION = 2;
 
@@ -50,6 +51,59 @@ const esc = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 /**
+ * 主模式那条**金币条**（`.ahud__bank`），不是把金币数字塞在顶栏左上角。
+ *
+ * 用户 2026-11-09：「那个金币为什么给你收到左上角了？不是这个UI，可以用我们旧的UI啊」。
+ * 旧 UI 就是皇室战争那版的金币条：手牌下方一条胶囊，填充条按 金/上限 长，
+ * 每 1 金一道刻度，攒满泛金光。这里只做 DOM，读数和上限仍由模组规则层喂。
+ */
+export interface ModBank {
+  readonly el: HTMLElement;
+  set(gold: number, cap: number): void;
+  dispose(): void;
+}
+
+export function createModBank(): ModBank {
+  const row = document.createElement('div');
+  row.className = 'ahud__bankrow';
+  row.dataset['modBank'] = '1';
+  row.style.cssText = [
+    'position:absolute', 'left:50%', 'bottom:8px', 'transform:translateX(-50%)',
+    'width:min(560px,92vw)', 'pointer-events:auto', 'z-index:22',
+  ].join(';');
+
+  const bank = document.createElement('div');
+  bank.className = 'ahud__bank';
+  const fill = document.createElement('span');
+  fill.className = 'ahud__bank__fill';
+  const label = document.createElement('span');
+  label.className = 'ahud__bank__label';
+  const icon = document.createElement('span');
+  icon.className = 'ahud__bank__icon';
+  icon.innerHTML = COIN_ICON;
+  const num = document.createElement('b');
+  num.className = 'ahud__bank__num';
+  const cap = document.createElement('span');
+  cap.className = 'ahud__bank__cap';
+  label.append(icon, num, cap);
+  bank.append(fill, label);
+  row.append(bank);
+
+  return {
+    el: row,
+    set(gold, max) {
+      // 刻度间距按上限算，别在 CSS 里写死（主模式 HUD 就是这么漏过一次）
+      bank.style.setProperty('--gold-tick', `${100 / Math.max(1, max)}%`);
+      num.textContent = String(gold);
+      cap.textContent = `/${max}`;
+      fill.style.width = `${Math.min(100, (gold / Math.max(1, max)) * 100)}%`;
+      bank.dataset['full'] = String(gold >= max);
+    },
+    dispose() { row.remove(); },
+  };
+}
+
+/**
  * 生成和主模式同款的四张手牌。拖放阈值 8px：短按是"选中"，拖出去才是"落牌"。
  * 只负责 DOM 与手势，判据 / 扣钱 / 补牌都由调用方（模组规则层）自己算。
  */
@@ -58,7 +112,7 @@ export function createModHand(cb: ModHandCallbacks): ModHand {
   hand.className = 'ahud__hand';
   hand.dataset['modHand'] = '1';
   hand.style.cssText = [
-    'position:absolute', 'left:50%', 'bottom:12px', 'transform:translateX(-50%)',
+    'position:absolute', 'left:50%', 'bottom:34px', 'transform:translateX(-50%)',
     'width:min(560px,92vw)', 'pointer-events:auto', 'z-index:22',
   ].join(';');
 

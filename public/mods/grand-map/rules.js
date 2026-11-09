@@ -1,5 +1,7 @@
+import { CENTER } from './map.js';
+
 /**
- * 大地图规则层 —— 纯 JS，零 DOM / 零 three / 零 import。
+ * 大地图规则层 —— 纯 JS，零 DOM / 零 three（只允许模组内 ./ 相对 import）。
  *
  * 为什么单独一层：这样 `node --test mods/grand-map/tests/*.mjs` 能直接验规则，
  * 不用开浏览器；视觉层（view.js）只是这层状态的一面镜子。
@@ -16,8 +18,9 @@ export const SPEC = {
   trade: { near: 5, far: 14, travel: { near: 2, far: 4 } },
   seizeMultiplier: 2,
   allyLimit: 1,          // 联盟最多 2 人 ⇒ 玩家最多 1 个盟友
-  centerSize: 17,        // 中心公共区 17×17（P-087 扩图后与 map.js CENTER.size 对齐）
-  roadRow: 8,            // 中心行是主干道，恒不可建
+  // 中心抽象网格逐格跟着地图档位走，判据只在 map.js 的 CENTER 里算一次
+  centerSize: CENTER.size,
+  roadRow: CENTER.roadRow,
   endTick: 120,
   aiPeriod: 3,
 };
@@ -46,9 +49,15 @@ export const FACTIONS = [
 ];
 
 /** 每方在中心区的"抢滩起点"：第一栋楼必须落这里，之后按 4 邻域辐射。
- *  扩到 17×17 后按原 9×9 的相对位置等比铺开，且全部避开 roadRow。 */
+ *  按中心区边长的相对位置铺开，三档都自动适配，且全部避开 roadRow。 */
+const n = SPEC.centerSize;
 export const SEEDS = [
-  [0, 2], [0, 14], [6, 0], [6, 16], [16, 2], [16, 14],
+  [0, Math.round(n * 0.12)],
+  [0, Math.round(n * 0.88)],
+  [Math.round(n * 0.35), 0],
+  [Math.round(n * 0.35), n - 1],
+  [n - 1, Math.round(n * 0.12)],
+  [n - 1, Math.round(n * 0.88)],
 ];
 
 /** 开局关系表：玩家面对 2 敌 3 中立，AI 之间基本中立（原型占位）。 */

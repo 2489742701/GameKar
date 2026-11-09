@@ -53,7 +53,7 @@ import { AmbientDust } from './ambient';
 import { installArenaBackdrop } from './visuals/backdrop';
 import { TILT_SHIFT_SHADER } from './visuals/tiltShift';
 import { ARENA_CAMERA, NO_BUILD, FIELD, BUILDING_SCALE } from './config';
-import { MOD_API_VERSION, CARDS, ECONOMY, HAND, iconOf, createModHand } from './modApi';
+import { MOD_API_VERSION, CARDS, ECONOMY, HAND, iconOf, createModHand, createModBank } from './modApi';
 import { buildModel } from '@game/models/kit';
 // P-087 续：「点击地面集结军队」要出主程序同款像素小人，这几个依然只作注入出口
 import { DudeGallery, DudeSprite, DEFAULT_APPEARANCE } from '@game/dudes/DudeView';
@@ -105,6 +105,7 @@ export const modApi = {
   HAND,
   iconOf,
   createModHand,
+  createModBank,
 };
 
 /** 只借引擎，不借玩法：没有 ArenaWorld / config / ArenaApp。 */

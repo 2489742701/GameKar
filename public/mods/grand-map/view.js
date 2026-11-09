@@ -21,29 +21,49 @@ const colorNum = (hex) => parseInt(hex.slice(1), 16);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const key = (col, row) => `${col},${row}`;
 
-/** 默认局部视图 / 全图视图（沿屏幕短边可见格数） */
-const LOCAL_VIEW = 34;
-const OVERVIEW = 84;
+/** 沿屏幕短边可见格数：局部固定、全图随档位放大 */
+const LOCAL_VIEW = M.VIEW.local;
+const OVERVIEW = M.VIEW[M.SIZE];
+
+/**
+ * ⚠️ 待改回（用户 2026-11-09：「调试的话，我现在可以用，但是后面也要改回来呀」）。
+ * 时段切换 / 巡游 / 推进 / 重置 / 读数这些**测试控件**全在 `.gm-debug` 抽屉里，
+ * 现在默认展开方便调试；正式版把这一行改成 false（或整块删掉 + 移除顶栏「调试」按钮）即可。
+ * 主程序自己的开发者模式仍是默认关、设置页开关，本模组没有动它。
+ */
+const DEBUG_DEFAULT_OPEN = true;
 
 const CSS = `
 .gm * { box-sizing: border-box; }
 .gm { position:absolute; inset:0; pointer-events:none; color:#e8edf7;
       font:500 13px/1.55 system-ui,sans-serif; }
 .gm-tint { position:absolute; inset:0; pointer-events:none; }
-.gm-top { position:absolute; left:0; right:0; top:0; min-height:44px; display:flex;
-          align-items:center; gap:12px; padding:6px 14px; pointer-events:auto; flex-wrap:wrap;
-          background:rgba(10,16,28,.92); border-bottom:1px solid rgba(216,178,92,.35); }
-.gm-top h2 { font-size:15px; font-weight:500; margin:0; color:#f3e0b0; white-space:nowrap; }
-.gm-top .gold { font-size:19px; color:#fac775; }
-.gm-top .muted { color:#9fb2cc; font-size:12px; }
-.gm-top button, .gm-panel button { font:inherit; cursor:pointer; border-radius:7px; border:1px solid #3b4d68;
-                 background:#1b2740; color:#e8edf7; padding:4px 9px; }
-.gm-top button[data-on="1"], .gm-panel button[data-on="1"] { background:#8a6a2e; border-color:#d8b25c; }
+/* 顶栏直接用主模式那套 .ahud__top / .ahud__clock / .ahud__tools--top，
+   金币也回到手牌下方的 .ahud__bank —— 不再自己画一条黑条把金币塞左上角 */
+.gm-top { pointer-events:auto; background:rgba(10,16,28,.92);
+          border-bottom:1px solid rgba(216,178,92,.35); }
+.gm-title { font-size:13px; font-weight:500; color:#f3e0b0; white-space:nowrap; }
+.gm-top .ahud__clock__num { font-size:13px; }
+.gm-sizes { display:inline-flex; gap:3px; margin-right:6px; }
+.gm-sizes button, .gm-debug button { font:inherit; cursor:pointer; border-radius:7px;
+          border:1px solid #3b4d68; background:#1b2740; color:#e8edf7; padding:3px 8px; }
+.gm-sizes button[data-on="1"], .gm-debug button[data-on="1"] {
+          background:#8a6a2e; border-color:#d8b25c; }
+/* 调试控件集中在这里：现在默认展开方便用，后面要改回只需动 DEBUG_DEFAULT_OPEN */
+.gm-debug { position:absolute; right:10px; top:52px; width:min(300px,92vw);
+            padding:8px 10px; border-radius:10px; pointer-events:auto;
+            background:rgba(12,20,35,.94); border:1px solid rgba(216,178,92,.35); }
+.gm-debug__row { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin:4px 0; }
+.gm-debug .muted { color:#9fb2cc; font-size:11px; }
+.gm-debug__info { font-size:11px; color:#b8c7dd; line-height:1.5; }
 .gm-panel { position:absolute; left:50%; top:56px; transform:translateX(-50%);
             width:min(320px,92vw); padding:10px 12px; border-radius:12px; pointer-events:auto;
             background:rgba(12,20,35,.95); border:1px solid rgba(216,178,92,.4); }
 .gm-panel h3 { margin:0 0 6px; font-size:14px; font-weight:500; color:#f3e0b0; }
 .gm-panel .muted { color:#9fb2cc; font-size:11px; }
+.gm-panel button { font:inherit; cursor:pointer; border-radius:7px; border:1px solid #3b4d68;
+                  background:#1b2740; color:#e8edf7; padding:4px 9px; }
+.gm-panel button[data-on="1"] { background:#8a6a2e; border-color:#d8b25c; }
 .gm-panel button.danger { background:#5a2730; border-color:#a3474f; }
 .gm-panel .close { float:right; background:transparent; }
 .gm-panel .row { margin:6px 0; }
@@ -78,25 +98,47 @@ export function createView(host, game) {
   root.className = 'gm';
   root.innerHTML = `
     <div class="gm-tint"></div>
-    <div class="gm-top"><h2>大地图 · 多方混战</h2><span class="gold" data-gold>50</span>
-      <span class="muted" data-info></span><span style="flex:1"></span>
-      <button data-action="rally" data-on="1">集结</button>
-      <button data-action="overview">全图</button>
-      <span class="gm-periods"></span><button data-action="exit">退出</button></div>
+    <div class="ahud__top panel gm-top">
+      <span class="gm-title">大地图 · 多方混战</span>
+      <div class="ahud__clock gm-clock"><b class="ahud__clock__num" data-clock>0 / 120</b></div>
+      <div class="ahud__tools ahud__tools--top">
+        <span class="gm-sizes"></span>
+        <button class="ahud__iconbtn" data-action="rally" data-on="1">集结</button>
+        <button class="ahud__iconbtn" data-action="overview">全图</button>
+        <button class="ahud__iconbtn" data-action="debug">调试</button>
+        <button class="ahud__iconbtn" data-action="exit">退出</button>
+      </div>
+    </div>
+    <div class="gm-debug" data-debug>
+      <div class="gm-debug__row"><span class="muted">时段</span><span class="gm-periods"></span></div>
+      <div class="gm-debug__row"><button data-action="autosky" data-flag="autosky">巡游</button>
+        <button data-action="auto" data-flag="auto">推进</button>
+        <button data-action="reset">重置</button></div>
+      <div class="gm-debug__info" data-info></div>
+    </div>
     <div class="gm-panel gm-dipl" hidden></div>
     <div class="gm-panel gm-market" hidden></div>
     <div class="gm-log"></div>
     <div class="gm-tip">点地面插旗集结 · 选卡牌再点地图落牌<br>滚轮缩放 / 拖动平移 / Shift+拖动转视角<br>点主城开外交、点集市设商路</div>`;
   ui.append(style, root);
   const tintEl = root.querySelector('.gm-tint');
-  const goldEl = root.querySelector('[data-gold]');
+  const clockEl = root.querySelector('[data-clock]');
   const infoEl = root.querySelector('[data-info]');
   const periodsEl = root.querySelector('.gm-periods');
+  const sizesEl = root.querySelector('.gm-sizes');
+  const debugEl = root.querySelector('[data-debug]');
   const diplEl = root.querySelector('.gm-dipl');
   const marketEl = root.querySelector('.gm-market');
   const logEl = root.querySelector('.gm-log');
   const rallyBtn = root.querySelector('[data-action="rally"]');
   const overviewBtn = root.querySelector('[data-action="overview"]');
+  const debugBtn = root.querySelector('[data-action="debug"]');
+  debugEl.hidden = !DEBUG_DEFAULT_OPEN;
+  debugBtn.dataset['on'] = DEBUG_DEFAULT_OPEN ? '1' : '0';
+
+  // 金币回到手牌下方那条旧 UI 的填充条（开放 API 提供，不是顶栏左上角一个数字）
+  const modBank = API.createModBank();
+  ui.append(modBank.el);
 
   // ===== 主程序同款场景零件 =====
   const scene = new T.Scene();
@@ -106,7 +148,8 @@ export function createView(host, game) {
   const rig = new A.CameraRig({
     pitchDeg: A.ARENA_CAMERA.pitchDeg,
     yawDeg: A.ARENA_CAMERA.yawDeg,
-    tilesAcross: LOCAL_VIEW, minTilesAcross: 12, maxTilesAcross: 100,
+    // 上限要盖得住最大档的全图视角，否则 rig.zoom 会被 clamp 到 100（实测大档只能拉到 100）
+    tilesAcross: LOCAL_VIEW, minTilesAcross: 12, maxTilesAcross: M.VIEW.lg + 8,
   });
   // 先给相机真实视口，再算场内边界：否则 clampDesired 用的是 1×1 默认尺寸
   rig.resize(window.innerWidth, window.innerHeight);
@@ -384,6 +427,19 @@ export function createView(host, game) {
     const a = b.dataset['action'];
     if (a === 'exit') { host.exit(); return; }
     if (a === 'close') { diplEl.hidden = true; marketEl.hidden = true; return; }
+    // 三档地图：启动前分流，和切模式/进出模组一样走「改 URL + reload」，
+    // 不做运行时重建世界（形状/路网/规则层都按档位在加载时算好）
+    if (a === 'size') {
+      const p = new URLSearchParams(location.search);
+      p.set('size', b.dataset['size']);
+      location.search = p.toString();
+      return;
+    }
+    if (a === 'debug') {
+      debugEl.hidden = !debugEl.hidden;
+      debugBtn.dataset['on'] = debugEl.hidden ? '0' : '1';
+      return;
+    }
     if (a === 'rally') {
       const on = rally.setEnabled(!rally.enabled);
       rallyBtn.dataset['on'] = on ? '1' : '0';
@@ -551,17 +607,25 @@ export function createView(host, game) {
 
   function render() {
     const s = game.state;
-    goldEl.textContent = s.factions[0].gold;
-    infoEl.textContent = `/ ${R.SPEC.gold.cap} 金 · 回合 ${s.tick}/${R.SPEC.endTick} · 来车 ${s.pending.length} · 兵 ${rally.units.length}`;
+    modBank.set(s.factions[0].gold, R.SPEC.gold.cap);
+    // 顶栏中间沿用主模式的时钟位（绝对居中），这里显示回合而不是倒计时
+    clockEl.textContent = `${s.tick} / ${R.SPEC.endTick}`;
+    infoEl.textContent = `档位 ${M.SIZES[M.SIZE].label} · 地图 ${M.MAP.cols}×${M.MAP.rows} · ` +
+      `地形 ${terrain.length} 格 · 中心 ${M.CENTER.size}×${M.CENTER.size} · ` +
+      `来车 ${s.pending.length} · 兵 ${rally.units.length} · 镜头 ${Math.round(rig.zoom)} 格`;
     const period = SKY_PERIODS[sky.periodIndex];
     tintEl.style.background = period.tint;
     ui.dataset['period'] = period.key;
     rallyBtn.dataset['on'] = rally.enabled ? '1' : '0';
+    sizesEl.innerHTML = Object.entries(M.SIZES).map(([id, cfg]) =>
+      `<button data-action="size" data-size="${id}" data-on="${M.SIZE === id ? 1 : 0}">${cfg.label}</button>`).join('');
     periodsEl.innerHTML = SKY_PERIODS.map((p, i) =>
-      `<button data-action="period" data-i="${i}" data-on="${sky.periodIndex === i ? 1 : 0}">${p.label}</button>`).join('') +
-      `<button data-action="autosky" data-on="${autoSky ? 1 : 0}">巡游</button>` +
-      `<button data-action="auto" data-on="${auto ? 1 : 0}">${auto ? '暂停' : '推进'}</button>` +
-      `<button data-action="reset">重置</button>`;
+      `<button data-action="period" data-i="${i}" data-on="${sky.periodIndex === i ? 1 : 0}">${p.label}</button>`).join('');
+    const autoBtn = root.querySelector('[data-flag="auto"]');
+    const skyBtn = root.querySelector('[data-flag="autosky"]');
+    autoBtn.dataset['on'] = auto ? '1' : '0';
+    autoBtn.textContent = auto ? '暂停' : '推进';
+    skyBtn.dataset['on'] = autoSky ? '1' : '0';
     modHand.render(hand.cards, s.factions[0].gold, hand.selected);
     logEl.innerHTML = s.log.slice(0, 6).map((l) => `<div>[${l.tick}] ${esc(l.text)}</div>`).join('');
     paintTiles();
@@ -630,6 +694,7 @@ export function createView(host, game) {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('resize', resize);
       modHand.dispose();
+      modBank.dispose();
       delete ui.dataset['period'];
       for (const v of unitViews.values()) removeUnitView(v);
       scene.traverse((o) => {
