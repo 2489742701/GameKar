@@ -188,6 +188,33 @@ export function unlockedCells(state, factionId) {
   return out;
 }
 
+/**
+ * 只写「占领 + 辐射」，不判据、不扣钱。
+ *
+ * 大六边形地图（map.js）自己有 4 邻域辐射判据，`hand.js` 落牌时用它；
+ * 这里给模组提供一个**镜像入口**，把玩家在大地图上盖的楼同步进抽象网格，
+ * 让封路 / 积分这些只看 `state.cells` 的规则继续有效。
+ * 扣钱只准发生在一处（卡牌 cost），所以这个函数绝不碰金币。
+ */
+export function claimCell(state, factionId, r, c) {
+  if (!inGrid(r, c)) return { ok: false, reason: 'out-of-grid' };
+  if (isRoadCell(r, c)) return { ok: false, reason: 'road' };
+  const cell = state.cells[r][c];
+  if (cell.building || (cell.owner !== null && cell.owner !== factionId)) {
+    return { ok: false, reason: 'occupied' };
+  }
+  cell.owner = factionId;
+  cell.building = true;
+  // 辐射：把 4 邻域里没主的格子标成己方可建（owner 只是标记，building 才是楼）
+  for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    const nr = r + dr, nc = c + dc;
+    if (!inGrid(nr, nc) || isRoadCell(nr, nc)) continue;
+    const n = state.cells[nr][nc];
+    if (n.owner === null && !n.building) n.owner = factionId;
+  }
+  return { ok: true };
+}
+
 /** 放楼 ⇒ 辐射解锁邻域（规则 3）。道路格恒不可建（规则 16）。 */
 export function placeBuilding(state, factionId, r, c) {
   if (!inGrid(r, c)) return { ok: false, reason: 'out-of-grid' };
@@ -202,15 +229,7 @@ export function placeBuilding(state, factionId, r, c) {
   const f = state.factions[factionId];
   if (f.gold < SPEC.cost.build) return { ok: false, reason: 'poor' };
   f.gold -= SPEC.cost.build;
-  cell.owner = factionId;
-  cell.building = true;
-  // 辐射：把 4 邻域里没主的格子标成己方可建（owner 只是标记，building 才是楼）
-  for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    const nr = r + dr, nc = c + dc;
-    if (!inGrid(nr, nc) || isRoadCell(nr, nc)) continue;
-    const n = state.cells[nr][nc];
-    if (n.owner === null && !n.building) n.owner = factionId;
-  }
+  claimCell(state, factionId, r, c);
   note(state, `${f.name} 在中心 (${r},${c}) 落楼，邻域已辐射解锁`);
   return { ok: true };
 }

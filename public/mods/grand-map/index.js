@@ -1,15 +1,17 @@
 /**
- * 大地图模组入口（2026-11-09）—— 从"占位骨架"升级为**可跑的规则原型**。
+ * 大地图模组入口（2026-11-09，P-087）—— 卡牌驱动的主模式扩展。
  *
- * 只做三件事：建规则状态、挂视图、按秒推进。规则在 rules.js、画面在 view.js，
- * 这里不写任何玩法逻辑。全部文件都在 public/mods/ 内，主程序零改动。
+ * 只做三件事：建规则状态、挂视图、按帧驱动。规则在 rules.js、地图在 map.js、
+ * 手牌判据在 hand.js、画面在 view.js，这里不写任何玩法逻辑。
+ * 全部文件都在 public/mods/ 内，主程序玩法文件零改动，能力靠 host.modApi 注入。
  *
- * 2026-11-09 起视图层换成**主游戏那套 3D 表现**（注入 ARENA_MODELS + buildModel，
- * 正交俯视、同一套建筑模型），天光四时段与云朵面片并入同一场景（sky.js）。
- * 仍是原型：单位战斗 / 拆家没做，胜负暂用积分占位。
+ * 表现层用的是主游戏那套 3D 零件（Renderer / 光照 / 相机 / OutputPass /
+ * ARENA_MODELS）；地图形态是大六边形像素地形 + 内部六芒星道路网。
+ * 四时段天光与云朵面片在 sky.js。仍是原型：单位战斗 / 拆家没做，胜负暂用积分占位。
  * 口径与待拍板项见 `docs/工作笔记/大地图原型设计_20261108.md`。
  */
 import { createGame, tick, placeBuilding } from './rules.js';
+import * as M from './map.js';
 import { createView } from './view.js';
 
 let cleanup = null;
@@ -19,19 +21,25 @@ export function mount(host) {
     throw new Error('host 契约不匹配（需要 api=1）');
   }
 
-  const game = { state: createGame() };
+  const game = { state: createGame(), tradeTarget: 2, tradeKind: 'near' };
   const view = createView(host, game);
 
   // 用注入的 GameLoop 驱动（不自己 setInterval，卸载时 loop.stop() 一起收干净）。
-  // 逐帧的天光 / 云 / 商队 / WebGL 渲染都在 view.frame 里；规则推进由视图按秒累计。
   const loop = host.makeLoop({ onFrame: (info) => view.frame(info) });
 
-  // 无头探针靠这两个判断模组是否挂上 / 读得到状态
+  // 无头探针靠这几个读得到状态 / 触发操作
   window.__modActive = 'grand-map';
   window.__grandMap = {
     get state() { return game.state; },
+    get map() { return M; },
+    get hand() { return view.hand; },
+    get periodIndex() { return view.periodIndex; },
     step() { tick(game.state); view.render(); },
     place(r, c) { const res = placeBuilding(game.state, 0, r, c); view.render(); return res; },
+    playCard(slot, col, row) { return view.playCard(slot, col, row); },
+    openMarket() { view.openMarket(); },
+    openDiplomacy(id) { view.openDiplomacy(id); },
+    setPeriod(i) { view.setPeriod(i); },
   };
 
   cleanup = () => {

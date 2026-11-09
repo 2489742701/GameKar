@@ -42,6 +42,8 @@ export interface ModHost {
   readonly engine: typeof import('./modDeps').modEngine;
   /** 主游戏的 3D 视觉资产工厂（模型长得和 1v1 一模一样） */
   readonly assets: typeof import('./modDeps').modAssets;
+  /** 开放 API：卡池 / 卡面图标 / 手牌工厂（卡牌驱动就靠它） */
+  readonly modApi: typeof import('./modDeps').modApi;
   makeLoop(options: GameLoopOptions): GameLoop;
   toast(message: string): void;
   /** 清掉 ?mod= 并 reload —— 复用项目已有的「改 URL + reload」范式 */
@@ -116,7 +118,7 @@ async function makeHost(): Promise<ModHost> {
   // 只有真的进模组模式才会付这部分代价。
   // 必须走 modDeps 的具名导出：直接 import('three') 会钉住整个命名空间，
   // three chunk 从 496 KB 涨到 690 KB（见 modDeps.ts 注释）。
-  const { modThree, modEngine, modAssets } = await import('./modDeps');
+  const { modThree, modEngine, modAssets, modApi } = await import('./modDeps');
 
   return {
     api: 1,
@@ -125,6 +127,7 @@ async function makeHost(): Promise<ModHost> {
     three: modThree,
     engine: modEngine,
     assets: modAssets,
+    modApi,
     makeLoop: (options) => {
       const loop = new modEngine.GameLoop(options);
       loop.start();

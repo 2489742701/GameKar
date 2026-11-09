@@ -61,7 +61,11 @@ function makeCloud(T) {
   return g;
 }
 
-export function createSky(T, scene) {
+/**
+ * @param origin 战场中心的世界坐标。P-087 起地图是大六边形（中心在 (36,32) 附近），
+ *               云必须绕着**这张图**飘，不能还钉在世界原点旁边。
+ */
+export function createSky(T, scene, origin = { x: 0, z: 0 }) {
   const uniforms = {
     topColor: { value: new T.Vector3(...hex(PERIODS[0].top)) },
     horizonColor: { value: new T.Vector3(...hex(PERIODS[0].horizon)) },
@@ -72,12 +76,13 @@ export function createSky(T, scene) {
   );
   scene.add(dome);
 
-  const ambient = new T.AmbientLight(new T.Color(PERIODS[0].ambient), 0.9);
-  const sun = new T.DirectionalLight(new T.Color(PERIODS[0].light), PERIODS[0].intensity);
-  sun.position.set(18, 40, 22);
+  // 主程序那套 LightingRig 已经给了基础照明，这里只叠加**时段色温**，别叠成过曝
+  const ambient = new T.AmbientLight(new T.Color(PERIODS[0].ambient), 0.35);
+  const sun = new T.DirectionalLight(new T.Color(PERIODS[0].light), PERIODS[0].intensity * 0.5);
+  sun.position.set(origin.x + 18, 40, origin.z + 22);
   scene.add(ambient, sun);
 
-  // 云是**小面片**，摆在四角外圈，别盖住中心 9×9 格子
+  // 云是**小面片**，铺在六边形战场外圈上空，俯视看得见、又不盖住中心公共区
   const clouds = [];
   const rnd = lcg(20261109);
   for (let i = 0; i < 6; i++) {
@@ -85,7 +90,7 @@ export function createSky(T, scene) {
     c.scale.setScalar(0.34 + rnd() * 0.34);
     const sx = rnd() < 0.5 ? -1 : 1;
     const sz = rnd() < 0.5 ? -1 : 1;
-    c.position.set(sx * (17 + rnd() * 15), 26 + rnd() * 8, sz * (14 + rnd() * 14));
+    c.position.set(origin.x + sx * (12 + rnd() * 16), 9 + rnd() * 5, origin.z + sz * (11 + rnd() * 14));
     c.userData.baseX = c.position.x;
     c.userData.speed = 0.35 + rnd() * 0.5;
     scene.add(c);
@@ -102,7 +107,7 @@ export function createSky(T, scene) {
     target.horizon.set(...hex(p.horizon));
     target.light.set(p.light);
     target.ambient.set(p.ambient);
-    target.intensity = p.intensity;
+    target.intensity = p.intensity * 0.5;
     target.cloud.set(p.cloud);
     target.opacity = p.cloudOpacity;
     // 即时生效：手动切时段要立刻看到，不能等逐帧 lerp（无头 rAF 还会被节流）
@@ -110,7 +115,7 @@ export function createSky(T, scene) {
     uniforms.horizonColor.value.copy(target.horizon);
     sun.color.copy(target.light);
     ambient.color.copy(target.ambient);
-    sun.intensity = p.intensity;
+    sun.intensity = target.intensity;
     for (const c of clouds) {
       for (const m of c.children) {
         m.material.color.copy(target.cloud);

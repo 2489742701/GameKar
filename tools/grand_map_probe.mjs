@@ -1,0 +1,256 @@
+/**
+ * 大地图模组的**无头实机验收**（2026-11-09，P-087）。
+ *
+ * 为什么单独一支探针：arena_shot.mjs 只认 window.arena（vanilla 模式），
+ * 模组模式挂的是 window.__modActive / window.__grandMap，读的东西完全不同。
+ *
+ * 用法（先 npm run build，再起一个静态服务）：
+ *   node tools/grand_map_probe.mjs [url] [输出目录]
+ *
+ * 检查项：
+ *   · 模组挂上、四张 .ahud__card 手牌、主程序卡面样式确实生效；
+ *   · 大六边形地形格数 / 六芒星道路 / 近路 / 对径都在；
+ *   · 落一张牌：金币只扣一次、占领 +1、抽象网格同步；
+ *   · 点集市开商路设置、点主城开外交、切晚上时段 tint 生效；
+ *   · 截图不是黑屏（解码 PNG 算平均亮度和颜色数）；
+ *   · 页面 exception 一条都不许有。
+ */
+import { spawn } from 'node:child_process';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
+
+const EDGE = process.env.EDGE_BIN ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const PAGE_URL = process.argv[2] ?? 'http://127.0.0.1:4188/arena.html?mod=grand-map';
+const OUT = process.argv[3] ?? 'docs';
+const PORT = 9351;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 最小 PNG 解码：只算平均亮度和颜色桶，够判断「有没有画出东西」。 */
+function pngStats(buf) {
+  let p = 8, w = 0, h = 0, color = 0;
+  const idat = [];
+  while (p < buf.length) {
+    const len = buf.readUInt32BE(p);
+    const type = buf.toString('ascii', p + 4, p + 8);
+    const data = buf.subarray(p + 8, p + 8 + len);
+    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); color = data[9]; }
+    else if (type === 'IDAT') idat.push(data);
+    else if (type === 'IEND') break;
+    p += 12 + len;
+  }
+  const bpp = color === 6 ? 4 : 3;
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = w * bpp;
+  let prev = Buffer.alloc(stride);
+  let sum = 0, n = 0;
+  const buckets = new Set();
+  for (let y = 0; y < h; y++) {
+    const f = raw[y * (stride + 1)];
+    const line = Buffer.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)));
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? line[x - bpp] : 0;
+      const b = prev[x];
+      const c = x >= bpp ? prev[x - bpp] : 0;
+      if (f === 1) line[x] = (line[x] + a) & 255;
+      else if (f === 2) line[x] = (line[x] + b) & 255;
+      else if (f === 3) line[x] = (line[x] + ((a + b) >> 1)) & 255;
+      else if (f === 4) {
+        const pp = a + b - c;
+        const pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
+        line[x] = (line[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+      }
+    }
+    for (let x = 0; x < w; x += 4) {
+      const i = x * bpp;
+      const r = line[i], g = line[i + 1], bl = line[i + 2];
+      sum += 0.299 * r + 0.587 * g + 0.114 * bl;
+      n++;
+      buckets.add(`${r >> 5},${g >> 5},${bl >> 5}`);
+    }
+    prev = line;
+  }
+  return { w, h, brightness: +(sum / n).toFixed(2), colorBuckets: buckets.size };
+}
+
+mkdirSync(OUT, { recursive: true });
+
+const child = spawn(EDGE, [
+  '--headless=new', `--remote-debugging-port=${PORT}`,
+  '--disable-gpu-sandbox', '--enable-unsafe-swiftshader',
+  '--window-size=1280,760', '--no-first-run',
+  '--user-data-dir=' + process.env.TEMP + '/grand-map-probe-profile',
+  'about:blank',
+], { stdio: 'ignore' });
+
+let ws;
+const pending = new Map();
+let nextId = 1;
+function send(method, params = {}) {
+  const id = nextId++;
+  ws.send(JSON.stringify({ id, method, params }));
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(new Error(`${method} 超时`)); } }, 20000);
+  });
+}
+
+try {
+  let targets = null;
+  for (let i = 0; i < 40; i++) {
+    await sleep(250);
+    try { targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json(); if (targets.length) break; }
+    catch { /* 端口还没起来 */ }
+  }
+  if (!targets?.length) throw new Error('调试端口没起来');
+  const page = targets.find((t) => t.type === 'page') ?? targets[0];
+  ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.id && pending.has(msg.id)) {
+      const { resolve, reject } = pending.get(msg.id);
+      pending.delete(msg.id);
+      if (msg.error) reject(new Error(msg.error.message)); else resolve(msg.result);
+    }
+  };
+
+  await send('Page.enable');
+  await send('Runtime.enable');
+  const errors = [];
+  const warnings = [];
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.method === 'Runtime.exceptionThrown') {
+      errors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+    }
+    if (msg.method === 'Runtime.consoleAPICalled' && (msg.params.type === 'warning' || msg.params.type === 'error')) {
+      warnings.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
+    }
+  });
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 760, deviceScaleFactor: 1, mobile: false });
+  await send('Page.navigate', { url: PAGE_URL });
+  await sleep(3500);
+
+  const ev = async (expression) => {
+    const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
+    return r.result?.value;
+  };
+
+  const base = await ev(`(() => {
+    const gm = window.__grandMap;
+    const cards = [...document.querySelectorAll('.ahud__card')];
+    const M = gm?.map;
+    return {
+      modActive: window.__modActive ?? null,
+      cards: cards.length,
+      handRoot: !!document.querySelector('.ahud__hand[data-mod-hand="1"]'),
+      cardNames: cards.map((c) => c.querySelector('.ahud__card__name')?.textContent ?? ''),
+      cardHasArt: cards.every((c) => !!c.querySelector('.ahud__card__art svg')),
+      cardWidth: cards[0] ? Math.round(cards[0].getBoundingClientRect().width) : 0,
+      topbar: !!document.querySelector('.gm-top'),
+      terrain: M ? M.terrainCells().length : 0,
+      star: M ? M.starRoads().length : 0,
+      short: M ? M.shortcuts().length : 0,
+      far: M ? M.diameterRoads().length : 0,
+      claims: gm?.hand?.claims?.size ?? 0,
+      gold: gm?.state?.factions?.[0]?.gold ?? null,
+      fallback: !!document.body.textContent.includes('模组没挂上'),
+    };
+  })()`);
+
+  // 干净的第一张图：还没点开任何浮层、还没打牌
+  const shotClean = await send('Page.captureScreenshot', { format: 'png' });
+  writeFileSync(`${OUT}/大地图_P087_初始画面_20261109.png`, Buffer.from(shotClean.data, 'base64'));
+  const cardDayBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
+
+  const play = await ev(`(() => {
+    const gm = window.__grandMap;
+    if (!gm) return { ok: false, reason: 'no mod' };
+    const hand = gm.hand, M = gm.map;
+    const slot = hand.cards.findIndex((c) => c && c.kind === 'building' && c.id !== 'market');
+    if (slot < 0) return { ok: false, reason: '起始四张里没有建筑卡' };
+    // 优先落中心公共区，好把「地图格 → 抽象网格」这条镜像链路也验到
+    const cells = [...hand.unlocked()].map((k) => k.split(',').map(Number));
+    const center = cells.find(([c, r]) => M.toAbstract(c, r));
+    const [col, row] = center ?? cells[0] ?? [];
+    if (col === undefined) return { ok: false, reason: '没有可落牌的格子' };
+    const cost = hand.cards[slot].cost;
+    const before = gm.state.factions[0].gold;
+    const res = gm.playCard(slot, col, row);
+    const a = M.toAbstract(col, row);
+    return {
+      ok: res.ok, reason: res.reason ?? '', cost, col, row,
+      goldDelta: before - gm.state.factions[0].gold,
+      claims: hand.claims.size,
+      abstractSynced: a ? gm.state.cells[a.r][a.c].building : 'outside-center',
+      cardEmptied: hand.cards[slot] === null,
+    };
+  })()`);
+
+  const panels = await ev(`(() => {
+    const gm = window.__grandMap;
+    gm.openMarket();
+    const market = document.querySelector('.gm-market');
+    const m = { visible: !market.hidden, hasNearFar: market.textContent.includes('近路') && market.textContent.includes('远路'),
+                hasTargets: market.querySelectorAll('[data-action="target"]').length };
+    gm.openDiplomacy(2);
+    const dipl = document.querySelector('.gm-dipl');
+    const d = { visible: !dipl.hidden, hasAlly: dipl.textContent.includes('结盟'),
+                hasBackstabHint: dipl.textContent.includes('背刺') };
+    return { market: m, diplomacy: d };
+  })()`);
+
+  const shotDay = await send('Page.captureScreenshot', { format: 'png' });
+  const dayBuf = Buffer.from(shotDay.data, 'base64');
+  writeFileSync(`${OUT}/大地图_P087_卡牌与六边形_白天_20261109.png`, dayBuf);
+  const day = pngStats(dayBuf);
+
+  // 收掉浮层再截夜晚，别让面板挡住战场
+  await ev(`document.querySelector('.gm-dipl [data-action="close"]')?.click();
+            document.querySelector('.gm-market [data-action="close"]')?.click();
+            window.__grandMap.setPeriod(3); 'night'`);
+  await sleep(400);
+  const nightTint = await ev(`document.querySelector('.gm-tint').style.background`);
+  const cardNightBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
+  const uiPeriod = await ev(`document.getElementById('arena-ui').dataset.period`);
+  const shotNight = await send('Page.captureScreenshot', { format: 'png' });
+  const nightBuf = Buffer.from(shotNight.data, 'base64');
+  writeFileSync(`${OUT}/大地图_P087_卡牌与六边形_夜晚_20261109.png`, nightBuf);
+  const night = pngStats(nightBuf);
+
+  const checks = {
+    '模组挂上': base.modActive === 'grand-map' && !base.fallback,
+    '四张主模式卡面': base.cards === 4 && base.handRoot && base.cardHasArt && base.cardWidth > 60,
+    '大六边形地形': base.terrain > 1500,
+    '内部六芒星 / 近路 / 对径': base.star > 50 && base.short > 50 && base.far > 20,
+    '六方起点': base.claims === 12,
+    '落牌成功': play.ok,
+    '金币只扣一次': play.goldDelta === play.cost,
+    '中心抽象网格同步': play.abstractSynced === true,
+    '打出后留空格': play.cardEmptied,
+    '集市面板开得开': panels.market.visible && panels.market.hasNearFar && panels.market.hasTargets === 5,
+    '外交面板开得开': panels.diplomacy.visible && panels.diplomacy.hasAlly && panels.diplomacy.hasBackstabHint,
+    '白天不是黑屏': day.brightness > 12 && day.colorBuckets > 12,
+    '夜晚确实更暗': night.brightness < day.brightness,
+    '夜晚 tint 生效': nightTint.includes('8, 16, 42') || nightTint.includes('8,16,42'),
+    'HUD 卡面同步入夜': uiPeriod === 'night' && cardNightBg !== cardDayBg,
+    '页面零异常': errors.length === 0,
+    '主城模型装配无告警': warnings.length === 0,
+  };
+
+  console.log('BASE      ', JSON.stringify(base));
+  console.log('PLAY      ', JSON.stringify(play));
+  console.log('PANELS    ', JSON.stringify(panels));
+  console.log('DAY/NIGHT ', JSON.stringify({ day, night, nightTint }));
+  console.log('ERRORS    ', JSON.stringify(errors));
+  console.log('WARNINGS  ', JSON.stringify(warnings));
+  console.log('---- CHECKS ----');
+  for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`);
+  const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([n]) => n);
+  console.log(`GATE ${failed.length ? 'FAIL' : 'PASS'} (${Object.keys(checks).length - failed.length}/${Object.keys(checks).length})`);
+  if (failed.length) process.exitCode = 1;
+} finally {
+  try { ws?.close(); } catch { /* 忽略 */ }
+  child.kill();
+}

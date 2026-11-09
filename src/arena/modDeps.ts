@@ -21,6 +21,8 @@ import {
   DirectionalLight,
   DoubleSide,
   Group,
+  InstancedMesh,
+  Object3D,
   Line,
   LineBasicMaterial,
   LineSegments,
@@ -50,7 +52,8 @@ import { buildStand } from './stand';
 import { AmbientDust } from './ambient';
 import { installArenaBackdrop } from './visuals/backdrop';
 import { TILT_SHIFT_SHADER } from './visuals/tiltShift';
-import { ARENA_CAMERA, NO_BUILD, FIELD } from './config';
+import { ARENA_CAMERA, NO_BUILD, FIELD, BUILDING_SCALE } from './config';
+import { MOD_API_VERSION, CARDS, ECONOMY, HAND, iconOf, createModHand } from './modApi';
 import { buildModel } from '@game/models/kit';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -62,6 +65,8 @@ export const modThree = {
   WebGLRenderer,
   Scene,
   Group,
+  InstancedMesh,
+  Object3D,
   OrthographicCamera,
   Vector2,
   Vector3,
@@ -83,6 +88,19 @@ export const modThree = {
   SphereGeometry,
   BackSide,
   DoubleSide,
+};
+
+/**
+ * 开放给模组的稳定 API（P-087）：卡池、卡面图标、手牌工厂。
+ * 主程序玩法文件一行不动，只新增 `modApi.ts` 这个出口。
+ */
+export const modApi = {
+  version: MOD_API_VERSION,
+  CARDS,
+  ECONOMY,
+  HAND,
+  iconOf,
+  createModHand,
 };
 
 /** 只借引擎，不借玩法：没有 ArenaWorld / config / ArenaApp。 */
@@ -121,4 +139,5 @@ export const modAssets = {
   ARENA_CAMERA,
   NO_BUILD,
   FIELD,
+  BUILDING_SCALE,
 };
