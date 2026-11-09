@@ -12,9 +12,14 @@
  */
 
 import {
+  AmbientLight,
+  BackSide,
   BoxGeometry,
   BufferGeometry,
   CircleGeometry,
+  Color,
+  DirectionalLight,
+  DoubleSide,
   Group,
   Line,
   LineBasicMaterial,
@@ -22,13 +27,20 @@ import {
   Mesh,
   MeshBasicMaterial,
   OrthographicCamera,
+  PlaneGeometry,
+  Raycaster,
   Scene,
+  ShaderMaterial,
+  SphereGeometry,
+  Vector2,
   Vector3,
   WebGLRenderer,
 } from 'three';
 import { GameLoop } from '@engine/core/GameLoop';
 import { Random } from '@engine/math/Random';
 import { cellToWorld } from '@engine/math/Grid';
+import { ARENA_MODELS } from './models';
+import { buildModel } from '@game/models/kit';
 
 /** 注入给模组的 three 子集（不是完整命名空间，别改回 `import('three')`）。 */
 export const modThree = {
@@ -36,15 +48,25 @@ export const modThree = {
   Scene,
   Group,
   OrthographicCamera,
+  Vector2,
   Vector3,
+  Color,
   Line,
   LineSegments,
   BufferGeometry,
   LineBasicMaterial,
   Mesh,
   MeshBasicMaterial,
+  ShaderMaterial,
+  Raycaster,
+  AmbientLight,
+  DirectionalLight,
   BoxGeometry,
   CircleGeometry,
+  PlaneGeometry,
+  SphereGeometry,
+  BackSide,
+  DoubleSide,
 };
 
 /** 只借引擎，不借玩法：没有 ArenaWorld / config / ArenaApp。 */
@@ -52,4 +74,13 @@ export const modEngine = {
   GameLoop,
   Random,
   cellToWorld,
+};
+
+/**
+ * 主游戏的**视觉资产工厂**（2026-11-09）：模组用它生成和 1v1 完全相同的建筑模型。
+ * 依然是注入，不是让模组去 import 主程序 —— 隔离锁一条没松。
+ */
+export const modAssets = {
+  ARENA_MODELS,
+  buildModel,
 };
