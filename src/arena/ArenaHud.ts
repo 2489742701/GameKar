@@ -954,9 +954,11 @@ export class ArenaHud {
         fresh.push(
           b.kind === 'barracks'
             ? '您的兵营缺少磨坊与民居'
-            : b.kind === 'cannonTower'
-              ? '您的炮塔防御建筑缺少民居'
-              : '您的箭塔防御建筑缺少民居',
+            : b.kind === 'guild'
+              ? '您的商行缺少民居'
+              : b.kind === 'cannonTower'
+                ? '您的炮塔防御建筑缺少民居'
+                : '您的箭塔防御建筑缺少民居',
         );
       }
     }

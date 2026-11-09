@@ -98,11 +98,12 @@ export const BUILD = {
   seconds: {
     house: 2.2,
     mill: 2.8,
+    guild: 3.2,
     arrowTower: 3.4,
     cannonTower: 3.8,
     barracks: 4.2,
     orcLair: 3.6,
-  } as Record<'house' | 'mill' | 'arrowTower' | 'cannonTower' | 'barracks' | 'orcLair', number>,
+  } as Record<'house' | 'mill' | 'guild' | 'arrowTower' | 'cannonTower' | 'barracks' | 'orcLair', number>,
 };
 
 /**
@@ -113,8 +114,8 @@ export const BUILD = {
  *  这就是我们限制建造和区分的一个东西。」
  *
  * 这两个读数是**还剩几个位置**，不是「库存有多少」：
- * - **人口** 由民居提供（每座 +2），建筑占 2、每个兵占 1 —— 限制「能盖多少楼、能养多少兵」；
- * - **面包** 由磨坊提供（每座 +2），只有兵吃（每个 1）—— 单独限制「能出多少兵」。
+ * - **人口** 由民居提供（每座 +2），建筑占 `BUILDING_POP` 表里那份、每个兵占 1 —— 限制「能盖多少楼、能养多少兵」；
+ * - **面包** 由磨坊提供（每座 `SUPPLY.millBread`，2026-11-09 起是 3），只有兵吃（每个 1）—— 单独限制「能出多少兵」。
  *
  * **不要把它改成随时间涨** —— 那就变成第二个金币，这两个数就失去「限制建造」的意义了。
  */
@@ -126,9 +127,9 @@ export const SUPPLY = {
    */
   basePop: 6,
   baseBread: 3,
-  /** 民居提供的人口 / 磨坊提供的面包 */
+  /** 民居提供的人口 / 磨坊提供的面包（2026-11-09 用户："磨坊改成加三个面包"） */
   housePop: 2,
-  millBread: 2,
+  millBread: 3,
   /**
    * 建筑占用的人口**按建筑种类**读 `BUILDING_POP`（2026-11-07 用户调整：
    * 磨坊 1、箭塔 1、炮塔 2）。这里不再放一个统一数字 ——
@@ -179,9 +180,12 @@ export const ECONOMY = {
    */
   tickSeconds: 2,
   perTick: 1,
-  /** 磨坊每隔多久吐一次金，每次多少 */
+  /**
+   * 产金建筑每隔多久吐一次金。**每次吐多少**不再放这里 ——
+   * 判据、卡面金币 SVG 个数统一读 `GOLD_INCOME`（2026-11-09 用户：
+   * 「磨坊下面应该有一个 +1金币 的 SVG」「商行加两个金币的 SVG」）。
+   */
   millInterval: 5,
-  millBonus: 2,
 };
 
 /**
@@ -234,6 +238,8 @@ export const LOGISTICS = {
   barracksHouse: 1,
   /** 防御塔（箭塔/炮塔）：1 座民居 */
   towerHouse: 1,
+  /** 商行：1 座民居（2026-11-09 用户："要占用两个人口和一个房子"） */
+  guildHouse: 1,
 };
 
 /**
@@ -334,6 +340,8 @@ export const AA_SOURCES: ReadonlySet<string> = new Set([
 export const canHitAir = (source: string): boolean => AA_SOURCES.has(source);
 
 export const MILL = { hp: 300 };
+/** 商行：产金比磨坊快，但更脆一点、还要配民居（2026-11-09 新增） */
+export const GUILD = { hp: 340 };
 
 /**
  * **对建筑伤害倍率**（2026-11-07 平衡调整，见流水账 P-066）。
@@ -365,7 +373,7 @@ export const BUILDING_DAMAGE_SCALE = 2.2;
 
 /**
  * 民居：不出兵也不产金，专门给"要干活的楼"配人手 ——
- * 兵营 1 座、每座防御塔 1 座（用户 2026-10-31："防御建筑也占一处民房"）。
+ * 兵营 1 座、每座防御塔 1 座、商行 1 座（2026-11-09 新增）。
  *
  * 所以它是最值得打的建筑：拆掉对方两座民居，对方后配的两座塔就哑火、兵营就停产。
  * 这也是"拖他的建筑去打攻防"这条设计的具体落点，不是装饰。
@@ -480,10 +488,18 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'mill',
     name: '磨坊',
-    blurb: '每 5 秒多给 2 金。前期投资，回本要一会儿。',
+    blurb: '每 5 秒多给 1 金、加 3 面包。前期投资，回本要一会儿。',
     kind: 'building',
     cost: 10,
     building: 'mill',
+  },
+  {
+    id: 'guild',
+    name: '商行',
+    blurb: '每 5 秒多给 2 金，比磨坊快一倍。要配 1 座民居才开工，占 2 人口。',
+    kind: 'building',
+    cost: 14,
+    building: 'guild',
   },
   {
     id: 'archers',
@@ -709,6 +725,7 @@ export const BUILDING_SPECS = {
   arrowTower: { cols: 3, rows: 3, hp: TOWER.arrow.hp },
   cannonTower: { cols: 3, rows: 3, hp: TOWER.cannon.hp },
   mill: { cols: 3, rows: 3, hp: MILL.hp },
+  guild: { cols: 3, rows: 3, hp: GUILD.hp },
   house: { cols: 3, rows: 3, hp: HOUSE.hp },
   gearFactory: { cols: 4, rows: 3, hp: GEAR_FACTORY.hp },
   orcLair: { cols: 3, rows: 3, hp: ORC_LAIR.hp },
@@ -721,7 +738,7 @@ export type BuildingKind = keyof typeof BUILDING_SPECS;
 
 /**
  * **建筑占用人口表**（2026-11-07 用户："磨坊只需要扣一个人口，加两个面包……
- * 箭塔占用 1 个人口，炮塔占用两个人口"）。
+ * 箭塔占用 1 个人口，炮塔占用两个人口"；2026-11-09 磨坊面包改 3、新增商行 2 人口）。
  *
  * 这是判据的**唯一来源**：`ArenaWorld.supplyOf / supplyBlocked`、
  * `ai.canPlay`、卡面 `supplyRows` 的 SVG 图标数量全读它，
@@ -729,7 +746,8 @@ export type BuildingKind = keyof typeof BUILDING_SPECS;
  */
 export const BUILDING_POP: Record<BuildingKind, number> = {
   house: 0,       // 自己是容器
-  mill: 1,        // 加 2 面包，只扣 1 人口
+  mill: 1,        // 加 3 面包 + 1 金，只扣 1 人口
+  guild: 2,       // 商行 +2 金，扣 2 人口（还要 1 座民居配套）
   arrowTower: 1,  // 箭塔 1
   cannonTower: 2, // 炮塔 2
   barracks: 2,
@@ -738,6 +756,27 @@ export const BUILDING_POP: Record<BuildingKind, number> = {
 };
 
 export const buildingPopOf = (kind: BuildingKind): number => BUILDING_POP[kind] ?? 2;
+
+/**
+ * **产金建筑：每 `ECONOMY.millInterval` 秒吐多少金**（2026-11-09 用户：
+ * 「磨坊下面应该有一个 +1金币 的 SVG」「商行加两个金币的 SVG，就是说给金币提速」）。
+ *
+ * 这是**唯一一张表**：`ArenaWorld` 的产金判据、卡面 `supplyRows` 的金币 SVG 个数
+ * 都读它，谁也不许在别处写死一个 1 或 2。
+ * 用户确认过「图标数 = 吐金数」：磨坊 +1、商行 +2（磨坊从原来的 +2 降下来，
+ * 用 +3 面包补偿）。
+ */
+export const GOLD_INCOME: Partial<Record<BuildingKind, number>> = {
+  mill: 1,
+  guild: 2,
+};
+
+/** 这栋楼每轮吐多少金（不产金返回 0）。 */
+export const goldIncomeOf = (kind: string): number => GOLD_INCOME[kind as BuildingKind] ?? 0;
+
+/** 要配民居才开工的楼（产金也要人手，和塔/兵营同一条红线）。 */
+export const needsHouse = (kind: string): boolean =>
+  kind === 'barracks' || kind === 'arrowTower' || kind === 'cannonTower' || kind === 'guild';
 
 /**
  * **军队卡的人口 / 口粮**（2026-11-07 用户："兽人军队不占用人口，但是需要双倍的面包……

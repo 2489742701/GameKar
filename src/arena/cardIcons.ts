@@ -45,6 +45,16 @@ export const CARD_ICON: Record<string, string> = {
     </g>
   </svg>`,
 
+  /** 商行：铺面 + 檐下招牌 + 一枚金币（和磨坊的风车剪影分得开） */
+  guild: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <g fill="currentColor">
+      <path d="M2.6 9.4 12 4.2l9.4 5.2v2H2.6v-2Z"/>
+      <path d="M4.4 12.8h15.2v8H4.4v-8Z"/>
+    </g>
+    <circle cx="12" cy="16.6" r="2.9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="M12 15.1v3M11 16.6h2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+  </svg>`,
+
   /** 民居：尖顶 + 门窗 */
   house: `<svg viewBox="0 0 24 24" aria-hidden="true">
     <path fill="currentColor" fill-rule="evenodd" d="M12 2.4 2.2 11h2.6v10.2h5.4v-6.4h3.6v6.4h5.4V11h2.6L12 2.4Z"/>

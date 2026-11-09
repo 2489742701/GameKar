@@ -100,9 +100,11 @@ export function wishList(count: (kind: BuildingKind | 'core') => number): string
   const barracks = count('barracks');
   const mills = count('mill');
   const houses = count('house');
+  const guilds = count('guild');
   const out: string[] = [];
 
-  if (houses < towers + barracks + 1) out.push('house');
+  // 商行也是「要干活的楼」（2026-11-09）：占 1 座民居名额，算进去才不会把塔挤成死楼
+  if (houses < towers + barracks + guilds + 1) out.push('house');
   if (towers < 1) out.push('arrowTower', 'cannonTower');
   if (barracks < 1) {
     if (mills < 1) out.push('mill');
@@ -143,6 +145,7 @@ export function placementBand(card: ArenaCard): PlacementBand {
     // 经济 / 被动科技：躲在自家底线那一侧
     case 'house':
     case 'mill':
+    case 'guild':
     case 'gearFactory':
       return { lo: 0, hi: 0.4 };
     // 防御塔：顶到最前面才拦得住
@@ -195,16 +198,21 @@ export function assess(card: ArenaCard, view: AiView): CardAssess {
   const barracks = view.count('barracks');
   const mills = view.count('mill');
   const houses = view.count('house');
+  const guilds = view.count('guild');
   /** 消费者（要占民居名额的楼）+ 1 座余量：给"下一栋楼"留的活扣 */
-  const needHouses = towers + barracks + 1;
+  const needHouses = towers + barracks + guilds + 1;
 
   switch (card.building) {
     // 名额已经多出两座没用：再盖是白花钱（wishList 在 houses < 消费者+1 时才想要）
     case 'house':
-      return houses >= towers + barracks + 2 ? 'unwise' : 'ok';
+      return houses >= towers + barracks + guilds + 2 ? 'unwise' : 'ok';
     // 面包上限够用：至少 1 座（没兵营也要保底），再多一座是冗余
     case 'mill':
       return mills >= Math.max(1, barracks) + 1 ? 'unwise' : 'ok';
+    // 商行：产金但占 2 人口 + 1 民居。民居接不住就是一座不吐金的死楼，
+    // 而且只留一座（+2 金/5 秒已经够快，堆第二座会把后勤全吃掉）
+    case 'guild':
+      return guilds >= 1 || houses < needHouses ? 'unwise' : 'ok';
     // 第一座兵营永远值得盖（产兵主路径，缺后勤会由 draw()/reroll() 保底补）；
     // 第二座起，磨坊或民居接不住就是死楼
     case 'barracks':

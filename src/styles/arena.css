@@ -527,6 +527,10 @@
   color: #ff6a5e;
 }
 
+/* 2026-11-09：产金建筑的「+N 金币」SVG 染成金色；民居配套用冷灰和人口区分 */
+.ahud__card__need__grp[data-need='gold'] { color: var(--gold-hi); }
+.ahud__card__need__grp[data-need='house'] { color: #aebfd6; }
+
 /* 中间：SVG 图标。颜色吃 currentColor，所以跟着卡面的金/白走 */
 .ahud__card__art {
   width: 30px;

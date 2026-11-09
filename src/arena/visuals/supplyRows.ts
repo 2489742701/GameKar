@@ -8,21 +8,32 @@
  * `ArenaWorld.supplyOf / supplyBlocked`、`ai.canPlay` 和这里画 SVG 的个数
  * 全部读同一套数，卡面不会自己算账 —— 否则会画出"扣 2 人口"却实际只扣 1。
  *
- * 现在的具体口径：
- *  - 民居 +2 人口上限、不占；磨坊 +2 面包、只占 **1** 人口；
+ * 现在的具体口径（2026-11-09 用户补了金币 SVG）：
+ *  - 民居 +2 人口上限、不占；磨坊 **+3 面包 +1 金币**、只占 **1** 人口；
+ *  - **商行 +2 金币**、占 **2** 人口并要 **1 座民居**配套（缺配停摆）；
+ *  - 金币 SVG 个数读 `GOLD_INCOME`（和产金判据同一张表），面包读 `SUPPLY.millBread`；
  *  - 箭塔占 **1** 人口、炮塔占 **2**，兵营 / 工厂 / 兽人巢穴占 2；
  *  - **民兵集结 / 兽人军队不画人口图标**（零人口）；兽人每人吃 **2** 份面包；
  *  - 其余军队 n 人 ⇒ −n 人口 −n 面包（牧师小队 2 人 ⇒ −2人 −2包）。
  *
  * 输出是两段 HTML，HUD 只负责塞进容器：`data-need` 保留给 data-short 红色告警。
  */
-import { SUPPLY, armySupplyOf, buildingPopOf, type ArenaCard } from '../config';
-import { BREAD_ICON, POP_ICON } from '../supplyIcons';
+import {
+  GOLD_INCOME, LOGISTICS, SUPPLY, armySupplyOf, buildingPopOf, type ArenaCard,
+} from '../config';
+import { BREAD_ICON, COIN_ICON, POP_ICON } from '../supplyIcons';
+import { iconOf } from '../cardIcons';
 
-const group = (need: 'pop' | 'bread', inner: string): string =>
+type Need = 'pop' | 'bread' | 'gold' | 'house';
+
+const group = (need: Need, inner: string): string =>
   `<span class="ahud__card__need__grp" data-need="${need}">${inner}</span>`;
-const repeat = (need: 'pop' | 'bread', svg: string, n: number): string =>
+const repeat = (need: Need, svg: string, n: number): string =>
   n > 3 ? group(need, `${svg}<b>×${n}</b>`) : group(need, svg.repeat(n));
+
+/** 金币 SVG 个数 = 每轮吐金数（GOLD_INCOME 是唯一来源）。 */
+const goldRow = (kind: 'mill' | 'guild'): string =>
+  group('gold', COIN_ICON.repeat(GOLD_INCOME[kind] ?? 0));
 
 /** 一行：`+` 金色（增）/ `−` 珊瑚红（减），后面跟若干组需求图标。 */
 const row = (kind: 'plus' | 'minus', groups: string): string =>
@@ -42,8 +53,15 @@ export function supplyRows(card: ArenaCard): SupplyRows {
     const pop = buildingPopOf(card.building!);
     if (card.building === 'mill') {
       return {
-        plus: group('bread', BREAD_ICON.repeat(SUPPLY.millBread)),
+        plus: group('bread', BREAD_ICON.repeat(SUPPLY.millBread)) + goldRow('mill'),
         minus: group('pop', POP_ICON.repeat(pop)),
+      };
+    }
+    if (card.building === 'guild') {
+      return {
+        plus: goldRow('guild'),
+        minus: group('pop', POP_ICON.repeat(pop)) +
+          group('house', iconOf('house').repeat(LOGISTICS.guildHouse)),
       };
     }
     return { plus: '', minus: group('pop', POP_ICON.repeat(pop)) };

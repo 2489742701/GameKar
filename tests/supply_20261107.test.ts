@@ -1,6 +1,6 @@
 /**
  * 2026-11-07 中午的经济规则锁（用户："单位调整 SVG 也要一起落地，卡面也要一起落地"）：
- *  磨坊只扣 1 人口 / 加 2 面包；箭塔 1 人口、炮塔 2；
+ *  磨坊只扣 1 人口 / 加 3 面包 + 1 金；箭塔 1 人口、炮塔 2；
  *  民兵集结不占人口；兽人军队不占人口但吃双倍面包；
  *  新增兽人巢穴（只花钱就能造，造完解锁全部兽人军队）。
  *
@@ -13,14 +13,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld } from '@arena/ArenaWorld';
 import {
-  BUILDING_POP, BUILDING_SPECS, SUPPLY, TECH,
+  BUILDING_POP, BUILDING_SPECS, GOLD_INCOME, SUPPLY, TECH,
   armySupplyOf, buildingPopOf, cardById,
 } from '@arena/config';
 import { iconOf } from '@arena/cardIcons';
 import { ARENA_MODELS } from '@arena/models';
 import { needsStaffing } from '@arena/visuals/labels';
 import { supplyRows, supplyRowsHtml } from '@arena/visuals/supplyRows';
-import { BREAD_ICON, POP_ICON } from '@arena/supplyIcons';
+import { BREAD_ICON, COIN_ICON, POP_ICON } from '@arena/supplyIcons';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
@@ -69,7 +69,7 @@ describe('判据表：建筑人口与军队口粮', () => {
 });
 
 describe('端到端：落牌后的真实读数', () => {
-  it('磨坊 +2 面包上限、只占 1 人口；箭塔 1、炮塔 2', () => {
+  it('磨坊 +3 面包上限、只占 1 人口；箭塔 1、炮塔 2', () => {
     const w = new ArenaWorld({ seed: 401 });
     w.auto.red = false;
     built(w, 'mill', 2, 2);
@@ -95,7 +95,7 @@ describe('端到端：落牌后的真实读数', () => {
     w.auto.red = false;
     expect(w.techAllows('blue', cardById('orcs'))).toBe(false);
     built(w, 'orcLair', 2, 2);
-    built(w, 'mill', 6, 2); // 面包上限 3+2=5，够 4
+    built(w, 'mill', 6, 2); // 面包上限 3+3=6，够 4
     expect(w.techAllows('blue', cardById('orcs'))).toBe(true);
     const before = w.supplyOf('blue').pop;
     expect(put(w, 'orcs', 10, 6).ok).toBe(true);
@@ -117,10 +117,12 @@ describe('端到端：落牌后的真实读数', () => {
 });
 
 describe('卡面 SVG 跟着判据走', () => {
-  it('磨坊画出 1 个人口、2 个面包；箭塔 1 人、炮塔 2 人', () => {
+  it('磨坊画出 1 个人口、3 个面包、1 个金币；箭塔 1 人、炮塔 2 人', () => {
     const mill = supplyRowsHtml(cardById('mill'));
-    expect(countIcon(mill, POP_ICON)).toBe(1);
-    expect(countIcon(mill, BREAD_ICON)).toBe(2);
+    expect(countIcon(mill, POP_ICON)).toBe(BUILDING_POP.mill);
+    expect(countIcon(mill, BREAD_ICON)).toBe(SUPPLY.millBread);
+    // 2026-11-09 P-093：磨坊下面要有一枚金币 SVG，个数跟 GOLD_INCOME 走
+    expect(countIcon(mill, COIN_ICON)).toBe(GOLD_INCOME.mill);
     expect(countIcon(supplyRowsHtml(cardById('arrowTower')), POP_ICON)).toBe(1);
     expect(countIcon(supplyRowsHtml(cardById('cannonTower')), POP_ICON)).toBe(2);
   });

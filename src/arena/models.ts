@@ -727,6 +727,25 @@ export function orcLairModel(accent: number): ArenaModel {
   };
 }
 
+/**
+ * 商行（2026-11-09 新增）：民居的体量 + 一块金招牌 + 门口柜台。
+ * 复用民居骨架（连可掉落墙壳都一致），只在镜头这一侧多两件，
+ * 所以和民居（没招牌）、磨坊（风车帆）两种剪影都能一眼分开。
+ */
+export function guildModel(accent: number): ArenaModel {
+  const base = houseModel(accent);
+  return {
+    ...base,
+    static: [
+      ...base.static,
+      // 门楣上的金字招牌（box 的 at 是中心，z 略比门窗靠前）
+      box([0.94, 0.24, 0.07], ARENA_PAL.gold, [0, 0.62, 0.53]),
+      // 门口柜台：矮、宽、探出墙面
+      box([0.78, 0.16, 0.26], ARENA_PAL.woodLight, [0, mid(0.06, 0.16), 0.66]),
+    ],
+  };
+}
+
 /** 名字 → 造模型。视图层只读这张表；`accent` 是阵营色。 */
 export const ARENA_MODELS = {
   core: coreModel,
@@ -734,6 +753,7 @@ export const ARENA_MODELS = {
   arrowTower: arrowTowerModel,
   cannonTower: cannonTowerModel,
   mill: millModel,
+  guild: guildModel,
   house: houseModel,
   gearFactory: gearFactoryModel,
   orcLair: orcLairModel,
@@ -768,6 +788,7 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   cannonTower: { x: 1.45, z: 1.45, base: 0.12, pole: 2.1 },
   mill: { x: 0, z: 0, base: 5.25, pole: 0.9 },
   house: { x: 1.2, z: 0, base: 2.55, pole: 0.8 },
+  guild: { x: 1.2, z: 0, base: 2.55, pole: 0.8 }, // 沿用民居屋脊高度（商行复用民居骨架）
   // 2026-11-07 返工：旧 base=2.25 格远低于屋顶（当时屋顶在 4.9 格以上），
   // 旗杆整根从砖墙里长出来 —— 用户看到的"穿模"里最扎眼的一处。
   // 新模型屋脊 1.52×2.2 ≈ 3.34 格、烟囱顶 1.87×2.2 ≈ 4.11 格，旗立在屋脊侧。

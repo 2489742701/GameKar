@@ -8,12 +8,13 @@
 
 import * as THREE from 'three';
 import type { ArenaBuilding, Side } from '../ArenaWorld';
+import { needsHouse } from '../config';
 import { sideColor } from '../theme';
 import { needIconUrl, type NeedIcon } from './needIcons';
 
-/** 这座楼要不要占后勤名额（兵营/箭塔/炮塔要；磨坊/民居/大本营不要）。 */
+/** 这座楼要不要占后勤名额 —— 判据只有 `config.needsHouse` 一处（2026-11-09 商行纳入）。 */
 export function needsStaffing(kind: ArenaBuilding['kind']): boolean {
-  return kind === 'barracks' || kind === 'arrowTower' || kind === 'cannonTower';
+  return needsHouse(kind);
 }
 
 /** 建筑的中文名（长按提示、toast 用）。术语按用户 2026-11-01 的纠正：叫大本营，不叫核心。 */
@@ -22,8 +23,10 @@ export function labelOf(b: ArenaBuilding): string {
     ? '大本营'
     : b.kind === 'barracks'
       ? '兵营'
-      : b.kind === 'mill'
-        ? '磨坊'
+    : b.kind === 'mill'
+      ? '磨坊'
+      : b.kind === 'guild'
+        ? '商行'
         : b.kind === 'house'
           ? '民居'
           : b.kind === 'gearFactory'

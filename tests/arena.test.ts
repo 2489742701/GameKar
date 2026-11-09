@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld, type ArenaUnit } from '@arena/ArenaWorld';
 import { chooseCard, wishList } from '@arena/ai';
-import { BARRACKS, BUILD, BUILDING_POP, CARDS, CORE, ECONOMY, FIELD, HAND, MATCH, NO_BUILD, REROLL, RUIN, SUPPLY, UNIT, cardById } from '@arena/config';
+import { BARRACKS, BUILD, BUILDING_POP, CARDS, CORE, ECONOMY, FIELD, GOLD_INCOME, HAND, MATCH, NO_BUILD, REROLL, RUIN, SUPPLY, UNIT, cardById } from '@arena/config';
 
 function run(world: ArenaWorld, seconds: number, each?: (t: number) => void): void {
   const steps = Math.round(seconds / 0.05);
@@ -137,9 +137,9 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     expect(world.gold.blue).toBeGreaterThan(goldAfterBuild);
   });
 
-  it('磨坊每 5 秒多给 2 金', () => {
+  it('磨坊每 5 秒多给 1 金（P-093：图标数=吐金数，从 +2 降下来，用 +3 面包补）', () => {
     const world = new ArenaWorld({ seed: 5 });
-    world.gold.blue = 10; // 磨坊 8 费；留点余量，别一开盘就顶到上限
+    world.gold.blue = 10; // 磨坊 10 费；留点余量，别一开盘就顶到上限
     give(world, 'mill');
     world.playCard('blue', 0, 6, 11);
     // 先把磨坊垒完（施工期间不生金），再从头数 5 秒
@@ -147,8 +147,8 @@ describe('建筑：兵营出兵、磨坊生金、建筑不会自己掉血', () =
     const before = world.gold.blue;
     run(world, ECONOMY.millInterval + 0.1);
     const gained = world.gold.blue - before;
-    // 5.1 秒里金币按 2 秒一格跳 2 格（+2），磨坊再补 +2 ⇒ 至少 4
-    expect(gained).toBeGreaterThanOrEqual(ECONOMY.millBonus + 2);
+    // 5.1 秒里金币按 2 秒一格跳 2 格（+2），磨坊再补 GOLD_INCOME.mill
+    expect(gained).toBeGreaterThanOrEqual(GOLD_INCOME.mill! + 2);
   });
 
   it('建筑没有寿命：放着 60 秒，血量一点不掉', () => {

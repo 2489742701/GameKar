@@ -37,6 +37,8 @@ import {
   UNIT,
   armySupplyOf,
   buildingPopOf,
+  goldIncomeOf,
+  needsHouse,
   canHitAir,
   cardById,
   type ArenaCard,
@@ -383,9 +385,7 @@ export class ArenaWorld {
     const mine = [...this.buildings.values()].filter((b) => b.side === side && b.hp > 0 && b.build >= 1);
     const houses = mine.filter((b) => b.kind === 'house').length;
     const mills = mine.filter((b) => b.kind === 'mill').length;
-    const consumers = mine.filter(
-      (b) => b.kind === 'barracks' || b.kind === 'arrowTower' || b.kind === 'cannonTower',
-    ).length;
+    const consumers = mine.filter((b) => needsHouse(b.kind)).length;
     const barracks = mine.filter((b) => b.kind === 'barracks').length;
     const out: ('house' | 'mill')[] = [];
     if (houses < consumers) out.push('house');
@@ -1048,11 +1048,19 @@ export class ArenaWorld {
         this.spawnSquad(b.side, [{ unitId: b.side === 'blue' ? 'knight' : 'orc', count: 1 }], at.col, at.row, true);
         continue;
       }
-      if (b.kind === 'mill') {
+      // 产金建筑：磨坊 +1、商行 +2，数量只从 config.GOLD_INCOME 读
+      const income = goldIncomeOf(b.kind);
+      if (income > 0) {
+        // 商行要配 1 座民居才开工；缺配连计时也停，补上后从 0 开始（和兵营同款）
+        if (b.kind === 'guild' && !support[b.side].has(b.id)) {
+          b.timer = 0;
+          continue;
+        }
         b.timer += dt;
         if (b.timer < ECONOMY.millInterval) continue;
         b.timer = 0;
-        this.playerOf(b.side).gold = Math.min(ECONOMY.cap, this.playerOf(b.side).gold + ECONOMY.millBonus);
+        const p = this.playerOf(b.side);
+        p.gold = Math.min(ECONOMY.cap, p.gold + income);
         continue;
       }
       // 塔也要人手：没配到民居的那座**不开火**（用户 2026-10-31："防御建筑也占一处民房"）。
@@ -1518,7 +1526,7 @@ export class ArenaWorld {
     let mills = mine.filter((b) => b.kind === 'mill').length;
     let houses = mine.filter((b) => b.kind === 'house').length;
     const consumers = mine
-      .filter((b) => b.kind === 'barracks' || b.kind === 'arrowTower' || b.kind === 'cannonTower')
+      .filter((b) => needsHouse(b.kind))
       .sort((a, b) => {
         // **兵营优先**（它要两样，是产兵的主路径），同档内才按楼号先盖先得。
         // 纯按楼号排过一次，结果民居被先盖的塔抢走、兵营一直冷着（实测 seed 11 红方 0 兵）。
@@ -1529,7 +1537,8 @@ export class ArenaWorld {
     const out = new Set<number>();
     for (const b of consumers) {
       const needMill = b.kind === 'barracks' ? LOGISTICS.barracksMill : 0;
-      const needHouse = b.kind === 'barracks' ? LOGISTICS.barracksHouse : LOGISTICS.towerHouse;
+      const needHouse = b.kind === 'barracks' ? LOGISTICS.barracksHouse
+        : b.kind === 'guild' ? LOGISTICS.guildHouse : LOGISTICS.towerHouse;
       if (mills < needMill || houses < needHouse) continue;
       mills -= needMill;
       houses -= needHouse;
@@ -1552,7 +1561,7 @@ export class ArenaWorld {
   needStaffing(side: Side): number {
     let n = 0;
     for (const b of this.buildings.values()) {
-      if (b.side === side && (b.kind === 'barracks' || b.kind === 'arrowTower' || b.kind === 'cannonTower')) n++;
+      if (b.side === side && needsHouse(b.kind)) n++;
     }
     return n;
   }
@@ -1565,11 +1574,12 @@ export class ArenaWorld {
   /**
    * 这座楼配齐后勤了吗（视图用它挂"缺磨坊/民居"的提示）。
    * 磨坊/民居/大本营自己没有后勤要求，恒为 true —— 它们不是"要干活的楼"。
+   * 商行是：没配到民居就不产金（2026-11-09 用户："要占用两个人口和一个房子"）。
    */
   isStaffed(id: number): boolean {
     const b = this.buildings.get(id);
     if (!b) return true;
-    if (b.kind !== 'barracks' && b.kind !== 'arrowTower' && b.kind !== 'cannonTower') return true;
+    if (!needsHouse(b.kind)) return true;
     return this.staffedIds(b.side).has(id);
   }
 

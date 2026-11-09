@@ -13,7 +13,7 @@ import { fracture } from '../ruins';
 export function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
   if (kind === 'core') return 'core';
   if (kind === 'arrowTower' || kind === 'cannonTower') return 'tower';
-  if (kind === 'mill' || kind === 'barracks' || kind === 'house') return 'wood';
+  if (kind === 'mill' || kind === 'guild' || kind === 'barracks' || kind === 'house') return 'wood';
   return 'stone';
 }
 
