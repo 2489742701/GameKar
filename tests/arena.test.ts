@@ -1580,17 +1580,31 @@ describe('命中特效：近战上报事件，远程不重复上报', () => {
 });
 
 /**
- * 人口 / 面包 —— 用户 2026-11-05 定的「**容器**」：
- * 「面包和人口是恒定的，在左上角它们相当于是一个容器值，而不是一个会随时间增长的值。
- *  这就是我们限制建造和区分的一个东西。」
+ * 人口 / 面包 —— **2026-11-09 P-094 重新分配**。
  *
- * 这一组锁钉的是"它只由场上的东西决定"：时间过去了读数不变、盖民居才涨、出兵才掉。
+ * 旧口径（2026-11-05）是「两个都是恒定容器」；用户 2026-11-09 把人口改成
+ * 「闲置 / 占用 / 全部」三分，所以这一组现在分两层锁：
+ *  - **面包**仍是容器：只由场上建筑 + 活着的兵决定，时间过去不变、兵死立刻退；
+ *  - **人口**的 `used`（建筑占用）被卡死、`total`（上限）只随民居变，
+ *    只有 `idle`（闲置）会因为军队借走再按 `idleRegenSeconds` 一格一格回来。
+ *
+ * 完整的三分锁与反证在 `tests/pop_20261109.test.ts`；这一组保留的是
+ * 「建筑/面包这些老判据没被改坏」的回归。
  */
-describe('人口 / 面包：容器，不是随时间涨的收入', () => {
-  it('开局：人口 0/6、面包 0/3（大本营不占）', () => {
+describe('人口三分 + 面包：容器与流量分开（P-094）', () => {
+  it('开局：闲置 6 / 占用 0 / 共 6，面包 0/3（大本营不占）', () => {
     const w = new ArenaWorld({ seed: 71 });
     const s = w.supplyOf('blue');
-    expect(s).toEqual({ pop: 0, popMax: SUPPLY.basePop, bread: 0, breadMax: SUPPLY.baseBread });
+    expect(s).toMatchObject({
+      idle: SUPPLY.basePop,
+      used: 0,
+      total: SUPPLY.basePop,
+      debt: 0,
+      pop: 0,
+      popMax: SUPPLY.basePop,
+      bread: 0,
+      breadMax: SUPPLY.baseBread,
+    });
   });
 
   it('放着不打，30 秒后读数一点不变（不是收入）', () => {
@@ -1605,19 +1619,27 @@ describe('人口 / 面包：容器，不是随时间涨的收入', () => {
     const w = new ArenaWorld({ seed: 73 });
     w.auto.red = false;
     instant(w, 'blue', 'house', 4, 4, 220);
-    expect(w.supplyOf('blue')).toEqual({ pop: 0, popMax: 8, bread: 0, breadMax: SUPPLY.baseBread });
+    expect(w.supplyOf('blue')).toMatchObject({
+      idle: 8, used: 0, total: 8, pop: 0, popMax: 8, bread: 0, breadMax: SUPPLY.baseBread,
+    });
     instant(w, 'blue', 'arrowTower', 8, 4, 520);
     instant(w, 'blue', 'barracks', 12, 4, 420);
     const s = w.supplyOf('blue');
-    expect(s.pop).toBe(BUILDING_POP.arrowTower + BUILDING_POP.barracks); // 1 + 2 = 3
-    expect(s.popMax).toBe(8);
+    expect(s.used).toBe(BUILDING_POP.arrowTower + BUILDING_POP.barracks); // 1 + 2 = 3
+    expect(s.pop).toBe(s.used);
+    expect(s.total).toBe(8);
+    expect(s.idle).toBe(8 - 3);
   });
 
-  it('磨坊 +2 面包上限，只占 1 人口', () => {
+  it('磨坊 +3 面包上限，只占 1 人口', () => {
     const w = new ArenaWorld({ seed: 74 });
     w.auto.red = false;
     instant(w, 'blue', 'mill', 4, 4, 300);
-    expect(w.supplyOf('blue')).toEqual({ pop: BUILDING_POP.mill, popMax: 6, bread: 0, breadMax: SUPPLY.baseBread + SUPPLY.millBread });
+    expect(w.supplyOf('blue')).toMatchObject({
+      used: BUILDING_POP.mill, pop: BUILDING_POP.mill, total: 6,
+      idle: 6 - BUILDING_POP.mill, debt: 0,
+      bread: 0, breadMax: SUPPLY.baseBread + SUPPLY.millBread,
+    });
   });
 
   it('人口满了盖塔会被拒，理由里点出「人口」', () => {
@@ -1666,14 +1688,17 @@ describe('人口 / 面包：容器，不是随时间涨的收入', () => {
     expect(res.reason).toContain('面包');
   });
 
-  it('兵死了，人口和面包都退回来', () => {
+  it('P-094：兵死了面包立刻退；人口不再按活兵实时算（只记军队债务）', () => {
     const w = new ArenaWorld({ seed: 78 });
     w.auto.red = false;
     w.units.push({
       id: 8100, side: 'blue', defId: 'knight', x: 6, z: 10,
       hp: 999, maxHp: 999, cooldown: 0, stun: 0, order: null, detour: 1,
     });
-    expect(w.supplyOf('blue').pop).toBe(1);
+    // 手工 push 的兵没走 execute()，所以没有「借人口」这笔债：
+    // 人口只由建筑占用 + 出牌债务决定，面包才是活兵实时吃、兵死立刻退。
+    expect(w.supplyOf('blue').pop).toBe(0);
+    expect(w.supplyOf('blue').debt).toBe(0);
     expect(w.supplyOf('blue').bread).toBe(1);
     w.units[0]!.hp = 0;
     run(w, 0.2);
@@ -1880,26 +1905,28 @@ describe('兵营的兵不占人口（2026-11-06）', () => {
     return w;
   }
 
-  it('同一枚兵，fromBarracks=true 不占人口、false 照占 —— 判据只看这个旗', () => {
+  it('P-094：卡牌兵借走闲置人口；兵营自动兵一分不借（判据在 execute，不在 fromBarracks 旗）', () => {
     const w = new ArenaWorld({ seed: 161 });
     w.auto.red = false;
-    const pop0 = w.supplyOf('blue').pop;
-    const mk = (fromBarracks: boolean) => ({
-      id: fromBarracks ? 16101 : 16102,
-      side: 'blue' as const,
-      defId: 'knight',
-      x: 6, z: 10,
-      hp: 60, maxHp: 60,
-      cooldown: 0, stun: 0, order: null, detour: 1 as const,
-      fromBarracks,
-    });
-    w.units.push(mk(false));
-    expect(w.supplyOf('blue').pop, '卡牌兵照占').toBe(pop0 + SUPPLY.unitPop);
-    expect(w.supplyOf('blue').bread, '卡牌兵吃面包').toBe(SUPPLY.unitBread);
-    w.units.pop();
-    w.units.push(mk(true));
-    expect(w.supplyOf('blue').pop, '兵营兵不占').toBe(pop0);
-    expect(w.supplyOf('blue').bread, '面包不豁免：两种兵都吃').toBe(SUPPLY.unitBread);
+    w.gold.blue = 20;
+    give(w, 'knights'); // 2 人 × popPerMan 1 ⇒ 借 2 格
+    expect(w.playCard('blue', 0, 6, 12).ok).toBe(true);
+    const s = w.supplyOf('blue');
+    expect(s.debt).toBe(2 * SUPPLY.unitPop);
+    expect(s.pop).toBe(s.used + s.debt);
+    expect(s.idle).toBe(s.total - s.used - s.debt);
+    expect(s.bread).toBe(2 * SUPPLY.unitBread);
+
+    // 兵营自动兵走 spawnSquad(fromBarracks=true)，不经过 execute ⇒ 不借人口，
+    // 但面包照吃（"不占人口 ≠ 白吃饭"那条老口径没被 P-094 改掉）。
+    const w2 = staffedBarracks(163);
+    const before = w2.supplyOf('blue');
+    run(w2, BARRACKS.interval + 0.2);
+    const after = w2.supplyOf('blue');
+    expect(before.debt).toBe(0);
+    expect(after.debt).toBe(0);
+    expect(after.used).toBe(before.used); // 建筑占用被卡死，时间过去一分不动
+    expect(after.bread).toBeGreaterThan(0);
   });
 
   it('兵营连续出兵不卡人口：产线持续吐兵（面包封顶），人口读数只数建筑', () => {

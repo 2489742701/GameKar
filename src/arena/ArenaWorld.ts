@@ -36,6 +36,8 @@ import {
   TOWER,
   UNIT,
   armySupplyOf,
+  BUILDING_LABEL,
+  buildingLabelOf,
   buildingPopOf,
   goldIncomeOf,
   needsHouse,
@@ -57,12 +59,18 @@ import type {
   ArenaRuin,
   ArenaShot,
   ArenaUnit,
+  BattleLedger,
+  DestroyRecord,
   HitKind,
+  LedgerCriterion,
+  LedgerDecider,
+  LedgerWreck,
   Outcome,
   OutcomeReason,
   PlayResult,
   PlayerSlot,
   Side,
+  SideLedger,
 } from './types';
 
 export type {
@@ -71,15 +79,49 @@ export type {
   ArenaRuin,
   ArenaShot,
   ArenaUnit,
+  BattleLedger,
+  DestroyRecord,
   HitKind,
+  LedgerCriterion,
+  LedgerDecider,
+  LedgerWreck,
   Outcome,
   OutcomeReason,
   PlayResult,
   PlayerSlot,
   Side,
+  SideLedger,
   UnitStats,
 } from './types';
 export { statsOf } from './types';
+
+/**
+ * **人口三分 + 面包容器**的读数（P-094，2026-11-09）。
+ *
+ * 这是 `ArenaWorld.supplyOf()` 的唯一返回形状，HUD 顶栏、结算账单、
+ * 落牌校验、AI 的 `SupplyView` 全读它，谁也不许自己再算一遍人口。
+ *
+ * `pop` / `popMax` 是**兼容旧代码**的两个别名：`pop = used + debt`、
+ * `popMax = total`。它们现在叫「总占用 / 全部人口」，不再等于"活兵实时占用"。
+ * 新代码请直接读 `idle / used / total` 这三个语义明确的字段。
+ */
+export interface SupplyReadout {
+  /** 能立刻拿来盖楼 / 出兵的人口，会按 SUPPLY.idleRegenSeconds 一格一格回升 */
+  idle: number;
+  /** 场上所有建筑物占用的人口：被卡死，拆楼才释放，绝不随时间自己回 */
+  used: number;
+  /** 全部人口上限 = basePop + 民居 × housePop */
+  total: number;
+  /** 军队卡借走、还没还的那笔（整数格，按 idleRegenSeconds 跳着销账） */
+  debt: number;
+  /** 兼容旧字段：总占用 = used + debt */
+  pop: number;
+  /** 兼容旧字段：= total */
+  popMax: number;
+  /** 面包仍是容器：活着的兵实时吃，兵死立刻退 */
+  bread: number;
+  breadMax: number;
+}
 
 /**
  * 造一个玩家槽（1v1 两人 / PVE 一人或两人）。
@@ -217,6 +259,34 @@ export class ArenaWorld {
    * 这是"攻防围绕建筑的消耗"这条设计的记分牌，不是"谁盖得多"。
    */
   readonly destroyed: Record<Side, number> = { blue: 0, red: 0 };
+
+  /**
+   * **拆楼明细**（P-094）：结算账单的数据源。只在 `hurtBuilding()` 里 push，
+   * 一局最多几十条；对局中 HUD 不读它，所以正常帧零开销。
+   * `owner` 是谁被拆、`by` 是谁动的手，别搞反 —— 账单左右两栏靠它分。
+   */
+  readonly destroyLog: DestroyRecord[] = [];
+
+  /**
+   * **军队人口债务**（P-094，见 config.SUPPLY 的三分口径）。
+   *
+   * 出一张军队卡就从「闲置人口」里借走 `人数 × popPerMan`，之后按
+   * `SUPPLY.idleRegenSeconds` 每格一次地归还，直到还清。
+   * **兵死了不销账**：用户要的是「放置一个军队之后，闲置人口会慢慢增长」，
+   * 兵在不在场都一样慢慢回；面包才是兵死立刻退（容器）。
+   *
+   * 建筑占用**不走这里**：那部分是 `used`，只由场上建筑实时算、被卡死。
+   * 把债务单独存一个数的好处是盖楼/拆楼/盖民居都不用手写同步 ——
+   * `total` 和 `used` 每次从建筑表重算，闲置自动跟着变。
+   */
+  private readonly popDebt: Record<Side, number> = { blue: 0, red: 0 };
+  /** 距下一格人口归还还差几秒（和金币的 `goldTick` 同一套跳格写法）。 */
+  private readonly popDebtTick: Record<Side, number> = { blue: 0, red: 0 };
+
+  /** 结算时到底停在第几级判据（`finish()` 写入，账单不许事后重算）。 */
+  private ledgerDecider: LedgerDecider = null;
+  /** 结算账单只算一次：`summary()` 是 20Hz 的读数出口，别每帧重建数组。 */
+  private cachedLedger: BattleLedger | null = null;
 
   outcome: Outcome = 'playing';
   /** 怎么结束的（HUD 拿它写结算面板的第二行） */
@@ -748,6 +818,13 @@ export class ArenaWorld {
     } else {
       // 人口 / 口粮从卡面判据的同一张表取，别在这里重写一份
       const sup = armySupplyOf(card);
+      const men = (card.squad ?? []).reduce((sum, g) => sum + g.count, 0);
+      /**
+       * **从闲置人口里借一笔**（P-094）：借多少 = 人数 × 这张卡的 popPerMan。
+       * 民兵 / 兽人 popPerMan=0 ⇒ 不借（旧口径不变）；兵营自动兵不走 execute，
+       * 也不借。这笔债按 SUPPLY.idleRegenSeconds 一格一格归还，见 update()。
+       */
+      this.popDebt[p.side] += men * sup.popPerMan;
       this.spawnSquad(p.side, card.squad ?? [], col, row, false, sup.breadPerMan, sup.popPerMan);
     }
   }
@@ -874,6 +951,24 @@ export class ArenaWorld {
   update(dt: number): void {
     if (this.outcome !== 'playing') return;
     this.elapsed += dt;
+
+    /**
+     * **闲置人口慢慢提回来**（P-094）：只销军队那笔债，建筑占用一分不动。
+     * 和金币同款**按整格跳**（攒够 idleRegenSeconds 才还 1 格），
+     * 所以顶栏三个读数永远是整数、加起来对得上账。
+     * 结算后 `update()` 整段 return，账单里的读数不会在结算页继续漂。
+     */
+    for (const side of ['blue', 'red'] as const) {
+      if (this.popDebt[side] <= 0) {
+        this.popDebtTick[side] = 0;
+        continue;
+      }
+      this.popDebtTick[side] += dt;
+      while (this.popDebtTick[side] >= SUPPLY.idleRegenSeconds && this.popDebt[side] > 0) {
+        this.popDebtTick[side] -= SUPPLY.idleRegenSeconds;
+        this.popDebt[side] -= 1;
+      }
+    }
 
     // 金：每 ECONOMY.tickSeconds 跳 +perTick，到上限就不涨。
     // 用"攒够一格再加"而不是 perSecond*dt，是为了大 dt（快进/掉帧）时也按整格补，
@@ -1110,7 +1205,7 @@ export class ArenaWorld {
         this.hurtUnit(target.unit, dmg);
       } else if (target.building) {
         // 箭塔打出来的是箭（墙正常掉一块），炮塔打出来的是炮弹（墙炸散）
-        this.hurtBuilding(target.building, dmg, b.kind === 'arrowTower' ? 'arrow' : 'cannon');
+        this.hurtBuilding(target.building, dmg, b.kind === 'arrowTower' ? 'arrow' : 'cannon', b.side);
       }
     }
     this.units = this.units.filter((u) => u.hp > 0);
@@ -1281,7 +1376,7 @@ export class ArenaWorld {
           // 拆楼的墙崩法看这一条：近战=刀砍、法师=法术、弩车=箭、移动火炮=炮弹
           const proj = st.siege ? (u.defId === 'ballista' ? 'arrow' : 'cannon') : unitDef(u.defId).projectile;
           const hit: HitKind = proj === 'magic' ? 'magic' : proj === 'arrow' ? 'arrow' : 'blade';
-          this.hurtBuilding(foe.building, st.damage, hit);
+          this.hurtBuilding(foe.building, st.damage, hit, u.side);
         }
         // 近战命中报给视图（远程有弹丸，到点自己放特效；这里再报就是双重特效）
         if (!st.siege && !unitDef(u.defId).projectile) {
@@ -1635,7 +1730,14 @@ export class ArenaWorld {
     }
   }
 
-  private hurtBuilding(b: ArenaBuilding, attack: number, kind: HitKind = 'blade'): void {
+  /**
+   * 唯一的**对楼伤害入口**（P-094 起同时也是**拆楼账本的唯一写入口**）。
+   *
+   * `by` 是谁动的手：塔开火传塔的阵营、兵砍楼传兵的阵营。判不到就按
+   * 「被拆方的对面」兜底 —— 塔索敌只找敌对目标，正常不会走到兜底。
+   * 账单左右两栏、判据③「拆掉对方多少」都从 `destroyLog` 读，别在别处另记一份。
+   */
+  private hurtBuilding(b: ArenaBuilding, attack: number, kind: HitKind = 'blade', by: Side | null = null): void {
     // 唯一的对楼伤害入口：兵砍 / 塔炮 / 炮弹都在这里乘平衡倍率，
     // 兵种互殴走 hurtUnit → damageOf(attack, defense)，不受影响（P-066）。
     //
@@ -1657,6 +1759,17 @@ export class ArenaWorld {
     if (b.kind === 'barracks' || b.kind === 'gearFactory') this.purgeLocked(b.side);
     // "拖他的建筑"的账本：记的永远是**谁被拆了**，判胜时反过来看（我拆掉对方多少）
     this.destroyed[b.side] += 1;
+    // P-094 结算账单：一栋楼一条明细，含种类、归属、动手方、时间、坐标。
+    // `destroyed[]` 只留总数给旧判据用，明细给玩家看「到底拆了哪些」。
+    this.destroyLog.push({
+      id: b.id,
+      kind: b.kind,
+      owner: b.side,
+      by: by ?? (b.side === 'blue' ? 'red' : 'blue'),
+      at: this.elapsed,
+      col: b.col,
+      row: b.row,
+    });
     // 留一堆废墟，过一会儿自己塌平（用户：被摧毁的地方要留废墟，等一段时间才消失）
     this.ruins.push({
       id: this.nextId++,
@@ -1894,9 +2007,9 @@ export class ArenaWorld {
     const blueCore = this.coreOf('blue');
     const redCore = this.coreOf('red');
 
-    if (!blueCore && !redCore) return this.finish('draw', 'core');
-    if (!redCore) return this.finish('win', 'core');
-    if (!blueCore) return this.finish('lose', 'core');
+    if (!blueCore && !redCore) return this.finish('draw', 'core', 'core');
+    if (!redCore) return this.finish('win', 'core', 'core');
+    if (!blueCore) return this.finish('lose', 'core', 'core');
 
     // ② 常规时间到、加时还没打满：**什么都不判**，接着打（sudden death）
     if (this.elapsed < MATCH.seconds + MATCH.overtimeSeconds) return;
@@ -1912,16 +2025,17 @@ export class ArenaWorld {
     const blueAlive = this.countBuildings('blue');
     const redAlive = this.countBuildings('red');
     if (blueAlive !== redAlive) {
-      return this.finish(blueAlive > redAlive ? 'win' : 'lose', 'overtime');
+      return this.finish(blueAlive > redAlive ? 'win' : 'lose', 'overtime', 'alive');
     }
     // 浮点比较：大本营血量是整数减伤后的整数，但归一化会带误差，留一道细缝
     if (Math.abs(blueFrac - redFrac) > 1e-9) {
-      return this.finish(blueFrac > redFrac ? 'win' : 'lose', 'overtime');
+      return this.finish(blueFrac > redFrac ? 'win' : 'lose', 'overtime', 'coreHp');
     }
     const blueLost = this.destroyed.blue;
     const redLost = this.destroyed.red;
-    if (blueLost !== redLost) return this.finish(redLost > blueLost ? 'win' : 'lose', 'overtime');
-    this.finish('draw', 'draw');
+    if (blueLost !== redLost) return this.finish(redLost > blueLost ? 'win' : 'lose', 'overtime', 'destroyed');
+    // 每级判据都分不出高低 ⇒ 平；账单会把这三级都列出来，玩家看得到「真的一样」
+    this.finish('draw', 'draw', 'draw');
   }
 
   /**
@@ -1937,9 +2051,9 @@ export class ArenaWorld {
   private checkEndlessOutcome(): void {
     const blueCore = this.coreOf('blue');
     const redCore = this.coreOf('red');
-    if (!blueCore && !redCore) return this.finish('draw', 'core');
-    if (!redCore) return this.finish('win', 'core');
-    if (!blueCore) return this.finish('lose', 'core');
+    if (!blueCore && !redCore) return this.finish('draw', 'core', 'core');
+    if (!redCore) return this.finish('win', 'core', 'core');
+    if (!blueCore) return this.finish('lose', 'core', 'core');
     // 两边都还立着 ⇒ 继续打，没有 else
   }
 
@@ -1967,9 +2081,18 @@ export class ArenaWorld {
     this.finish('win', 'waves');
   }
 
-  private finish(outcome: Outcome, reason: OutcomeReason): void {
+  /**
+   * 结束一局（P-094 起顺手记下「到底哪一级判据分出的胜负」）。
+   *
+   * `decidedBy` 必须由**判定的那一刻**传进来，账单不许事后拿终局数据重算：
+   * 判定之后 `update()` 就整段停了，但测试中手动改血/拆楼很容易让重算结果
+   * 和当时的 winner 对不上，那种账单比没有还误导人。
+   */
+  private finish(outcome: Outcome, reason: OutcomeReason, decidedBy: LedgerDecider = null): void {
     this.outcome = outcome;
     this.outcomeReason = reason;
+    this.ledgerDecider = decidedBy;
+    this.cachedLedger = null;
   }
 
   /** 场上还立着的非大本营建筑数（HUD 读数用）。 */
@@ -1979,32 +2102,140 @@ export class ArenaWorld {
     return n;
   }
 
+  // ---------------------------------------------------------------- 结算账单（P-094）
+
+  /**
+   * 结算账单（对局中是 `null`；结算后惰性算一次并缓存）。
+   *
+   * `summary()` 是 20Hz 的读数出口，不能每帧重建账单数组 —— 所以这里
+   * 只在第一帧真算，之后一直复用。`finish()` 会把缓存清空，避免「再来一局」
+   * 之外手动改状态后账单还是旧的。
+   */
+  get ledger(): BattleLedger | null {
+    if (this.outcome === 'playing') return null;
+    if (!this.cachedLedger) this.cachedLedger = this.buildLedger();
+    return this.cachedLedger;
+  }
+
+  /**
+   * **把「为什么积分更多」拆成看得懂的左右两栏**（2026-11-09 用户：
+   * "左右两边就像有个账单一样，显示销毁了哪些建筑，为什么积分更多"）。
+   *
+   * 数据源只有四样：`destroyLog`（谁拆了什么）、`countBuildings()`（终局存活）、
+   * `coreOf()` 剩血、`finish()` 当时记下的 `ledgerDecider`。
+   * 这里**不判胜负**，只把判定用过的那几级数摆出来 —— 判据在 `checkOutcome`，
+   * 账单是它的镜子，别在这儿另算一遍谁赢。
+   *
+   * 三级比较的顺序必须和 `checkOutcome()` 一一对应（① 存活楼 ② 剩血 ③ 拆楼数），
+   * 改判据时两边都要改；`tests/ledger_20261109.test.ts` 有顺序锁。
+   */
+  private buildLedger(): BattleLedger {
+    const blue = this.sideLedger('blue');
+    const red = this.sideLedger('red');
+    const raw: Omit<LedgerCriterion, 'decided'>[] = [
+      { key: 'alive', name: '存活建筑', hint: '多者胜：铺出来又没被拆掉的楼', blue: blue.alive, red: red.alive },
+      { key: 'coreHp', name: '大本营剩血', hint: '存活楼数一样才比', blue: blue.coreHp, red: red.coreHp },
+      { key: 'destroyed', name: '拆掉对方', hint: '前两项都一样才比', blue: blue.wreckedTotal, red: red.wreckedTotal },
+    ];
+    const criteria: LedgerCriterion[] = raw.map((c) => ({ ...c, decided: c.key === this.ledgerDecider }));
+    return {
+      blue,
+      red,
+      criteria,
+      decidedBy: this.ledgerDecider,
+      headline: this.ledgerHeadline(criteria),
+    };
+  }
+
+  /** 一句话回答「为什么积分更多」；没走到三级判据就直说（PVE / 无尽 / 拆家）。 */
+  private ledgerHeadline(criteria: LedgerCriterion[]): string {
+    if (this.ledgerDecider === 'core') return '拆掉对方大本营 —— 直接结束，不用比积分';
+    if (this.ledgerDecider === 'draw') return '三级判据全都一样 —— 平局';
+    const hit = criteria.find((c) => c.decided);
+    if (!hit) return '这一局不走 1v1 的三级积分判据（PVE / 无尽有自己的结算）';
+    const who = hit.blue === hit.red ? '两边' : hit.blue > hit.red ? '蓝方' : '红方';
+    return `${hit.name} 蓝 ${hit.blue} : 红 ${hit.red} ⇒ ${who}在这一项上更多，胜负就停在这一级`;
+  }
+
+  /** 一栏（左蓝 / 右红）：拆掉对方什么、自己丢了什么、终局还剩多少。 */
+  private sideLedger(side: Side): SideLedger {
+    const wrecked = this.aggregateWrecks(this.destroyLog.filter((r) => r.by === side));
+    const lost = this.aggregateWrecks(this.destroyLog.filter((r) => r.owner === side));
+    return {
+      side,
+      wrecked,
+      wreckedTotal: wrecked.reduce((n, w) => n + w.count, 0),
+      lost,
+      lostTotal: lost.reduce((n, w) => n + w.count, 0),
+      alive: this.countBuildings(side),
+      coreHp: Math.round(this.coreOf(side)?.hp ?? 0),
+    };
+  }
+
+  /**
+   * 按建筑种类聚合（同名楼只占一行，不逐条刷屏），顺序跟 `BUILDING_LABEL`
+   * 的声明顺序走 —— 表驱动，加新楼不用改这里。
+   */
+  private aggregateWrecks(records: DestroyRecord[]): LedgerWreck[] {
+    const byKind = new Map<string, LedgerWreck>();
+    for (const r of records) {
+      const cur = byKind.get(r.kind);
+      if (cur) {
+        cur.count += 1;
+        cur.firstAt = Math.min(cur.firstAt, r.at);
+        cur.lastAt = Math.max(cur.lastAt, r.at);
+      } else {
+        byKind.set(r.kind, {
+          kind: r.kind,
+          name: buildingLabelOf(r.kind),
+          count: 1,
+          firstAt: r.at,
+          lastAt: r.at,
+        });
+      }
+    }
+    const order = Object.keys(BUILDING_LABEL);
+    return [...byKind.values()].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+  }
+
   /** 给 HUD 的一行读数：金、手牌、双方大本营血量、倒计时。 */
   /**
-   * 这一侧的人口 / 面包读数（**容器**，不是随时间涨的库存）。
+   * 这一侧的**人口三分 + 面包容器**读数（P-094，2026-11-09 重新分配）。
    *
-   * 人口 = 基础 6 + 民居×2；占用 = 建筑（民居 0、其余 2）+ 每个兵 1。
-   * 面包 = 基础 4 + 磨坊×2；占用 = 每个兵 1。
+   * ┌ 全部 `total` ─────────────────────────────────────────────────┐
+   * │ = basePop + 民居 × housePop                                   │
+   * ├── 占用 `used` ────────────────────────────────────────────────┤
+   * │ = Σ BUILDING_POP[建筑种类]（**施工中的楼也算**：人手已派出去了，│
+   * │   否则会出现"先把地盘占满再慢慢盖"的漏洞）                    │
+   * │   **卡死**：只要楼还在就一直占，不随时间回血；拆楼才释放。     │
+   * ├── 闲置 `idle` ────────────────────────────────────────────────┤
+   * │ = max(0, total − used − debt)                                 │
+   * │   debt = 军队卡借走还没还的人口，按 idleRegenSeconds 归还，  │
+   * │   **兵死了也不立刻销账**（用户："放一个军队之后闲置人口慢慢涨"）│
+   * └───────────────────────────────────────────────────────────────┘
    *
-   * 施工中的楼**算占用**（人手已经派出去了），否则会出现"先把地盘占满再慢慢盖"的漏洞。
+   * 面包照旧是**容器**（基础 + 磨坊，只由建筑决定；兵死立刻退还），
+   * 和人口故意不同 —— 完整口径见 `config.SUPPLY` 的长注释。
    *
-   * 2026-11-06 用户："兵营里面出的兵不占人口。" ⇒ `fromBarracks` 的兵
-   * **不算人口占用**（卡牌出的兵照算），面包照吃 —— 两边分开数。
+   * 兼容：`pop = used + debt`、`popMax = total` 是旧字段名，落牌校验与 AI 的
+   * `SupplyView` 继续读它们；语义从「活兵实时占用」变成「占用 + 未还的债」，
+   * 判定方向不变（数字越大越不能盖）。兵营自动兵 / 民兵 / 兽人
+   * `popPerMan = 0` ⇒ 不借人口，面包照吃，旧口径一条没动。
    */
-  supplyOf(side: Side): { pop: number; popMax: number; bread: number; breadMax: number } {
-    let popMax = SUPPLY.basePop;
+  supplyOf(side: Side): SupplyReadout {
+    let total = SUPPLY.basePop;
     let breadMax = SUPPLY.baseBread;
-    let pop = 0;
+    let used = 0;
 
     for (const b of this.buildings.values()) {
       if (b.side !== side) continue;
       if (b.kind === 'core') continue;
       if (b.kind === 'house') {
-        popMax += SUPPLY.housePop;
-        pop += SUPPLY.housePopCost;
+        total += SUPPLY.housePop;
+        used += SUPPLY.housePopCost;
       } else {
         // 建筑占用按种类读同一张表：磨坊 1、箭塔 1、炮塔 2……
-        pop += buildingPopOf(b.kind);
+        used += buildingPopOf(b.kind);
         if (b.kind === 'mill') breadMax += SUPPLY.millBread;
       }
     }
@@ -2013,11 +2244,20 @@ export class ArenaWorld {
     for (const u of this.units) {
       if (u.side !== side || u.hp <= 0) continue;
       bread += (u.breadCost ?? 1) * SUPPLY.unitBread;
-      // 兵营自动兵 / 民兵 / 兽人不占人口（popCost=0）；其余每兵 1 格
-      pop += u.popCost ?? (u.fromBarracks ? 0 : SUPPLY.unitPop);
+      // 人口不再按活兵实时累加：借走的那笔记在 popDebt，兵死也不立刻销账
     }
 
-    return { pop, popMax, bread, breadMax };
+    const debt = this.popDebt[side];
+    return {
+      idle: Math.max(0, total - used - debt),
+      used,
+      total,
+      debt,
+      pop: used + debt,
+      popMax: total,
+      bread,
+      breadMax,
+    };
   }
 
   /**
@@ -2032,9 +2272,13 @@ export class ArenaWorld {
    *
    * public（2026-11-06）：HUD 卡面要拿它给「几人几包」的图标标红 ——
    * 玩家造不出来时，红的就是差的那一样，而不是让玩家去猜。
+   *
+   * P-094：拒绝理由直接把「闲置 / 占用 / 全部」三个数摆出来，
+   * 和顶栏读数同一套字段，玩家一眼能看出是楼占了坑还是兵借走没还。
    */
   supplyBlocked(side: Side, card: ArenaCard): string | null {
     const s = this.supplyOf(side);
+    const tri = `闲置 ${s.idle} / 占用 ${s.used} / 共 ${s.total}`;
     if (card.kind === 'building') {
       const isHouse = card.building === 'house';
       const cost = isHouse ? SUPPLY.housePopCost : buildingPopOf(card.building!);
@@ -2043,8 +2287,8 @@ export class ArenaWorld {
       const budget = maxAfter - (isHouse ? 0 : SUPPLY.armyReserve);
       if (s.pop + cost > budget) {
         return isHouse
-          ? `人口不够（${s.pop}/${s.popMax}，先盖民居）`
-          : `人口不够（${s.pop}/${s.popMax}，建筑最多占 ${s.popMax - SUPPLY.armyReserve}，给军队留 ${SUPPLY.armyReserve} 格）`;
+          ? `人口不够（${tri}，先盖民居）`
+          : `人口不够（${tri}，建筑最多占 ${s.popMax - SUPPLY.armyReserve}，给军队留 ${SUPPLY.armyReserve} 格）`;
       }
       return null;
     }
@@ -2052,7 +2296,7 @@ export class ArenaWorld {
     const supply = armySupplyOf(card);
     // 民兵 / 兽人 popPerMan=0 ⇒ 跳过人口检查，但面包照算（兽人还是双倍）
     if (supply.popPerMan > 0 && s.pop + n * supply.popPerMan > s.popMax) {
-      return `人口不够（${s.pop}/${s.popMax}，先盖民居）`;
+      return `人口不够（${tri}，盖民居扩上限，或等闲置人口回来）`;
     }
     if (s.bread + n * supply.breadPerMan * SUPPLY.unitBread > s.breadMax) {
       return `面包不够（${s.bread}/${s.breadMax}，先盖磨坊）`;
@@ -2088,8 +2332,13 @@ export class ArenaWorld {
       /** 后勤：已配齐 / 总共需要（HUD 写 "2/3 配齐"；缺的楼不开火、不产兵） */
       staffed: { blue: this.staffedCount('blue'), red: this.staffedCount('red') },
       staffingNeeded: { blue: this.needStaffing('blue'), red: this.needStaffing('red') },
-      /** 人口 / 面包（容器）：HUD 左上角那两个读数 */
+      /** 人口三分 + 面包容器（P-094）：HUD 顶栏读 idle/used/total，AI 仍读 pop/popMax */
       supply: { blue: this.supplyOf('blue'), red: this.supplyOf('red') },
+      /**
+       * **结算账单**（P-094）：对局中恒 null（20Hz 零开销），结束后由 world.ledger
+       * 惰性算一次。HUD 左右两栏、三级判据、决定项全从这里读，不在 UI 里重算。
+       */
+      ledger: this.ledger,
       /**
        * PVE 读数（`arena` 模式是 null）—— 波次条与结算文案**只读这里**，
        * 不在 UI 里重算一遍（"规则与文案同表"那条红线）。

@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 import type { ArenaBuilding, Side } from '../ArenaWorld';
-import { needsHouse } from '../config';
+import { buildingLabelOf, needsHouse } from '../config';
 import { sideColor } from '../theme';
 import { needIconUrl, type NeedIcon } from './needIcons';
 
@@ -17,23 +17,15 @@ export function needsStaffing(kind: ArenaBuilding['kind']): boolean {
   return needsHouse(kind);
 }
 
-/** 建筑的中文名（长按提示、toast 用）。术语按用户 2026-11-01 的纠正：叫大本营，不叫核心。 */
+/**
+ * 建筑的中文名（长按提示、toast、结算账单共用）。
+ *
+ * P-094 前这里是一条手写三元链：塔类一律叫「防御塔」，加新楼还容易漏
+ * （商行那次就被叫成塔）。现在只读 `config.BUILDING_LABEL` 一张表，
+ * 加楼时在那张表补一行即可，别回来改这里。
+ */
 export function labelOf(b: ArenaBuilding): string {
-  return b.kind === 'core'
-    ? '大本营'
-    : b.kind === 'barracks'
-      ? '兵营'
-    : b.kind === 'mill'
-      ? '磨坊'
-      : b.kind === 'guild'
-        ? '商行'
-        : b.kind === 'house'
-          ? '民居'
-          : b.kind === 'gearFactory'
-            ? '齿轮工厂'
-            : b.kind === 'orcLair'
-              ? '兽人巢穴'
-              : '防御塔';
+  return buildingLabelOf(b.kind);
 }
 
 /**

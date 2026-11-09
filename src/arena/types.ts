@@ -289,3 +289,80 @@ export interface ArenaOptions {
    */
   field?: FieldSpec;
 }
+
+// ---------------------------------------------------------------- 结算账单（P-094）
+
+/**
+ * **一条拆楼记录** —— 结算账单唯一的数据源（2026-11-09 用户："显示销毁了哪些建筑"）。
+ *
+ * 以前 `destroyed[side] += 1` 只留了一个总数，玩家在结算页只能看到「拆楼 3 / 1」，
+ * 完全不知道拆的是箭塔还是民居、也不知道是谁拆的。现在在 `hurtBuilding()`
+ * 这**唯一**的对楼伤害入口里补一条记录，账单、判据、HUD 都从这里读。
+ *
+ * `owner` = 谁被拆，`by` = 谁动的手。判胜时「我拆掉对方多少」=
+ * `destroyLog.filter(r => r.by === mySide).length`，和旧计数保持同一口径。
+ */
+export interface DestroyRecord {
+  id: number;
+  kind: BuildingKind | 'core';
+  owner: Side;
+  by: Side;
+  /** 发生在开局后第几秒（账单里可以写"第 2:13 拆掉"） */
+  at: number;
+  col: number;
+  row: number;
+}
+
+/**
+ * 哪一条判据分出了胜负（P-094）。
+ *
+ * 加时打满时依次比：① 存活建筑数 ② 大本营剩血 ③ 拆掉对方的楼数。
+ * 把「当时到底停在第几级」记在 `finish()` 里，**不要事后重算** ——
+ * 事后重算会在血量/楼数继续变化时得出和判定那一刻不一样的答案。
+ */
+export type LedgerDecider = 'core' | 'alive' | 'coreHp' | 'destroyed' | 'draw' | null;
+
+/** 一种楼被拆了几栋（账单按种类聚合，不逐条刷屏）。 */
+export interface LedgerWreck {
+  kind: string;
+  /** 中文名，读 config.BUILDING_LABEL */
+  name: string;
+  count: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+/** 结算账单里的一栏（左蓝 / 右红）。 */
+export interface SideLedger {
+  side: Side;
+  /** 我拆掉对方的楼 */
+  wrecked: LedgerWreck[];
+  wreckedTotal: number;
+  /** 我自己丢掉的楼 */
+  lost: LedgerWreck[];
+  lostTotal: number;
+  /** 终局还立着的非大本营楼数（判据①） */
+  alive: number;
+  /** 终局大本营剩血（判据②，被拆了就是 0） */
+  coreHp: number;
+}
+
+/** 三级判据的左右对照；`decided` 标出「就是这一项分出胜负」。 */
+export interface LedgerCriterion {
+  key: 'alive' | 'coreHp' | 'destroyed';
+  name: string;
+  hint: string;
+  blue: number;
+  red: number;
+  decided: boolean;
+}
+
+/** 结算面板左右账单的完整数据（规则层算好，HUD 只负责摆）。 */
+export interface BattleLedger {
+  blue: SideLedger;
+  red: SideLedger;
+  criteria: LedgerCriterion[];
+  decidedBy: LedgerDecider;
+  /** 一句话回答「为什么积分更多」 */
+  headline: string;
+}

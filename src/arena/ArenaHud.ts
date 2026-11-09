@@ -8,8 +8,9 @@
  * 不在这一层判"还剩几秒算加时"—— 那条在 config.MATCH，改一处两边都跟着动。
  */
 
-import { ECONOMY, HAND, MATCH, REROLL, type ArenaCard } from './config';
+import { ECONOMY, HAND, MATCH, REROLL, SUPPLY, type ArenaCard } from './config';
 import type { ArenaApp } from './ArenaApp';
+import type { BattleLedger, LedgerWreck, SideLedger } from './ArenaWorld';
 import { el as make } from '@ui/dom';
 import { iconOf } from './cardIcons';
 import { BREAD_ICON, COIN_ICON, POP_ICON } from './supplyIcons';
@@ -146,8 +147,18 @@ export class ArenaHud {
   readonly el = make('div', 'ahud');
   /** 每个玩家一个座位（1v1 / PVE 单人 = 1 个，PVE 双人 = 2 个） */
   private readonly seats: HudSeat[] = [];
-  /** 人口 / 面包读数（容器，不是收入） */
-  private readonly popText = make('b', 'ahud__supply__num', '');
+  /**
+   * **顶栏人口三分读数**（P-094，2026-11-09 用户："改成闲置人口和占用人口和全部人口"）。
+   *
+   * 旧版只有一个 `popText` 写 "3/6"，玩家分不清那 3 格是楼占的还是兵借的，
+   * 更看不出「闲置会慢慢回、建筑占用卡死」。现在三格并排：
+   * 闲（idle）/ 占（used）/ 共（total），全部读 `summary().supply.blue` 同一份数。
+   */
+  private readonly popIdleText = make('b', 'ahud__supply__num', '');
+  private readonly popUsedText = make('b', 'ahud__supply__num', '');
+  private readonly popTotalText = make('b', 'ahud__supply__num', '');
+  private readonly popTriple = make('span', 'ahud__supply__pop3');
+  /** 面包仍是容器（基础 + 磨坊，兵死立刻退还），口径没变 */
   private readonly breadText = make('b', 'ahud__supply__num', '');
   /** 左上角的民居读数 */
   private readonly houseText = make('b', 'ahud__supply__num', '');
@@ -179,6 +190,13 @@ export class ArenaHud {
   /** 加时徽标（常规时间打满、双方大本营都在 ⇒ 进入加时，只在这时显示） */
   private readonly clockOt = make('span', 'ahud__clock__ot', '');
   private readonly endSub = make('div', 'ahud__end__sub', '');
+  /**
+   * **结算账单**（P-094）：左右两栏列「拆了哪些楼 / 自己丢了哪些」，
+   * 下面三行把三级积分判据摊开并高亮决定胜负的那一项。
+   * 内容只在结算时填一次，靠 `lastLedgerStamp` 防 20Hz 重复重建 DOM。
+   */
+  private readonly endLedger = make('div', 'ahud__end__ledger');
+  private lastLedgerStamp = '';
   private viewBtn!: HTMLButtonElement;
   private quitBtn!: HTMLButtonElement;
   /** 工具行「调试」按钮与设置页「开发者模式」开关（默认都隐藏/关闭） */
@@ -229,14 +247,33 @@ export class ArenaHud {
     };
     const popItem = make('button', 'ahud__supply__item');
     popItem.type = 'button';
-    popItem.append(supplyIcon(POP_ICON, '人口'), this.popText);
+    /** 一格三分读数：小标签「闲 / 占 / 共」+ 整数。窄屏 CSS 只藏标签，数字留着。 */
+    const popPart = (tag: string, num: HTMLElement, key: string) => {
+      const part = make('span', 'ahud__supply__pop3__part');
+      part.dataset['part'] = key;
+      part.append(make('i', 'ahud__supply__pop3__tag', tag), num);
+      return part;
+    };
+    this.popTriple.append(
+      popPart('闲', this.popIdleText, 'idle'),
+      popPart('占', this.popUsedText, 'used'),
+      popPart('共', this.popTotalText, 'total'),
+    );
+    popItem.append(supplyIcon(POP_ICON, '人口：闲置 / 占用 / 全部'), this.popTriple);
     popItem.addEventListener('click', () =>
-      this.say('人口：民居每座 +2；建筑占 2（最多占上限−2，给军队留格）、兵占 1', 'ok'),
+      this.say(
+        `闲置：能立刻盖楼/出兵，每 ${SUPPLY.idleRegenSeconds} 秒回 1 格；` +
+          `占用：所有建筑物占的人口，卡死不还（拆楼才释放）；` +
+          `全部：上限，民居每座 +${SUPPLY.housePop}`,
+        'ok',
+      ),
     );
     const breadItem = make('button', 'ahud__supply__item');
     breadItem.type = 'button';
     breadItem.append(supplyIcon(BREAD_ICON, '面包'), this.breadText);
-    breadItem.addEventListener('click', () => this.say('面包：磨坊每座 +2；每个兵吃 1', 'ok'));
+    breadItem.addEventListener('click', () =>
+      this.say(`面包：磨坊每座 +${SUPPLY.millBread}；每个兵吃 ${SUPPLY.unitBread}，兵死了立刻退还`, 'ok'),
+    );
     /**
      * 房屋读数（用户 2026-11-06）："一个防御建筑对应着一个民居，没有民居就没办法建。"
      * 场上每座塔/兵营要占 1 座民居，所以这里直接显示**有几座民居**；
@@ -246,7 +283,7 @@ export class ArenaHud {
     houseItem.type = 'button';
     houseItem.append(supplyIcon(iconOf('house'), '民居'), this.houseText);
     houseItem.addEventListener('click', () =>
-      this.say('民居：每座塔 / 兵营要 1 座；缺了它不开火、不出兵', 'ok'),
+      this.say('民居：塔 / 兵营 / 商行各要 1 座；缺了它不开火、不出兵、不产金', 'ok'),
     );
     supply.append(popItem, breadItem, houseItem);
     this.supplyItems = { pop: popItem, bread: breadItem, house: houseItem };
@@ -420,7 +457,7 @@ export class ArenaHud {
     toMenu.addEventListener('click', () => this.opts.onMenu?.());
     const endBtns = make('div', 'ahud__end__btns');
     endBtns.append(again, toMenu);
-    this.end.append(make('div', 'ahud__end__title', ''), this.endSub, endBtns);
+    this.end.append(make('div', 'ahud__end__title', ''), this.endSub, this.endLedger, endBtns);
     this.setupCardDrag();
     this.refresh();
   }
@@ -1056,11 +1093,14 @@ export class ArenaHud {
       this.app.confetti.burst();
     }
 
-    // 人口 / 面包：满了变红（data-full），点一下有说明
+    // 人口三分 / 面包：闲置见底时整个人口胶囊闪红（原来按 pop>=popMax 判断，
+    // 现在 occupied 卡死后 pop 可能长期贴着上限，改用 idle 才是真警报）
     const sup = s.supply.blue;
-    this.popText.textContent = `${sup.pop}/${sup.popMax}`;
+    this.popIdleText.textContent = String(sup.idle);
+    this.popUsedText.textContent = String(sup.used);
+    this.popTotalText.textContent = String(sup.total);
+    this.supplyItems.pop.setAttribute('data-full', String(sup.idle <= 0));
     this.breadText.textContent = `${sup.bread}/${sup.breadMax}`;
-    this.popText.parentElement?.setAttribute('data-full', String(sup.pop >= sup.popMax));
     this.breadText.parentElement?.setAttribute('data-full', String(sup.bread >= sup.breadMax));
     // 民居：数量 + 名额够不够（不够变红，和人口/面包同一套告警色）
     let houses = 0;
@@ -1077,23 +1117,98 @@ export class ArenaHud {
 
     if (s.outcome !== 'playing') {
       this.end.hidden = false;
+      /**
+       * 结算面板一出现就收掉中央大字（P-094）：「加时赛 / 第 N 波」那行
+       * `showBig` 会挂 2.7 秒，正好压在账单两栏中间，把明细遮得严严实实。
+       * 结算页是最终读数，任何 transient 排面都得让位。
+       */
+      this.big.dataset['show'] = '0';
       const title = this.end.firstElementChild as HTMLElement;
       title.dataset['outcome'] = s.outcome;
+      /**
+       * 标题必须和「怎么结束的」对得上（P-094）。
+       * 旧版只要 `outcome === 'win'` 就写「红方大本营被拆了」，可加时打满
+       * 按积分赢的时候对面大本营好好立着 —— 玩家看一眼标题就以为自己拆了家，
+       * 再看账单里 1200 血又对不上，等于结算页自己打自己脸。
+       * 所以按 `reason` 分：拆家归拆家、积分归积分、平局归平局。
+       */
       title.textContent = s.pve
-        ? s.outcome === 'win'
-          ? '守住了 —— 这关过了'
-          : '大本营被拆了 —— 失守'
-        : s.outcome === 'win'
-          ? '红方大本营被拆了 —— 你赢了'
-          : s.outcome === 'lose'
-            ? '蓝方大本营被拆了 —— 这局输了'
-            : s.reason === 'core'
-              ? '两边的大本营同时被拆了 —— 平局'
+        ? s.outcome === 'win' ? '守住了 —— 这关过了' : '大本营被拆了 —— 失守'
+        : s.reason === 'core'
+          ? s.outcome === 'win'
+            ? '红方大本营被拆了 —— 你赢了'
+            : s.outcome === 'lose'
+              ? '蓝方大本营被拆了 —— 这局输了'
+              : '两边的大本营同时被拆了 —— 平局'
+          : s.outcome === 'win'
+            ? '加时积分胜出 —— 你赢了'
+            : s.outcome === 'lose'
+              ? '加时积分落后 —— 这局输了'
               : '加时打满 —— 平局';
       // 第二行必须写清"怎么结束的"：时间到判的胜负和拆掉大本营判的胜负是两回事，
       // 不写玩家会以为自己的大本营也被拆了。
       this.endSub.textContent = this.reasonText(s);
+      // 左右账单：把「销毁了哪些建筑 / 为什么积分更多」摊开给人看
+      this.paintLedger(s);
     }
+  }
+
+  /**
+   * **结算账单 DOM**（P-094）。
+   *
+   * 数据全来自 `summary().ledger`（规则层算好），这里只负责摆版：
+   * 左蓝 / 右红两栏各列「拆掉对方什么、自己丢了什么」，下面三行
+   * 把三级判据摊开并给决定胜负那一行挂 `data-decided="1"`。
+   *
+   * 只在结算时跑，且用 `lastLedgerStamp` 去重 —— `refresh()` 是 20Hz，
+   * 每帧 innerHTML 会把结算页重排到卡。数字和中文名都是受控数据，
+   * 仍统一过一遍 `esc()`，免得以后有人往建筑名里塞尖括号。
+   */
+  private paintLedger(s: ReturnType<ArenaApp['world']['summary']>): void {
+    const L: BattleLedger | null = s.ledger;
+    this.endLedger.hidden = !L;
+    if (!L) return;
+    const stamp = [
+      s.outcome, s.reason, L.decidedBy,
+      L.blue.wreckedTotal, L.red.wreckedTotal,
+      L.blue.alive, L.red.alive, L.blue.coreHp, L.red.coreHp,
+    ].join(':');
+    if (stamp === this.lastLedgerStamp) return;
+    this.lastLedgerStamp = stamp;
+
+    const esc = (v: string): string =>
+      v.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+    const wreckList = (list: LedgerWreck[]): string =>
+      list.length
+        ? list.map((w) => `<li><span>${esc(w.name)}</span><b>×${w.count}</b></li>`).join('')
+        : '<li class="ahud__ledger__empty">一栋没拆到</li>';
+    const col = (side: SideLedger, name: string): string => `
+      <div class="ahud__ledger__col" data-side="${side.side}">
+        <div class="ahud__ledger__name">${name}</div>
+        <div class="ahud__ledger__sect">
+          <h4>拆掉对方 <b>${side.wreckedTotal}</b> 栋</h4>
+          <ul>${wreckList(side.wrecked)}</ul>
+        </div>
+        <div class="ahud__ledger__sect">
+          <h4>自己丢了 <b>${side.lostTotal}</b> 栋</h4>
+          <ul>${wreckList(side.lost)}</ul>
+        </div>
+      </div>`;
+    const criteria = L.criteria.map((c, i) => `
+      <div class="ahud__ledger__row" data-decided="${c.decided ? '1' : '0'}">
+        <span class="ahud__ledger__key">${'①②③'[i] ?? ''} ${esc(c.name)}<i>${esc(c.hint)}</i></span>
+        <b class="ahud__ledger__score">${c.blue} : ${c.red}</b>
+        ${c.decided ? '<em class="ahud__ledger__why">← 这一项分出胜负</em>' : ''}
+      </div>`).join('');
+
+    this.endLedger.innerHTML = `
+      <div class="ahud__ledger__head">${esc(L.headline)}</div>
+      <div class="ahud__ledger__cols">
+        ${col(L.blue, '蓝方 · 你')}
+        <div class="ahud__ledger__vs">VS</div>
+        ${col(L.red, '红方 · 对手')}
+      </div>
+      <div class="ahud__ledger__criteria">${criteria}</div>`;
   }
 
   /** 结算面板第二行。数字一律从 summary 里取，不在这里重算。 */
@@ -1112,15 +1227,15 @@ export class ArenaHud {
         : `${p.level} · 倒在第 ${Math.min(p.wave + 1, p.total)} 波 · 已清掉 ${p.slain} 只`;
     }
     const minutes = MATCH.seconds / 60;
-    // 2026-11-06 加时赛：常规时间打满不判，加时打满按**积分**判（存活楼数 → 剩血 → 拆楼）
-    // ⇒ 文案写清"含加时"并把积分摆第一行。reason = 'overtime'（新）/ 'time'（旧存档兼容）。
+    // 2026-11-06 加时赛：常规时间打满不判，加时打满按**积分**判（存活楼数 → 剩血 → 拆楼）。
+    // P-094 起这三级判据在下方左右账单里逐行摊开，第二行只说「怎么结束的 + 去哪看」，
+    // 不再把四组数字挤成一行糊脸。reason = 'overtime'（新）/ 'time'（旧存档兼容）。
     if (s.reason === 'overtime' || s.reason === 'time') {
-      // destroyed 的键是"谁被拆"：destroyed.red = 红方被拆掉几栋 = 你拆了几栋
       const head = s.reason === 'overtime' ? `${minutes + 2} 分钟（含加时）到` : `${minutes} 分钟到`;
-      return `${head} · 积分（存活楼） 你 ${s.buildings.blue} / 敌 ${s.buildings.red} · 大本营剩血 蓝 ${s.blueCore} / 红 ${s.redCore} · 拆楼 你 ${s.destroyed.red} / 敌 ${s.destroyed.blue}`;
+      return `${head} · 详细账单见下：拆了哪些楼、哪一项分出胜负`;
     }
     if (s.reason === 'draw') {
-      return `${minutes + 1} 分钟（含加时）到 · 大本营剩血、拆掉的楼数都一样`;
+      return `${minutes + 1} 分钟（含加时）到 · 三级判据全部持平，账单里逐项可查`;
     }
     if (s.reason === 'core' && s.outcome === 'draw') {
       return '最后一下把两边的大本营一起拆掉了';
