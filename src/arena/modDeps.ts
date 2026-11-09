@@ -26,6 +26,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   OrthographicCamera,
   PlaneGeometry,
   Raycaster,
@@ -38,9 +39,23 @@ import {
 } from 'three';
 import { GameLoop } from '@engine/core/GameLoop';
 import { Random } from '@engine/math/Random';
-import { cellToWorld } from '@engine/math/Grid';
+import { cellToWorld, pos } from '@engine/math/Grid';
+import { Renderer } from '@engine/render/Renderer';
+import { CameraRig } from '@engine/render/CameraRig';
+import { LightingRig } from '@engine/render/Lighting';
+import { TileMap } from '@game/world/TileMap';
+import { GroundView } from '@game/world/GroundView';
 import { ARENA_MODELS } from './models';
+import { buildStand } from './stand';
+import { AmbientDust } from './ambient';
+import { installArenaBackdrop } from './visuals/backdrop';
+import { TILT_SHIFT_SHADER } from './visuals/tiltShift';
+import { ARENA_CAMERA, NO_BUILD, FIELD } from './config';
 import { buildModel } from '@game/models/kit';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 
 /** 注入给模组的 three 子集（不是完整命名空间，别改回 `import('three')`）。 */
 export const modThree = {
@@ -57,6 +72,7 @@ export const modThree = {
   LineBasicMaterial,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   ShaderMaterial,
   Raycaster,
   AmbientLight,
@@ -81,6 +97,28 @@ export const modEngine = {
  * 依然是注入，不是让模组去 import 主程序 —— 隔离锁一条没松。
  */
 export const modAssets = {
+  // 3D 模型
   ARENA_MODELS,
   buildModel,
+  // 地图与地形：和 1v1 同一套 TileMap / GroundView / 看台围墙 / 浮尘
+  TileMap,
+  GroundView,
+  buildStand,
+  AmbientDust,
+  // 相机 / 光照 / 渲染 / 色彩管理 / 后期链
+  CameraRig,
+  LightingRig,
+  Renderer,
+  installArenaBackdrop,
+  EffectComposer,
+  RenderPass,
+  OutputPass,
+  ShaderPass,
+  TILT_SHIFT_SHADER,
+  // 坐标与常量
+  cellToWorld,
+  pos,
+  ARENA_CAMERA,
+  NO_BUILD,
+  FIELD,
 };
