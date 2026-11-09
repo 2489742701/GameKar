@@ -45,7 +45,7 @@ void main() {
 function makeCloud(T) {
   const g = new T.Group();
   const mat = () => new T.MeshBasicMaterial({
-    color: new T.Color('#ffffff'), transparent: true, opacity: 0.9,
+    color: new T.Color('#ffffff'), transparent: true, opacity: 0.45,
     side: T.DoubleSide, depthWrite: false,
   });
   for (const [x, y, r] of [[-2.5, 0, 1.5], [-0.9, 0.7, 2.0], [0.9, 0.5, 1.8], [2.4, -0.1, 1.35]]) {
@@ -65,7 +65,7 @@ function makeCloud(T) {
  * @param origin 战场中心的世界坐标。P-087 起地图是大六边形（中心在 (36,32) 附近），
  *               云必须绕着**这张图**飘，不能还钉在世界原点旁边。
  */
-export function createSky(T, scene, origin = { x: 0, z: 0 }) {
+export function createSky(T, scene, origin = { x: 0, z: 0 }, spread = 1) {
   const uniforms = {
     topColor: { value: new T.Vector3(...hex(PERIODS[0].top)) },
     horizonColor: { value: new T.Vector3(...hex(PERIODS[0].horizon)) },
@@ -90,7 +90,11 @@ export function createSky(T, scene, origin = { x: 0, z: 0 }) {
     c.scale.setScalar(0.34 + rnd() * 0.34);
     const sx = rnd() < 0.5 ? -1 : 1;
     const sz = rnd() < 0.5 ? -1 : 1;
-    c.position.set(origin.x + sx * (12 + rnd() * 16), 9 + rnd() * 5, origin.z + sz * (11 + rnd() * 14));
+    c.position.set(
+      origin.x + sx * (12 + rnd() * 16) * spread,
+      9 + rnd() * 5,
+      origin.z + sz * (11 + rnd() * 14) * spread,
+    );
     c.userData.baseX = c.position.x;
     c.userData.speed = 0.35 + rnd() * 0.5;
     scene.add(c);
@@ -109,7 +113,7 @@ export function createSky(T, scene, origin = { x: 0, z: 0 }) {
     target.ambient.set(p.ambient);
     target.intensity = p.intensity * 0.5;
     target.cloud.set(p.cloud);
-    target.opacity = p.cloudOpacity;
+    target.opacity = p.cloudOpacity * 0.5;
     // 即时生效：手动切时段要立刻看到，不能等逐帧 lerp（无头 rAF 还会被节流）
     uniforms.topColor.value.copy(target.top);
     uniforms.horizonColor.value.copy(target.horizon);
@@ -119,7 +123,7 @@ export function createSky(T, scene, origin = { x: 0, z: 0 }) {
     for (const c of clouds) {
       for (const m of c.children) {
         m.material.color.copy(target.cloud);
-        m.material.opacity = p.cloudOpacity;
+        m.material.opacity = p.cloudOpacity * 0.5;
       }
     }
     return p;

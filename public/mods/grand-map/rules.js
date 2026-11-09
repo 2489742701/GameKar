@@ -16,8 +16,8 @@ export const SPEC = {
   trade: { near: 5, far: 14, travel: { near: 2, far: 4 } },
   seizeMultiplier: 2,
   allyLimit: 1,          // 联盟最多 2 人 ⇒ 玩家最多 1 个盟友
-  centerSize: 9,         // 中心公共区 9×9
-  roadRow: 4,            // 中心行是主干道，恒不可建
+  centerSize: 17,        // 中心公共区 17×17（P-087 扩图后与 map.js CENTER.size 对齐）
+  roadRow: 8,            // 中心行是主干道，恒不可建
   endTick: 120,
   aiPeriod: 3,
 };
@@ -45,9 +45,10 @@ export const FACTIONS = [
   { id: 5, name: '远帆', color: '#d4537e', isPlayer: false },
 ];
 
-/** 每方在中心区的"抢滩起点"：第一栋楼必须落这里，之后按 4 邻域辐射。 */
+/** 每方在中心区的"抢滩起点"：第一栋楼必须落这里，之后按 4 邻域辐射。
+ *  扩到 17×17 后按原 9×9 的相对位置等比铺开，且全部避开 roadRow。 */
 export const SEEDS = [
-  [0, 1], [0, 7], [3, 0], [3, 8], [8, 1], [8, 7],
+  [0, 2], [0, 14], [6, 0], [6, 16], [16, 2], [16, 14],
 ];
 
 /** 开局关系表：玩家面对 2 敌 3 中立，AI 之间基本中立（原型占位）。 */

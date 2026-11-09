@@ -14,24 +14,30 @@
  *
  * 纯数据层，无 three / DOM，可 node 直接测。
  */
+/**
+ * 2026-11-09 用户：「地图怎么变得这么小？地块要非常非常大，起码比我们的竞技场大大概三四倍」。
+ * 竞技场 FIELD 是 44×20 = 880 格；六边形面积约 2.598·R²，
+ * 原来 R=30 ⇒ 2311 格（2.6 倍，放几栋楼就满了）；
+ * 现在 R=38 ⇒ 约 3750 格（**4.3 倍**），中心公共区也从 9×9 扩到 17×17。
+ */
 export const MAP = {
-  cols: 72,
-  rows: 64,
-  cx: 36,
-  cy: 32,
-  hexR: 30,       // 大六边形半径（格）
-  starR: 22,      // 六芒星尖角半径（格，在六边形内部）
+  cols: 80,
+  rows: 88,
+  cx: 40,
+  cy: 44,
+  hexR: 38,       // 大六边形半径（格）
+  starR: 28,      // 六芒星尖角半径（格，在六边形内部）
 };
 
 /**
- * 中心公共区：9×9，和 `rules.js` 的 `SPEC.centerSize` / `SPEC.roadRow` 对齐。
+ * 中心公共区：17×17，和 `rules.js` 的 `SPEC.centerSize` / `SPEC.roadRow` 对齐。
  * 结构锁会核这两处数值一致 —— 判据只在一处改，不许两份表各写各的。
  */
 export const CENTER = {
-  col0: MAP.cx - 4,
-  row0: MAP.cy - 4,
-  size: 9,
-  roadRow: 4,
+  col0: MAP.cx - 8,
+  row0: MAP.cy - 8,
+  size: 17,
+  roadRow: 8,
 };
 
 const SQRT3 = Math.sqrt(3);
@@ -73,12 +79,13 @@ export function fromAbstract(r, c) {
 }
 
 /**
- * 中心主干道：与 rules.js 的 roadRow 同一行，横贯整张六边形。
- * 中心 9×9 里的那一段正是规则层「道路格恒不可建 / 两侧皆敌封死」的判据所在，
- * 所以其余道路一律绕开中心公共区 —— 那片是**可以盖楼的公共地盘**。
+ * 中心主干道：只画中心公共区里那一行（正是规则层「道路格恒不可建 /
+ * 两侧皆敌封死」的判据所在）。
+ * 2026-11-09 用户：「图中间那个彩色的地块，不需要显示道路的话，就正常显示」——
+ * 所以不再横贯整张六边形拉一条突兀的深色带，中心区其余格一律正常草地。
  */
 export function isMainRoad(col, row) {
-  return inHex(col, row) && row === CENTER.row0 + CENTER.roadRow;
+  return inCenter(col, row) && row - CENTER.row0 === CENTER.roadRow;
 }
 
 function lineCells(a, b) {

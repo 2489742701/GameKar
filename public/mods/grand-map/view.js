@@ -1,21 +1,29 @@
 /**
- * 大地图 3D 视图（2026-11-09，P-087）—— 卡牌驱动的主模式扩展。
+ * 大地图 3D 视图（2026-11-09，P-087 续）—— 卡牌驱动的主模式扩展。
  *
- * 地图：大六边形像素地形（map.js），内部六芒星道路 + 相邻近路小道 + 三条对径远路，
- *       中心 9×9 公共区与主干道，边角补成陆地。
+ * 地图：大六边形像素地形（map.js，半径 38 格 ≈ 3750 格 = 竞技场的 4.3 倍），
+ *       内部六芒星道路 + 相邻近路小道 + 三条对径远路，中心 17×17 公共区。
+ *       中心区非道路格一律**正常草地**，只有真道路格才染道路色。
+ * 镜头：默认拉近看局部（tilesAcross 34），滚轮缩放 / 拖动平移 / Shift+拖动旋转，
+ *       顶栏「全图」一键拉远看整张六边形 —— 大地图要能"逛"，不是缩成一张小沙盘。
  * 场景零件：Renderer / installArenaBackdrop / LightingRig / CameraRig / 后期链 /
  *          ARENA_MODELS 全部来自 host 注入，和 /arena.html 是同一套。
+ * 集结：点地面插旗 ⇒ 主程序同款像素小人（loadPack + DudeGallery + DudeSprite）朝旗行进。
  * HUD：顶栏 + 底部四张手牌（host.modApi.createModHand，复用主程序卡面样式与图标）。
- * 右侧那列"发车/结盟/单步"策略按钮已删除 —— 外交点主城、商路设置点集市。
  */
 import * as R from './rules.js';
 import * as M from './map.js';
 import { createHand, EXTRA_CARDS } from './hand.js';
+import { createRally } from './rally.js';
 import { createSky, PERIODS as SKY_PERIODS } from './sky.js';
 
 const colorNum = (hex) => parseInt(hex.slice(1), 16);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const key = (col, row) => `${col},${row}`;
+
+/** 默认局部视图 / 全图视图（沿屏幕短边可见格数） */
+const LOCAL_VIEW = 34;
+const OVERVIEW = 84;
 
 const CSS = `
 .gm * { box-sizing: border-box; }
@@ -39,11 +47,13 @@ const CSS = `
 .gm-panel button.danger { background:#5a2730; border-color:#a3474f; }
 .gm-panel .close { float:right; background:transparent; }
 .gm-panel .row { margin:6px 0; }
-.gm-log { position:absolute; left:14px; top:64px; width:250px; max-height:132px;
-          overflow:hidden; font-size:12px; color:#b8c7dd; pointer-events:none;
-          text-shadow:0 1px 5px #000; }
-.gm-tip { position:absolute; left:14px; bottom:104px; font-size:12px; color:#c9ae76;
-          pointer-events:none; text-shadow:0 1px 5px #000; }
+/* 日志与提示都收在左下空白列，别压到居中的手牌、也别盖住左上角主城 */
+.gm-log { position:absolute; left:10px; bottom:10px; width:262px; max-height:96px;
+          overflow:hidden; padding:4px 8px; border-radius:6px; font-size:12px;
+          color:#c8d7ec; pointer-events:none; background:rgba(8,14,26,.55); }
+.gm-tip { position:absolute; left:10px; bottom:114px; width:262px; padding:4px 8px;
+          border-radius:6px; font-size:11px; line-height:1.45; color:#f0d59a;
+          pointer-events:none; background:rgba(8,14,26,.55); }
 /* HUD 是 DOM，不吃 WebGL 后期：昼夜切换时必须同步卡面主题（只在模组内加规则，
    一行都不改主程序 arena.css）。否则会出现「战场入夜、卡面还亮着」的割裂感。 */
 #arena-ui[data-period="dusk"] .ahud__hand[data-mod-hand] .ahud__card {
@@ -70,11 +80,13 @@ export function createView(host, game) {
     <div class="gm-tint"></div>
     <div class="gm-top"><h2>大地图 · 多方混战</h2><span class="gold" data-gold>50</span>
       <span class="muted" data-info></span><span style="flex:1"></span>
+      <button data-action="rally" data-on="1">集结</button>
+      <button data-action="overview">全图</button>
       <span class="gm-periods"></span><button data-action="exit">退出</button></div>
     <div class="gm-panel gm-dipl" hidden></div>
     <div class="gm-panel gm-market" hidden></div>
     <div class="gm-log"></div>
-    <div class="gm-tip">点卡牌选中 → 点地图落牌 · 长按拖出去也行 · 点主城开外交 / 点集市设商路</div>`;
+    <div class="gm-tip">点地面插旗集结 · 选卡牌再点地图落牌<br>滚轮缩放 / 拖动平移 / Shift+拖动转视角<br>点主城开外交、点集市设商路</div>`;
   ui.append(style, root);
   const tintEl = root.querySelector('.gm-tint');
   const goldEl = root.querySelector('[data-gold]');
@@ -83,6 +95,8 @@ export function createView(host, game) {
   const diplEl = root.querySelector('.gm-dipl');
   const marketEl = root.querySelector('.gm-market');
   const logEl = root.querySelector('.gm-log');
+  const rallyBtn = root.querySelector('[data-action="rally"]');
+  const overviewBtn = root.querySelector('[data-action="overview"]');
 
   // ===== 主程序同款场景零件 =====
   const scene = new T.Scene();
@@ -92,7 +106,7 @@ export function createView(host, game) {
   const rig = new A.CameraRig({
     pitchDeg: A.ARENA_CAMERA.pitchDeg,
     yawDeg: A.ARENA_CAMERA.yawDeg,
-    tilesAcross: 62, minTilesAcross: 12, maxTilesAcross: 96,
+    tilesAcross: LOCAL_VIEW, minTilesAcross: 12, maxTilesAcross: 100,
   });
   // 先给相机真实视口，再算场内边界：否则 clampDesired 用的是 1×1 默认尺寸
   rig.resize(window.innerWidth, window.innerHeight);
@@ -107,12 +121,11 @@ export function createView(host, game) {
   tiltPass.uniforms['amount'].value = 0.35;
   composer.addPass(tiltPass);
 
-  const sky = createSky(T, scene, mid);
+  // 云往外围多推一点，局部视图里别盖在可建造地块上当"白色障碍物"
+  const sky = createSky(T, scene, mid, (M.MAP.hexR / 30) * 1.35);
 
   // ===== 大六边形像素地形：一个 InstancedMesh 承载全部方块格 =====
   const terrain = M.terrainCells();
-  const indexOf = new Map();
-  terrain.forEach((c, i) => indexOf.set(key(c.col, c.row), i));
   const tileGeo = new T.BoxGeometry(0.94, 0.28, 0.94);
   const tileMat = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true });
   const tiles = new T.InstancedMesh(tileGeo, tileMat, terrain.length);
@@ -128,8 +141,7 @@ export function createView(host, game) {
 
   const GRASS = new T.Color(0x4a7a3a);
   const GRASS_LIT = new T.Color(0x6c9c4e);
-  const CENTER = new T.Color(0x8a7440);
-  const MAIN = new T.Color(0x5b4a32);
+  const MAIN = new T.Color(0x6b5636);
   const STAR = new T.Color(0xba7517);
   const SHORT = new T.Color(0xd8b45c);
   const FAR = new T.Color(0x9a5f2e);
@@ -148,7 +160,7 @@ export function createView(host, game) {
     scene.add(base);
     try {
       const model = A.buildModel(A.ARENA_MODELS.core(colorNum(R.FACTIONS[i].color)).static);
-      // 主程序的模型本体只有 1 格大，视图层一律按 BUILDING_SCALE 放大 —— 别再自作主张写 0.8
+      // 主程序的模型本体只有 1 格大，视图层一律按 BUILDING_SCALE 放大
       model.scale.setScalar(A.BUILDING_SCALE);
       model.position.set(w.x, 0.34, w.z);
       scene.add(model);
@@ -157,13 +169,53 @@ export function createView(host, game) {
     }
   });
 
+  // ===== 集结旗：一根杆 + 一面布 + 地上一圈光圈 =====
+  const flagGroup = new T.Group();
+  const pole = new T.Mesh(
+    new T.BoxGeometry(0.16, 2.2, 0.16),
+    new T.MeshBasicMaterial({ color: 0xffe4a0 }),
+  );
+  pole.position.y = 1.1;
+  const cloth = new T.Mesh(
+    new T.PlaneGeometry(1.1, 0.7),
+    new T.MeshBasicMaterial({ color: colorNum(R.FACTIONS[0].color), side: T.DoubleSide }),
+  );
+  cloth.position.set(0.55, 1.85, 0);
+  const ring = new T.Mesh(
+    new T.CircleGeometry(1.1, 28),
+    new T.MeshBasicMaterial({ color: 0xfac775, transparent: true, opacity: 0.22, side: T.DoubleSide, depthWrite: false }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.3;
+  flagGroup.add(ring, pole, cloth);
+  flagGroup.visible = false;
+  scene.add(flagGroup);
+
   const hand = createHand(API, game);
+  const rally = createRally();
   const buildingMeshes = new Map();
   const caravanMeshes = new Map();
+  const unitViews = new Map();
   let autoSky = false, skyAcc = 0, auto = false, acc = 0;
-  let dragging = false, lastX = 0;
+  let overview = false;
+  let canvasDrag = false, dragging = false, lastX = 0, lastY = 0;
   let ghost = null;
   let diplId = 2;
+
+  // ===== 像素小人：主程序同款素材包，异步加载；没读到就退回阵营色小方块 =====
+  let dudePack = null, gallery = null, dudeRng = null;
+  const styles = new Map();
+  void A.loadPack().then((pack) => {
+    dudePack = pack;
+    gallery = new A.DudeGallery(pack);
+    dudeRng = new host.engine.Random(20261109);
+  }).catch((err) => {
+    console.info('[grand-map] 像素小人素材没读到，退回占位方块：', err);
+  });
+  const styleFor = (cardId) => {
+    if (!styles.has(cardId)) styles.set(cardId, A.randomStyle(dudeRng, dudePack));
+    return styles.get(cardId);
+  };
 
   const groundCell = (clientX, clientY) => {
     const rect = host.canvas.getBoundingClientRect();
@@ -191,23 +243,49 @@ export function createView(host, game) {
 
   const message = (text) => { R.note(game.state, text); render(); };
 
+  function syncFlag() {
+    const f = rally.flag;
+    flagGroup.visible = !!f;
+    if (!f) return;
+    const w = A.cellToWorld(A.pos(f.col, f.row));
+    flagGroup.position.set(w.x, 0.3, w.z);
+  }
+
+  /** 点击地面 ⇒ 插旗集结。军队可以站道路上（道路只是不能盖楼）。 */
+  function rallyAt(col, row) {
+    const res = rally.dropFlag(col, row);
+    if (!res.ok) { message(res.reason); return res; }
+    syncFlag();
+    message(`集结点 (${col},${row}) · 再点别处可随时改集结位置`);
+    return res;
+  }
+
+  /** 打出军队/攻城卡 ⇒ 从落牌点拉出一队像素小人，向当前集结点行进。 */
+  function afterPlay(slot, res, col, row) {
+    if (!res.ok) { message(res.reason); return res; }
+    modHand.play(slot);
+    const card = res.card;
+    if (card && card.kind !== 'building') {
+      const count = Math.min(8, Math.max(3, card.squad?.reduce((n, s) => n + s.count, 0) ?? 3));
+      rally.spawn(col, row, count, card.id);
+    }
+    render();
+    return res;
+  }
+
   // 卡牌 HUD：主程序同款手牌（开放 API 提供）
   const modHand = API.createModHand({
     onSelect: (slot) => { hand.select(slot); render(); },
     onDragMove: (_slot, x, y) => showGhost(x, y),
     onCancel: () => hideGhost(),
-    onDrop: (slot, x, y) => playAt(slot, x, y),
+    onDrop: (slot, x, y) => {
+      hideGhost();
+      const cell = groundCell(x, y);
+      if (!cell) return;
+      afterPlay(slot, hand.play(slot, cell.col, cell.row), cell.col, cell.row);
+    },
   });
   ui.append(modHand.el);
-
-  function playAt(slot, clientX, clientY) {
-    hideGhost();
-    const cell = groundCell(clientX, clientY);
-    if (!cell) return;
-    const res = hand.play(slot, cell.col, cell.row);
-    if (!res.ok) message(res.reason);
-    else { modHand.play(slot); render(); }
-  }
 
   const onCanvasClick = (e) => {
     if (dragging) return;
@@ -217,22 +295,39 @@ export function createView(host, game) {
     // 点自己的集市 = 开商路设置
     if (hand.claims.get(k)?.owner === 0 && hand.claims.get(k)?.card === 'market') { openMarket(); return; }
     // 点主城附近 = 开外交
-    const near = M.POINTS.findIndex((p, i) => i > 0 && Math.abs(p.col - cell.col) <= 3 && Math.abs(p.row - cell.row) <= 3);
+    const near = M.POINTS.findIndex((p, i) => i > 0 && Math.abs(p.col - cell.col) <= 4 && Math.abs(p.row - cell.row) <= 4);
     if (near > 0) { openDiplomacy(near); return; }
-    if (hand.selected < 0) return;
-    const res = hand.play(hand.selected, cell.col, cell.row);
-    if (!res.ok) message(res.reason);
-    else { modHand.play(hand.selected); render(); }
+    if (hand.selected >= 0) {
+      const slot = hand.selected;
+      afterPlay(slot, hand.play(slot, cell.col, cell.row), cell.col, cell.row);
+      return;
+    }
+    // 没选牌 = 点地面插旗集结军队
+    rallyAt(cell.col, cell.row);
   };
-  const onDown = (e) => { dragging = false; lastX = e.clientX; };
+  const onDown = (e) => { canvasDrag = true; dragging = false; lastX = e.clientX; lastY = e.clientY; };
+  const onUp = () => { canvasDrag = false; };
   const onMove = (e) => {
-    if (e.buttons !== 1) return;
-    if (Math.abs(e.clientX - lastX) > 3) dragging = true;
-    rig.rotateBy(-(e.clientX - lastX) * 0.12);
+    if (!canvasDrag || e.buttons !== 1) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    if (Math.abs(dx) + Math.abs(dy) > 3) dragging = true;
+    if (e.shiftKey) rig.rotateBy(-dx * 0.12);
+    else rig.panByPixels(dx, dy);
     lastX = e.clientX;
+    lastY = e.clientY;
+  };
+  const onWheel = (e) => {
+    e.preventDefault();
+    const rect = host.canvas.getBoundingClientRect();
+    rig.zoomBy(e.deltaY < 0 ? 1.14 : 1 / 1.14, e.clientX - rect.left, e.clientY - rect.top);
+    overview = false;
+    overviewBtn.dataset['on'] = '0';
+    overviewBtn.textContent = '全图';
   };
   host.canvas.addEventListener('click', onCanvasClick);
   host.canvas.addEventListener('pointerdown', onDown);
+  host.canvas.addEventListener('wheel', onWheel, { passive: false });
+  window.addEventListener('pointerup', onUp);
   window.addEventListener('pointermove', onMove);
 
   function openDiplomacy(id) {
@@ -289,12 +384,29 @@ export function createView(host, game) {
     const a = b.dataset['action'];
     if (a === 'exit') { host.exit(); return; }
     if (a === 'close') { diplEl.hidden = true; marketEl.hidden = true; return; }
+    if (a === 'rally') {
+      const on = rally.setEnabled(!rally.enabled);
+      rallyBtn.dataset['on'] = on ? '1' : '0';
+      message(on ? '集结已启用：点地面插旗，军队会往旗子走' : '集结已关闭');
+      return;
+    }
+    if (a === 'overview') {
+      overview = !overview;
+      rig.zoom = overview ? OVERVIEW : LOCAL_VIEW;
+      if (!overview) rig.centerOnWorld(mid.x, mid.z);
+      overviewBtn.dataset['on'] = overview ? '1' : '0';
+      overviewBtn.textContent = overview ? '回局部' : '全图';
+      return;
+    }
     if (a === 'period') { sky.setPeriod(Number(b.dataset['i'])); autoSky = false; render(); return; }
     if (a === 'autosky') { autoSky = !autoSky; skyAcc = 0; render(); return; }
     if (a === 'auto') { auto = !auto; render(); return; }
     if (a === 'reset') {
       game.state = R.createGame(Date.now() & 0xffff);
-      hand.reset(); diplId = 2;
+      hand.reset(); rally.reset(); diplId = 2;
+      for (const v of unitViews.values()) removeUnitView(v);
+      unitViews.clear();
+      syncFlag();
       diplEl.hidden = true; marketEl.hidden = true;
       render(); return;
     }
@@ -324,33 +436,70 @@ export function createView(host, game) {
     const want = new Set();
     for (const [k, v] of hand.claims) {
       if (!v.card) continue;
+      const name = modelOf.get(v.card);
+      // 军队卡由集结层的小人表达，不再画一个假建筑
+      if (!name || !A.ARENA_MODELS[name]) continue;
       want.add(k);
       if (buildingMeshes.has(k)) continue;
       const [col, row] = k.split(',').map(Number);
       const w = A.cellToWorld(A.pos(col, row));
       try {
-        const name = modelOf.get(v.card);
-        if (name && A.ARENA_MODELS[name]) {
-          const m = A.buildModel(A.ARENA_MODELS[name](colorNum(R.FACTIONS[0].color)).static);
-          // 一格占领点比主程序 3×3 占地小，按主程序缩放打个折，避免盖住邻格
-          m.scale.setScalar(A.BUILDING_SCALE * 0.62);
-          m.position.set(w.x, 0.3, w.z);
-          scene.add(m);
-          buildingMeshes.set(k, m);
-        } else {
-          // 军队卡：占位小方块（DudeSprite / DudeGallery 小人素材仍待接入）
-          const m = new T.Mesh(
-            new T.BoxGeometry(0.55, 0.55, 0.55),
-            new T.MeshBasicMaterial({ color: colorNum(R.FACTIONS[0].color) }),
-          );
-          m.position.set(w.x, 0.58, w.z);
-          scene.add(m);
-          buildingMeshes.set(k, m);
-        }
+        const m = A.buildModel(A.ARENA_MODELS[name](colorNum(R.FACTIONS[0].color)).static);
+        // 一格占领点比主程序 3×3 占地小，按主程序缩放打个折，避免盖住邻格
+        m.scale.setScalar(A.BUILDING_SCALE * 0.62);
+        m.position.set(w.x, 0.3, w.z);
+        scene.add(m);
+        buildingMeshes.set(k, m);
       } catch { /* 模型装配失败就只靠地块颜色表达 */ }
     }
     for (const [k, m] of buildingMeshes) {
       if (!want.has(k)) { scene.remove(m); buildingMeshes.delete(k); }
+    }
+  }
+
+  function removeUnitView(v) {
+    if (v.sprite) { scene.remove(v.sprite.mesh); v.sprite.dispose(); }
+    if (v.box) {
+      scene.remove(v.box);
+      v.box.geometry.dispose();
+      v.box.material.dispose();
+    }
+  }
+
+  /** 集结的兵：素材包加载完自动从占位方块升级成主程序同款像素小人。 */
+  function syncUnits(time) {
+    const alive = new Set();
+    for (const u of rally.units) {
+      alive.add(u.id);
+      let v = unitViews.get(u.id);
+      if (gallery && (!v || !v.sprite)) {
+        if (v) removeUnitView(v);
+        const { atlas, texture } = gallery.acquire(styleFor(u.card));
+        const sprite = new A.DudeSprite(dudePack, atlas, texture, {
+          ...A.DEFAULT_APPEARANCE, height: 1.15,
+        });
+        scene.add(sprite.mesh);
+        v = { sprite, box: null };
+        unitViews.set(u.id, v);
+      } else if (!gallery && !v) {
+        const box = new T.Mesh(
+          new T.BoxGeometry(0.5, 0.9, 0.5),
+          new T.MeshBasicMaterial({ color: colorNum(R.FACTIONS[0].color) }),
+        );
+        scene.add(box);
+        v = { sprite: null, box };
+        unitViews.set(u.id, v);
+      }
+      const w = A.cellToWorld(A.pos(u.col, u.row));
+      const obj = v.sprite ? v.sprite.mesh : v.box;
+      obj.position.set(w.x, v.sprite ? 0.72 : 0.62, w.z);
+      if (v.sprite) {
+        v.sprite.mesh.quaternion.copy(rig.camera.quaternion); // billboard：正交相机也正对
+        v.sprite.play(u.moving ? 'run' : 'idle', time);
+      }
+    }
+    for (const [id, v] of unitViews) {
+      if (!alive.has(id)) { removeUnitView(v); unitViews.delete(id); }
     }
   }
 
@@ -385,9 +534,9 @@ export function createView(host, game) {
     terrain.forEach((c, i) => {
       const k = key(c.col, c.row);
       const kind = M.roadKindAt(c.col, c.row);
+      // 中心公共区不整块染色：不是道路就正常草地（用户 2026-11-09 口径）
       let col = GRASS;
-      if (kind === 'center') col = CENTER;
-      else if (kind === 'main') col = MAIN;
+      if (kind === 'main') col = MAIN;
       else if (kind === 'star') col = STAR;
       else if (kind === 'short') col = SHORT;
       else if (kind === 'far') col = FAR;
@@ -403,10 +552,11 @@ export function createView(host, game) {
   function render() {
     const s = game.state;
     goldEl.textContent = s.factions[0].gold;
-    infoEl.textContent = `/ ${R.SPEC.gold.cap} 金 · 回合 ${s.tick}/${R.SPEC.endTick} · 来车 ${s.pending.length}`;
+    infoEl.textContent = `/ ${R.SPEC.gold.cap} 金 · 回合 ${s.tick}/${R.SPEC.endTick} · 来车 ${s.pending.length} · 兵 ${rally.units.length}`;
     const period = SKY_PERIODS[sky.periodIndex];
     tintEl.style.background = period.tint;
     ui.dataset['period'] = period.key;
+    rallyBtn.dataset['on'] = rally.enabled ? '1' : '0';
     periodsEl.innerHTML = SKY_PERIODS.map((p, i) =>
       `<button data-action="period" data-i="${i}" data-on="${sky.periodIndex === i ? 1 : 0}">${p.label}</button>`).join('') +
       `<button data-action="autosky" data-on="${autoSky ? 1 : 0}">巡游</button>` +
@@ -438,15 +588,24 @@ export function createView(host, game) {
     setPeriod: (i) => { sky.setPeriod(i); render(); },
     get periodIndex() { return sky.periodIndex; },
     get hand() { return hand; },
-    /** 无头探针走格子坐标，和拖放共用同一条 hand.play 判据 */
+    get rally() { return rally; },
+    get zoom() { return rig.zoom; },
+    get dudesReady() { return !!gallery; },
+    setOverview(on) {
+      overview = !!on;
+      rig.zoom = overview ? OVERVIEW : LOCAL_VIEW;
+      if (!overview) rig.centerOnWorld(mid.x, mid.z);
+      overviewBtn.dataset['on'] = overview ? '1' : '0';
+      overviewBtn.textContent = overview ? '回局部' : '全图';
+    },
+    rallyAt,
+    /** 无头探针走格子坐标，和点选/拖放共用同一条 hand.play 判据 */
     playCard(slot, col, row) {
-      const res = hand.play(slot, col, row);
-      if (!res.ok) message(res.reason);
-      else { modHand.play(slot); render(); }
-      return res;
+      return afterPlay(slot, hand.play(slot, col, row), col, row);
     },
     frame(info) {
       hand.tick(info.delta);
+      rally.tick(info.delta);
       if (auto && !game.state.finished) {
         acc += info.delta;
         if (acc >= 1) { acc = 0; R.tick(game.state); render(); }
@@ -459,20 +618,25 @@ export function createView(host, game) {
       lighting.update(info.time);
       sky.update(info.time);
       syncCaravans(info.time);
+      syncUnits(info.time);
       composer.render(info.delta);
     },
     dispose() {
       root.removeEventListener('click', onClick);
       host.canvas.removeEventListener('click', onCanvasClick);
       host.canvas.removeEventListener('pointerdown', onDown);
+      host.canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('resize', resize);
       modHand.dispose();
       delete ui.dataset['period'];
+      for (const v of unitViews.values()) removeUnitView(v);
       scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) o.material.dispose();
       });
+      gallery?.dispose();
       lighting.dispose(scene);
       renderer.dispose();
       root.remove();

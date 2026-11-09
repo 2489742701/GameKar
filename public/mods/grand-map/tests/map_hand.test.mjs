@@ -29,7 +29,8 @@ test('大六边形是地形外框：内部格远多于道路格，凹角已补�
   const star = M.starRoads();
   const short = M.shortcuts();
   const far = M.diameterRoads();
-  assert.ok(terrain.length > 1500, `地形格太少：${terrain.length}`);
+  // 用户 2026-11-09：「起码比竞技场大三四倍」；竞技场 44×20 = 880 格
+  assert.ok(terrain.length > 880 * 3, `地形格太少：${terrain.length}，至少要 3 倍竞技场`);
   assert.ok(terrain.length > star.length * 5, '六芒星只能是内部道路，不能就是整张地图');
   assert.ok(star.length > 50 && short.length > 50 && far.length > 20);
   assert.ok(terrain.every((c) => M.inHex(c.col, c.row)));
@@ -96,8 +97,8 @@ test('四张手牌 + 补牌冷却：打出去变空格，冷却到了自动补',
   const hand = createHand(API, g);
   assert.equal(hand.cards.length, API.HAND.size);
   assert.ok(hand.cards.every(Boolean));
-  const cell = M.fromAbstract(0, 1);           // 玩家在中心区的抢滩点旁边
-  const near = { col: cell.col, row: cell.row + 1 };
+  const seed = M.fromAbstract(R.SEEDS[0][0], R.SEEDS[0][1]);
+  const near = { col: seed.col, row: seed.row + 1 };  // 抢滩点的 4 邻域
   // 抢滩点本身被占，从它的 4 邻域起手
   assert.ok(hand.unlocked().has(`${near.col},${near.row}`));
   const res = hand.play(0, near.col, near.row);

@@ -55,6 +55,10 @@ import { TILT_SHIFT_SHADER } from './visuals/tiltShift';
 import { ARENA_CAMERA, NO_BUILD, FIELD, BUILDING_SCALE } from './config';
 import { MOD_API_VERSION, CARDS, ECONOMY, HAND, iconOf, createModHand } from './modApi';
 import { buildModel } from '@game/models/kit';
+// P-087 续：「点击地面集结军队」要出主程序同款像素小人，这几个依然只作注入出口
+import { DudeGallery, DudeSprite, DEFAULT_APPEARANCE } from '@game/dudes/DudeView';
+import { loadPack } from '@game/dudes/pack';
+import { randomStyle } from '@game/dudes/style';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -140,4 +144,10 @@ export const modAssets = {
   NO_BUILD,
   FIELD,
   BUILDING_SCALE,
+  // 像素小人（集结军队用）：模组自己 loadPack，不碰主程序玩法
+  loadPack,
+  DudeGallery,
+  DudeSprite,
+  DEFAULT_APPEARANCE,
+  randomStyle,
 };

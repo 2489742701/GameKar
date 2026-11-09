@@ -32,6 +32,8 @@ const GAMEPLAY_FILES = [
 const MOD_MARKER = /modApi|modHost|grand-map|createModHand|__grandMap|\?mod=/;
 const fromSpecs = (src: string): string[] =>
   [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
+const view = (): string => stripComments(read('public/mods/grand-map/view.js'));
+const map = (): string => stripComments(read('public/mods/grand-map/map.js'));
 
 describe('主程序玩法文件 0 改动', () => {
   it('反证：这条判据真的能抓到模组污染', () => {
@@ -99,6 +101,10 @@ describe('开放 API 是单向出口', () => {
     expect(deps).toContain("} from 'three'");
     expect(deps).not.toContain('import * as THREE');
     expect(deps).toContain('BUILDING_SCALE'); // 主程序模型缩放口径也得注入
+    // 集结军队用的像素小人素材仍然是注入，不是让模组去 import 主程序
+    for (const name of ['loadPack', 'DudeGallery', 'DudeSprite', 'randomStyle', 'DEFAULT_APPEARANCE']) {
+      expect(deps, `${name} 没注入`).toContain(name);
+    }
   });
 
   it('手牌拖放不会在松手时误触发选中（P-087 实测坑）', () => {
@@ -112,8 +118,6 @@ describe('开放 API 是单向出口', () => {
 });
 
 describe('模组是卡牌驱动的主模式扩展', () => {
-  const view = (): string => stripComments(read('public/mods/grand-map/view.js'));
-
   it('四张手牌来自 host.modApi.createModHand，不是策略按钮列', () => {
     const src = view();
     expect(src).toContain('API.createModHand(');
@@ -161,15 +165,50 @@ describe('模组是卡牌驱动的主模式扩展', () => {
 
   it('index.js 的探针钩子仍走同一条 hand.play 判据', () => {
     const idx = stripComments(read('public/mods/grand-map/index.js'));
+    const src = view();
     expect(idx).toContain('host.api !== 1');
     expect(idx).toContain('view.playCard(slot, col, row)');
-    expect(view()).toContain('const res = hand.play(slot, col, row);');
+    expect(src).toContain('return afterPlay(slot, hand.play(slot, col, row), col, row);');
+    // 反证：探针自己另写一套落牌判据，锁必须红
+    expect(src).not.toContain('window.__grandMap.playCard = (s, c, r) =>');
+  });
+
+  it('地图至少 3 倍竞技场：格数由 hexR 算，不是把六芒星当轮廓', () => {
+    const src = map();
+    const hexR = Number(src.match(/hexR:\s*(\d+)/)?.[1]);
+    // 六边形面积 ≈ 2.598·R²，竞技场 44×20 = 880 格
+    expect(2.598 * hexR * hexR).toBeGreaterThan(880 * 3);
+    // 反证：把半径退回 P-086 那版就红
+    expect(2.598 * 30 * 30).toBeLessThan(880 * 3);
+  });
+
+  it('集结走主程序同款像素小人素材，不自己拼几何糊弄', () => {
+    const src = view();
+    const rally = stripComments(read('public/mods/grand-map/rally.js'));
+    expect(src).toContain('createRally(');
+    expect(src).toContain('A.loadPack()');
+    expect(src).toContain('new A.DudeGallery(pack)');
+    expect(src).toContain('new A.DudeSprite(');
+    expect(src).toContain('rally.dropFlag(col, row)');
+    expect(rally).toContain('export function createRally()');
+    expect(rally).toContain('M.inHex(col, row)');   // 旗子也得落在地图里
+    // 反证：把集结做成一列策略按钮（而不是点地面），判据抓得到
+    const FORBIDDEN = /data-action="send-troops"|class="gm-troop-list"/;
+    expect(FORBIDDEN.test('<button data-action="send-troops">出兵</button>')).toBe(true);
+    expect(FORBIDDEN.test(src)).toBe(false);
+  });
+
+  it('大地图能逛：滚轮缩放 + 拖动平移 + 全图按钮都在', () => {
+    const src = view();
+    expect(src).toContain("addEventListener('wheel'");
+    expect(src).toContain('rig.zoomBy(');
+    expect(src).toContain('rig.panByPixels(');
+    expect(src).toContain('data-action="overview"');
+    expect(src).toContain('LOCAL_VIEW');
   });
 });
 
 describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
-  const map = (): string => stripComments(read('public/mods/grand-map/map.js'));
-
   it('地形轮廓由 inHex 生成，六芒星只是路网', () => {
     const src = map();
     expect(src).toContain('if (inHex(col, row)) out.push({ col, row });');
@@ -180,11 +219,17 @@ describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
     expect(src).not.toContain('starRoads().forEach((c) => out.push');
   });
 
-  it('道路绕开中心公共区，主干道横贯六边形', () => {
+  it('道路绕开中心公共区，主干道只画中心区那一行（其余正常草地）', () => {
     const src = map();
     expect(src).toContain('!inCenter(c.col, c.row)');
-    expect(src).toContain('row === CENTER.row0 + CENTER.roadRow');
+    expect(src).toContain('row - CENTER.row0 === CENTER.roadRow');
     expect(src).toContain('export function isRoad(');
+    // 反证：又横贯整张六边形拉一条深色带，判据必须抓到
+    expect(src).not.toContain('return inHex(col, row) && row === CENTER.row0');
+    // 中心区非道路格必须落回普通草地：不许有整块 'center' 染色分支
+    const paint = view();
+    expect(paint).toContain('let col = GRASS;');
+    expect(paint).not.toContain("kind === 'center'");
   });
 
   it('中心 9×9 与规则层 SPEC 逐格对齐（只在一处改数值）', () => {
