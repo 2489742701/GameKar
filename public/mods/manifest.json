@@ -6,6 +6,7 @@
       "name": "大地图 · 多方混战",
       "entry": "index.js",
       "api": 1,
+      "dev": true,
       "remote": null
     }
   ]

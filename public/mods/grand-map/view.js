@@ -45,6 +45,9 @@ const CSS = `
 .gm-top { pointer-events:auto; background:rgba(10,16,28,.92);
           border-bottom:1px solid rgba(216,178,92,.35); }
 .gm-title { font-size:13px; font-weight:500; color:#f3e0b0; white-space:nowrap; }
+.gm-devtag { margin-left:6px; padding:1px 5px; border-radius:4px;
+             border:1px dashed #d8b25c; font-size:10px; font-weight:500;
+             letter-spacing:.08em; color:#f6dc9c; }
 .gm-top .ahud__clock__num { font-size:13px; }
 .gm-sizes { display:inline-flex; gap:3px; margin-right:6px; }
 .gm-sizes button, .gm-debug button { font:inherit; cursor:pointer; border-radius:7px;
@@ -69,13 +72,13 @@ const CSS = `
 .gm-panel button.danger { background:#5a2730; border-color:#a3474f; }
 .gm-panel .close { float:right; background:transparent; }
 .gm-panel .row { margin:6px 0; }
-/* 日志与提示都收在左下空白列，别压到居中的手牌、也别盖住左上角主城 */
-.gm-log { position:absolute; left:10px; bottom:10px; width:262px; max-height:96px;
-          overflow:hidden; padding:4px 8px; border-radius:6px; font-size:12px;
-          color:#c8d7ec; pointer-events:none; background:rgba(8,14,26,.55); }
-.gm-tip { position:absolute; left:10px; bottom:114px; width:262px; padding:4px 8px;
-          border-radius:6px; font-size:11px; line-height:1.45; color:#f0d59a;
-          pointer-events:none; background:rgba(8,14,26,.55); }
+/* 用户 2026-11-09：「左下角不需要那么多提示呀」——
+   去掉深色底框、提示压成一行、日志只留最近 3 条，把左下角还给战场 */
+.gm-log { position:absolute; left:12px; bottom:14px; width:280px; max-height:52px;
+          overflow:hidden; font-size:11px; line-height:1.5; pointer-events:none;
+          color:rgba(200,215,236,.85); text-shadow:0 1px 4px #000; }
+.gm-tip { position:absolute; left:12px; bottom:70px; font-size:11px; white-space:nowrap;
+          pointer-events:none; color:rgba(240,213,154,.72); text-shadow:0 1px 4px #000; }
 /* HUD 是 DOM，不吃 WebGL 后期：昼夜切换时必须同步卡面主题（只在模组内加规则，
    一行都不改主程序 arena.css）。否则会出现「战场入夜、卡面还亮着」的割裂感。 */
 #arena-ui[data-period="dusk"] .ahud__hand[data-mod-hand] .ahud__card {
@@ -105,7 +108,7 @@ export function createView(host, game) {
   root.innerHTML = `
     <div class="gm-tint"></div>
     <div class="ahud__top panel gm-top">
-      <span class="gm-title">大地图 · 多方混战</span>
+      <span class="gm-title">大地图 · 多方混战 <b class="gm-devtag">DEV</b></span>
       <div class="ahud__clock gm-clock"><b class="ahud__clock__num" data-clock>0 / 120</b></div>
       <div class="ahud__tools ahud__tools--top">
         <span class="gm-sizes"></span>
@@ -125,7 +128,7 @@ export function createView(host, game) {
     <div class="gm-panel gm-dipl" hidden></div>
     <div class="gm-panel gm-market" hidden></div>
     <div class="gm-log"></div>
-    <div class="gm-tip">点地面插旗集结 · 选卡牌再点地图落牌<br>中心区定期刷宝箱：点宝箱插旗，兵跑过去开箱<br>宝箱金币可以超过 50 上限，不会被丢弃<br>滚轮缩放 / 拖动平移 / Shift+拖动转视角</div>`;
+    <div class="gm-tip">点地面集结 · 拖卡牌落牌 · 滚轮缩放 / 拖动平移</div>`;
   ui.append(style, root);
   const tintEl = root.querySelector('.gm-tint');
   const clockEl = root.querySelector('[data-clock]');
@@ -173,30 +176,38 @@ export function createView(host, game) {
   // 云往外围多推一点，局部视图里别盖在可建造地块上当"白色障碍物"
   const sky = createSky(T, scene, mid, (M.MAP.hexR / 30) * 1.35);
 
-  // ===== 大六边形像素地形：一个 InstancedMesh 承载全部方块格 =====
+  // ===== 地板：用主程序同一套 TileMap + GroundView =====
+  // 用户 2026-11-09：「你这个地板好像是 2D 的，不是 3D 的」。
+  // GroundView 每格是 thickness + 1.2 厚的立体块，顶面按地形起伏（grass 0.5 /
+  // sand 0.46 / rock 0.78），材质 roughness 0.95 + flatShading、颜色带 fbm 抖色、
+  // receiveShadow = true；P-087 改大六边形时我换成了 0.28 高的薄方块 + 纯色，
+  // 俯视就成了一张 2D 网格贴图。现在把真实零件接回来，形状仍由 terrain 数组裁成六边形。
   const terrain = M.terrainCells();
-  const tileGeo = new T.BoxGeometry(0.94, 0.28, 0.94);
-  const tileMat = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true });
-  const tiles = new T.InstancedMesh(tileGeo, tileMat, terrain.length);
-  const dummy = new T.Object3D();
-  terrain.forEach((c, i) => {
-    const w = A.cellToWorld(A.pos(c.col, c.row));
-    dummy.position.set(w.x, 0.14, w.z);
-    dummy.updateMatrix();
-    tiles.setMatrixAt(i, dummy.matrix);
+  const codeOf = (name) => A.TERRAIN_ORDER.indexOf(name);
+  const codes = new Uint8Array(M.MAP.cols * M.MAP.rows).fill(codeOf('water'));
+  terrain.forEach((c) => {
+    // 六边形内以草原为主，掺少量沙地 / 岩脊制造顶面高差（读的是主程序 TERRAIN 表）
+    const t = (c.col * 7 + c.row * 13) % 29 === 0 ? 'rock'
+      : (c.col * 3 + c.row * 5) % 13 === 0 ? 'sand' : 'grass';
+    codes[c.row * M.MAP.cols + c.col] = codeOf(t);
   });
-  tiles.instanceMatrix.needsUpdate = true;
-  scene.add(tiles);
+  const tileMap = new A.TileMap({ cols: M.MAP.cols, rows: M.MAP.rows }, codes);
+  const ground = new A.GroundView(tileMap);
+  scene.add(ground.group);
+  // GroundView 把 water 格放进 sea 层：六边形外整层藏掉，轮廓才真是大六边形
+  ground.group.children[1].count = 0;
+  const groundY = (col, row) => tileMap.surfaceY(A.pos(Math.floor(col), Math.floor(row)));
 
-  const GRASS = new T.Color(0x4a7a3a);
-  const GRASS_LIT = new T.Color(0x6c9c4e);
-  const MAIN = new T.Color(0x6b5636);
-  const STAR = new T.Color(0xba7517);
-  const SHORT = new T.Color(0xd8b45c);
-  const FAR = new T.Color(0x9a5f2e);
-  const BLOCKED = new T.Color(0x8a3540);
-  const CHEST = new T.Color(0xffd75e);
-  const FACTION_COLORS = R.FACTIONS.map((f) => new T.Color(colorNum(f.color)));
+  // 染色一律走 GroundView.tintCells（和 1v1 给黄沙禁建带染色是同一个函数）
+  const GRASS = A.TERRAIN.grass.color;
+  const GRASS_LIT = 0x8ab35f;
+  const MAIN = 0x6b5636;
+  const STAR = 0xba7517;
+  const SHORT = 0xd8b45c;
+  const FAR = 0x9a5f2e;
+  const BLOCKED = 0x8a3540;
+  const CHEST = 0xffd75e;
+  const FACTION_HEX = R.FACTIONS.map((f) => colorNum(f.color));
 
   // ===== 六座主城：主游戏同款大本营模型，落在六芒星尖角 =====
   M.POINTS.forEach((p, i) => {
@@ -206,13 +217,14 @@ export function createView(host, game) {
       new T.MeshBasicMaterial({ color: colorNum(R.FACTIONS[i].color), side: T.DoubleSide }),
     );
     base.rotation.x = -Math.PI / 2;
-    base.position.set(w.x, 0.32, w.z);
+    const gy = groundY(p.col, p.row);
+    base.position.set(w.x, gy + 0.02, w.z);
     scene.add(base);
     try {
       const model = A.buildModel(A.ARENA_MODELS.core(colorNum(R.FACTIONS[i].color)).static);
       // 主程序的模型本体只有 1 格大，视图层一律按 BUILDING_SCALE 放大
       model.scale.setScalar(A.BUILDING_SCALE);
-      model.position.set(w.x, 0.34, w.z);
+      model.position.set(w.x, gy + 0.04, w.z);
       scene.add(model);
     } catch (err) {
       console.warn('[grand-map] 主城模型装配失败：', err);
@@ -236,7 +248,7 @@ export function createView(host, game) {
     new T.MeshBasicMaterial({ color: 0xfac775, transparent: true, opacity: 0.22, side: T.DoubleSide, depthWrite: false }),
   );
   ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.3;
+  ring.position.y = 0.02;
   flagGroup.add(ring, pole, cloth);
   flagGroup.visible = false;
   scene.add(flagGroup);
@@ -288,7 +300,7 @@ export function createView(host, game) {
       scene.add(ghost);
     }
     const w = A.cellToWorld(A.pos(cell.col, cell.row));
-    ghost.position.set(w.x, 0.34, w.z);
+    ghost.position.set(w.x, groundY(cell.col, cell.row) + 0.04, w.z);
     ghost.visible = true;
   };
   const hideGhost = () => { if (ghost) ghost.visible = false; };
@@ -300,7 +312,7 @@ export function createView(host, game) {
     flagGroup.visible = !!f;
     if (!f) return;
     const w = A.cellToWorld(A.pos(f.col, f.row));
-    flagGroup.position.set(w.x, 0.3, w.z);
+    flagGroup.position.set(w.x, groundY(f.col, f.row) + 0.02, w.z);
   }
 
   /** 点击地面 ⇒ 插旗集结。军队可以站道路上（道路只是不能盖楼）。 */
@@ -512,7 +524,7 @@ export function createView(host, game) {
         const m = A.buildModel(A.ARENA_MODELS[name](colorNum(R.FACTIONS[0].color)).static);
         // 一格占领点比主程序 3×3 占地小，按主程序缩放打个折，避免盖住邻格
         m.scale.setScalar(A.BUILDING_SCALE * 0.62);
-        m.position.set(w.x, 0.3, w.z);
+        m.position.set(w.x, groundY(col, row) + 0.02, w.z);
         scene.add(m);
         buildingMeshes.set(k, m);
       } catch { /* 模型装配失败就只靠地块颜色表达 */ }
@@ -557,7 +569,7 @@ export function createView(host, game) {
       }
       const w = A.cellToWorld(A.pos(u.col, u.row));
       const obj = v.sprite ? v.sprite.mesh : v.box;
-      obj.position.set(w.x, v.sprite ? 0.72 : 0.62, w.z);
+      obj.position.set(w.x, groundY(u.col, u.row) + (v.sprite ? 0.6 : 0.5), w.z);
       if (v.sprite) {
         v.sprite.mesh.quaternion.copy(rig.camera.quaternion); // billboard：正交相机也正对
         v.sprite.play(u.moving ? 'run' : 'idle', time);
@@ -588,7 +600,7 @@ export function createView(host, game) {
       const wa = A.cellToWorld(A.pos(a.col, a.row)), wb = A.cellToWorld(A.pos(b.col, b.row));
       const total = car.kind === 'far' ? R.SPEC.trade.travel.far : R.SPEC.trade.travel.near;
       const t = 0.12 + 0.76 * Math.max(0, Math.min(1, 1 - car.ticksLeft / total));
-      m.position.set(wa.x + (wb.x - wa.x) * t, 0.6 + Math.sin(time * 4 + car.id) * 0.05, wa.z + (wb.z - wa.z) * t);
+      m.position.set(wa.x + (wb.x - wa.x) * t, groundY(a.col, a.row) + 0.4 + Math.sin(time * 4 + car.id) * 0.05, wa.z + (wb.z - wa.z) * t);
     }
   }
 
@@ -617,7 +629,7 @@ export function createView(host, game) {
       new T.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.2, side: T.DoubleSide, depthWrite: false }),
     );
     halo.rotation.x = -Math.PI / 2;
-    halo.position.y = 0.31;
+    halo.position.y = 0.02;
     g.add(halo, body, lid, lock);
     return g;
   }
@@ -634,7 +646,7 @@ export function createView(host, game) {
       const w = A.cellToWorld(A.pos(cell.col, cell.row));
       let g = chestMeshes.get(ch.id);
       if (!g) { g = makeChest(); scene.add(g); chestMeshes.set(ch.id, g); }
-      g.position.set(w.x, 0.3 + Math.sin(time * 2 + ch.id) * 0.08, w.z);
+      g.position.set(w.x, groundY(cell.col, cell.row) + 0.02 + Math.sin(time * 2 + ch.id) * 0.08, w.z);
       const reached = rally.units.some(
         (u) => Math.hypot(u.col - cell.col, u.row - cell.row) < 0.85,
       );
@@ -654,23 +666,29 @@ export function createView(host, game) {
       return key(c.col, c.row);
     }));
     const blocked = new Set(R.blockedSegments(s, 0));
-    terrain.forEach((c, i) => {
+    // 走主程序 GroundView.tintCells：同一份 fbm 抖动公式，和 1v1 的黄沙禁建带一样
+    const groups = new Map();
+    const put = (hex, col, row) => {
+      if (!groups.has(hex)) groups.set(hex, []);
+      groups.get(hex).push({ col, row });
+    };
+    terrain.forEach((c) => {
       const k = key(c.col, c.row);
       const kind = M.roadKindAt(c.col, c.row);
       // 中心公共区不整块染色：不是道路就正常草地（用户 2026-11-09 口径）
-      let col = GRASS;
-      if (kind === 'main') col = MAIN;
-      else if (kind === 'star') col = STAR;
-      else if (kind === 'short') col = SHORT;
-      else if (kind === 'far') col = FAR;
+      let hex = GRASS;
+      if (kind === 'main') hex = MAIN;
+      else if (kind === 'star') hex = STAR;
+      else if (kind === 'short') hex = SHORT;
+      else if (kind === 'far') hex = FAR;
       const claim = hand.claims.get(k);
-      if (claim) col = FACTION_COLORS[claim.owner];
-      else if (unlocked.has(k)) col = GRASS_LIT;
-      if (chestKeys.has(k)) col = CHEST;
-      if (kind === 'main' && blocked.has(c.col - M.CENTER.col0)) col = BLOCKED;
-      tiles.setColorAt(i, col);
+      if (claim) hex = FACTION_HEX[claim.owner];
+      else if (unlocked.has(k)) hex = GRASS_LIT;
+      if (chestKeys.has(k)) hex = CHEST;
+      if (kind === 'main' && blocked.has(c.col - M.CENTER.col0)) hex = BLOCKED;
+      put(hex, c.col, c.row);
     });
-    if (tiles.instanceColor) tiles.instanceColor.needsUpdate = true;
+    for (const [hex, cells] of groups) ground.tintCells(cells, hex);
   }
 
   function render() {
@@ -695,7 +713,7 @@ export function createView(host, game) {
     autoBtn.textContent = auto ? '暂停' : '推进';
     skyBtn.dataset['on'] = autoSky ? '1' : '0';
     modHand.render(hand.cards, s.factions[0].gold, hand.selected);
-    logEl.innerHTML = s.log.slice(0, 6).map((l) => `<div>[${l.tick}] ${esc(l.text)}</div>`).join('');
+    logEl.innerHTML = s.log.slice(0, 3).map((l) => `<div>[${l.tick}] ${esc(l.text)}</div>`).join('');
     paintTiles();
     syncBuildings();
     renderMarket();
@@ -727,6 +745,15 @@ export function createView(host, game) {
     spawnChest() { const res = R.spawnChest(game.state); render(); return res; },
     collectChest(id) { const res = R.collectChest(game.state, id); render(); return res; },
     get dudesReady() { return !!gallery; },
+    /** 地板诊断：给无头探针确认用的是主程序 GroundView 立体块，而不是 2D 薄贴片 */
+    get floor() {
+      return {
+        engine: 'GroundView',
+        land: ground.group.children[0].count,
+        sea: ground.group.children[1].count,
+        surfaceY: groundY(M.MAP.cx, M.MAP.cy),
+      };
+    },
     setOverview(on) {
       overview = !!on;
       rig.zoom = overview ? OVERVIEW : LOCAL_VIEW;

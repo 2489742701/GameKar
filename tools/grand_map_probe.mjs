@@ -155,6 +155,11 @@ try {
       topbarGold: !!document.querySelector('.gm-top [data-gold]'),
       debugOpen: !document.querySelector('[data-debug]')?.hidden,
       sizeButtons: document.querySelectorAll('[data-action="size"]').length,
+      devTag: !!document.querySelector('.gm-devtag'),
+      tipText: document.querySelector('.gm-tip')?.textContent ?? '',
+      tipHasBreak: !!document.querySelector('.gm-tip br'),
+      logLines: document.querySelectorAll('.gm-log > div').length,
+      floor: gm?.floor ?? null,
       terrain: M ? M.terrainCells().length : 0,
       star: M ? M.starRoads().length : 0,
       short: M ? M.shortcuts().length : 0,
@@ -172,14 +177,15 @@ try {
 
   // 干净的第一张图：还没点开任何浮层、还没打牌（默认局部视图，地块明显变大）
   const shotClean = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P090_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
-  const cardDayBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
+  writeFileSync(`${OUT}/大地图_P091_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
+  const cardDayBg = await ev(`(() => { const c = document.querySelector('.ahud__card');
+    return c ? getComputedStyle(c).backgroundColor : ''; })()`);
 
   // 「全图」按钮：一键拉远看整张六边形，验镜头真的能逛
   const overviewShot = await ev(`window.__grandMap.setOverview(true); window.__grandMap.zoom`);
   await sleep(500);
   const shotAll = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P090_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P091_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
   const backZoom = await ev(`window.__grandMap.setOverview(false); window.__grandMap.zoom`);
 
   const play = await ev(`(() => {
@@ -237,7 +243,7 @@ try {
   })()`);
   await sleep(500);
   const shotRally = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P090_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P091_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
 
   // ===== 宝箱：独立时钟定期刷新 / 满金 50 也照样加 / 兵跑过去自动开箱 =====
   await sleep(3000);
@@ -280,7 +286,7 @@ try {
   await ev(`window.__grandMap.spawnChest(); 'ok'`);
   await sleep(250);
   const shotChest = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P090_宝箱_20261109.png`, Buffer.from(shotChest.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P091_宝箱_20261109.png`, Buffer.from(shotChest.data, 'base64'));
 
   const panels = await ev(`(() => {
     const gm = window.__grandMap;
@@ -297,7 +303,7 @@ try {
 
   const shotDay = await send('Page.captureScreenshot', { format: 'png' });
   const dayBuf = Buffer.from(shotDay.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P090_白天_20261109.png`, dayBuf);
+  writeFileSync(`${OUT}/大地图_P091_白天_20261109.png`, dayBuf);
   const day = pngStats(dayBuf);
 
   // 收掉浮层再截夜晚，别让面板挡住战场
@@ -306,11 +312,12 @@ try {
             window.__grandMap.setPeriod(3); 'night'`);
   await sleep(400);
   const nightTint = await ev(`document.querySelector('.gm-tint').style.background`);
-  const cardNightBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
+  const cardNightBg = await ev(`(() => { const c = document.querySelector('.ahud__card');
+    return c ? getComputedStyle(c).backgroundColor : ''; })()`);
   const uiPeriod = await ev(`document.getElementById('arena-ui').dataset.period`);
   const shotNight = await send('Page.captureScreenshot', { format: 'png' });
   const nightBuf = Buffer.from(shotNight.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P090_夜晚_20261109.png`, nightBuf);
+  writeFileSync(`${OUT}/大地图_P091_夜晚_20261109.png`, nightBuf);
   const night = pngStats(nightBuf);
 
   // 三档地图：改 URL + reload 之后真的换成小图（截图都拍完了再切，不影响上面的画面）
@@ -326,8 +333,24 @@ try {
     } : null;
   })()`);
 
+  // 开始菜单：开发版模组要挂 DEV 角标，但仍能点进去
+  const menuUrl = new URL(PAGE_URL);
+  menuUrl.searchParams.delete('mod');
+  menuUrl.searchParams.delete('size');
+  await send('Page.navigate', { url: menuUrl.toString() });
+  await sleep(2000);
+  const devMenu = await ev(`(() => {
+    const btn = document.querySelector('.start__row [data-dev="1"]');
+    return { present: !!btn, text: btn?.textContent ?? '' };
+  })()`);
+
   const checks = {
     '模组挂上': base.modActive === 'grand-map' && !base.fallback,
+    '菜单有 DEV 开发版角标': devMenu.present && devMenu.text.includes('DEV'),
+    '模组内 DEV 角标': base.devTag === true,
+    '★ 地板是主程序 GroundView 立体块': base.floor?.engine === 'GroundView' &&
+      base.floor.land > 880 * 12 && base.floor.sea === 0 && base.floor.surfaceY > 0.3,
+    '左下角提示已收干净': !base.tipHasBreak && base.tipText.length < 40 && base.logLines <= 3,
     '四张主模式卡面': base.cards === 4 && base.handRoot && base.cardHasArt && base.cardWidth > 60,
     '默认最大档 / 地图远超竞技场': base.size === 'lg' && base.terrain > 880 * 12,
     '中心公共区随档位放大': base.centerSize === 33,
@@ -370,6 +393,7 @@ try {
   console.log('CHEST     ', JSON.stringify({ clockSpawned, chestProbe, chestWalk }));
   console.log('OVERVIEW  ', JSON.stringify({ overviewShot, backZoom }));
   console.log('SMALL     ', JSON.stringify(small));
+  console.log('MENU      ', JSON.stringify(devMenu));
   console.log('PANELS    ', JSON.stringify(panels));
   console.log('DAY/NIGHT ', JSON.stringify({ day, night, nightTint }));
   console.log('ERRORS    ', JSON.stringify(errors));

@@ -42,6 +42,7 @@ export function mount(host) {
     get sizes() { return M.SIZES; },
     get viewRange() { return M.VIEW; },
     get dudesReady() { return view.dudesReady; },
+    get floor() { return view.floor; },
     get periodIndex() { return view.periodIndex; },
     step() { tick(game.state); view.render(); },
     place(r, c) { const res = placeBuilding(game.state, 0, r, c); view.render(); return res; },

@@ -47,6 +47,7 @@ import { CameraRig } from '@engine/render/CameraRig';
 import { LightingRig } from '@engine/render/Lighting';
 import { TileMap } from '@game/world/TileMap';
 import { GroundView } from '@game/world/GroundView';
+import { TERRAIN, TERRAIN_ORDER } from '@game/config';
 import { ARENA_MODELS } from './models';
 import { buildStand } from './stand';
 import { AmbientDust } from './ambient';
@@ -126,6 +127,8 @@ export const modAssets = {
   // 地图与地形：和 1v1 同一套 TileMap / GroundView / 看台围墙 / 浮尘
   TileMap,
   GroundView,
+  TERRAIN,
+  TERRAIN_ORDER,
   buildStand,
   AmbientDust,
   // 相机 / 光照 / 渲染 / 色彩管理 / 后期链

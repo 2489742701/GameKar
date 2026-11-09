@@ -211,6 +211,55 @@ describe('模组是卡牌驱动的主模式扩展', () => {
   });
 });
 
+describe('P-091 开发版标记 / 主程序 3D 地板 / 左下角收干净', () => {
+  it('模组清单标了 dev，菜单加 DEV 角标但不挡住进入', () => {
+    const manifest = JSON.parse(read('public/mods/manifest.json')) as {
+      mods: { id: string; dev?: boolean }[];
+    };
+    expect(manifest.mods.find((m) => m.id === 'grand-map')?.dev).toBe(true);
+    const host = stripComments(read('src/arena/modHost.ts'));
+    expect(host).toContain('dev?: boolean');
+    expect(host).toContain("btn.dataset['dev'] = '1'");
+    expect(host).toContain("tag.textContent = 'DEV'");
+    // 反证：把开发版入口整个过滤掉就不是「仍可从菜单进入」了
+    expect(host).not.toContain('mods.filter((m) => !m.dev)');
+  });
+
+  it('地板用主程序 TileMap + GroundView，不许退回薄方块', () => {
+    const src = view();
+    expect(src).toContain('new A.TileMap(');
+    expect(src).toContain('new A.GroundView(tileMap)');
+    expect(src).toContain('ground.tintCells(cells, hex)');
+    expect(src).toContain('groundY(');
+    // 反证：0.28 高的薄方块 + 纯白材质就是被用户指出的「2D 地板」
+    expect(src).not.toContain('new T.BoxGeometry(0.94, 0.28, 0.94)');
+    expect(src).not.toContain('tiles.setColorAt(');
+    expect('new T.BoxGeometry(0.94, 0.28, 0.94)').toContain('0.28');
+  });
+
+  it('地形色/厚度来自主程序 TERRAIN 表，物件跟着 surfaceY 抬起', () => {
+    const src = view();
+    const deps = stripComments(read('src/arena/modDeps.ts'));
+    expect(deps).toContain('TERRAIN');
+    expect(deps).toContain('TERRAIN_ORDER');
+    expect(src).toContain('A.TERRAIN.grass.color');
+    expect(src).toContain('tileMap.surfaceY(');
+    expect(src).toContain("ground.group.children[1].count = 0");
+  });
+
+  it('左下角提示压成一行、日志只留 3 条、去掉深色底框', () => {
+    const raw = read('public/mods/grand-map/view.js');
+    expect(raw).toContain('s.log.slice(0, 3)');
+    const tipLine = raw.split('\n').find((l) => l.includes('<div class="gm-tip">'));
+    expect(tipLine).toBeDefined();
+    expect(tipLine!).not.toContain('<br>');
+    expect(raw).toContain('.gm-tip { position:absolute; left:12px; bottom:70px;');
+    // 反证：带底框的旧提示必须被抓到
+    expect(raw).not.toContain('background:rgba(8,14,26,.55)');
+    expect(raw).toContain('gm-devtag');
+  });
+});
+
 describe('P-090 中心区宝箱：金币可以顶破上限', () => {
   const rules = (): string => stripComments(read('public/mods/grand-map/rules.js'));
 
@@ -273,7 +322,7 @@ describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
     expect(src).not.toContain('return inHex(col, row) && row === CENTER.row0');
     // 中心区非道路格必须落回普通草地：不许有整块 'center' 染色分支
     const paint = view();
-    expect(paint).toContain('let col = GRASS;');
+    expect(paint).toContain('let hex = GRASS;');
     expect(paint).not.toContain("kind === 'center'");
   });
 

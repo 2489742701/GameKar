@@ -23,6 +23,13 @@ export interface ModEntry {
   name: string;
   entry: string;
   api: number;
+  /**
+   * **开发版标记**（2026-11-09 用户："把这个大地图归成开发版"）。
+   * `true` 的模组仍可从菜单进入（方便开发机随时看），但会挂 DEV 角标 +
+   * 虚线边框，明确不是正式内容。正式发布时在 `loadManifest()` 里
+   * 加一句 `&& !m.dev` 就能一处关掉全部开发版入口。
+   */
+  dev?: boolean;
   /** 预留：远程 HTTPS 增量更新。第一版忽略，见架构文档 §4。 */
   remote?: string | null;
 }
@@ -202,6 +209,17 @@ export function injectModButtons(): void {
         btn.className = 'start__btn start__btn--pve';
         btn.textContent = m.name;
         btn.dataset['mod'] = m.id;
+        if (m.dev) {
+          btn.dataset['dev'] = '1';
+          btn.title = '开发版模组：仍在迭代，随时可能改动或撤回';
+          // 角标样式内联，一行都不改 start.css
+          btn.style.borderStyle = 'dashed';
+          btn.style.borderColor = '#d8b25c';
+          const tag = document.createElement('span');
+          tag.textContent = 'DEV';
+          tag.style.cssText = 'margin-left:6px;font-size:10px;letter-spacing:.08em;color:#f6dc9c';
+          btn.append(tag);
+        }
         btn.addEventListener('click', () => {
           const p = new URLSearchParams(location.search);
           p.set('mod', m.id);
