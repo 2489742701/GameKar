@@ -10,7 +10,7 @@
  * 四时段天光与云朵面片在 sky.js。仍是原型：单位战斗 / 拆家没做，胜负暂用积分占位。
  * 口径与待拍板项见 `docs/工作笔记/大地图原型设计_20261108.md`。
  */
-import { createGame, tick, placeBuilding } from './rules.js';
+import { createGame, tick, placeBuilding, spawnChest, collectChest } from './rules.js';
 import * as M from './map.js';
 import { createView } from './view.js';
 
@@ -34,6 +34,9 @@ export function mount(host) {
     get map() { return M; },
     get hand() { return view.hand; },
     get rally() { return view.rally; },
+    get chests() { return view.chests; },
+    spawnChest() { return view.spawnChest(); },
+    collectChest(id) { return view.collectChest(id); },
     get zoom() { return view.zoom; },
     get size() { return M.SIZE; },
     get sizes() { return M.SIZES; },

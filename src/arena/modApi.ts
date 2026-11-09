@@ -98,6 +98,8 @@ export function createModBank(): ModBank {
       cap.textContent = `/${max}`;
       fill.style.width = `${Math.min(100, (gold / Math.max(1, max)) * 100)}%`;
       bank.dataset['full'] = String(gold >= max);
+      // 宝箱金币可以顶破上限：数字照实显示，再用 data-over 让条子泛金光
+      bank.dataset['over'] = String(gold > max);
     },
     dispose() { row.remove(); },
   };

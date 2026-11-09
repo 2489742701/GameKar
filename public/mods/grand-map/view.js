@@ -24,6 +24,8 @@ const key = (col, row) => `${col},${row}`;
 /** 沿屏幕短边可见格数：局部固定、全图随档位放大 */
 const LOCAL_VIEW = M.VIEW.local;
 const OVERVIEW = M.VIEW[M.SIZE];
+/** 宝箱按真实秒刷新，走独立时钟，不受「推进 / 暂停」这个调试开关影响 */
+const CHEST_EVERY = R.SPEC.chest.everySeconds;
 
 /**
  * ⚠️ 待改回（用户 2026-11-09：「调试的话，我现在可以用，但是后面也要改回来呀」）。
@@ -83,6 +85,10 @@ const CSS = `
   box-shadow:inset 0 1px 0 #2a3a55, 0 3px 0 rgba(0,0,0,.6); }
 #arena-ui[data-period="night"] .ahud__hand[data-mod-hand] .ahud__card[data-selected="true"] {
   border-color:#c8a45a; }
+/* 宝箱金币可以顶破 50 上限：数字照实显示，条子泛一层金光表示「超额」 */
+#arena-ui .ahud__bank[data-over="true"] { border-color:#fff0b8;
+  box-shadow:0 0 12px rgba(255,224,140,.65), inset 0 1px 0 rgba(255,255,255,.12); }
+#arena-ui .ahud__bank[data-over="true"] .ahud__bank__cap { color:#ffe9a8; }
 `;
 
 export function createView(host, game) {
@@ -119,7 +125,7 @@ export function createView(host, game) {
     <div class="gm-panel gm-dipl" hidden></div>
     <div class="gm-panel gm-market" hidden></div>
     <div class="gm-log"></div>
-    <div class="gm-tip">点地面插旗集结 · 选卡牌再点地图落牌<br>滚轮缩放 / 拖动平移 / Shift+拖动转视角<br>点主城开外交、点集市设商路</div>`;
+    <div class="gm-tip">点地面插旗集结 · 选卡牌再点地图落牌<br>中心区定期刷宝箱：点宝箱插旗，兵跑过去开箱<br>宝箱金币可以超过 50 上限，不会被丢弃<br>滚轮缩放 / 拖动平移 / Shift+拖动转视角</div>`;
   ui.append(style, root);
   const tintEl = root.querySelector('.gm-tint');
   const clockEl = root.querySelector('[data-clock]');
@@ -189,6 +195,7 @@ export function createView(host, game) {
   const SHORT = new T.Color(0xd8b45c);
   const FAR = new T.Color(0x9a5f2e);
   const BLOCKED = new T.Color(0x8a3540);
+  const CHEST = new T.Color(0xffd75e);
   const FACTION_COLORS = R.FACTIONS.map((f) => new T.Color(colorNum(f.color)));
 
   // ===== 六座主城：主游戏同款大本营模型，落在六芒星尖角 =====
@@ -239,6 +246,8 @@ export function createView(host, game) {
   const buildingMeshes = new Map();
   const caravanMeshes = new Map();
   const unitViews = new Map();
+  const chestMeshes = new Map();
+  let chestAcc = 0;
   let autoSky = false, skyAcc = 0, auto = false, acc = 0;
   let overview = false;
   let canvasDrag = false, dragging = false, lastX = 0, lastY = 0;
@@ -583,9 +592,67 @@ export function createView(host, game) {
     }
   }
 
+  /** 一只宝箱：木箱 + 金盖 + 锁扣 + 地上一圈金光（全用注入的具名 three 类） */
+  function makeChest() {
+    const g = new T.Group();
+    // 俯视 50° 下模型本体只有 1 格大，放大一点才看得出是箱子而不是一枚金币
+    g.scale.setScalar(1.35);
+    const body = new T.Mesh(
+      new T.BoxGeometry(0.8, 0.5, 0.6),
+      new T.MeshStandardMaterial({ color: 0x8a5a28, roughness: 0.9, flatShading: true }),
+    );
+    body.position.y = 0.25;
+    const lid = new T.Mesh(
+      new T.BoxGeometry(0.86, 0.18, 0.66),
+      new T.MeshStandardMaterial({ color: 0xfac775, roughness: 0.55, metalness: 0.35, flatShading: true }),
+    );
+    lid.position.y = 0.57;
+    const lock = new T.Mesh(
+      new T.BoxGeometry(0.16, 0.2, 0.08),
+      new T.MeshBasicMaterial({ color: 0xfff0b8 }),
+    );
+    lock.position.set(0, 0.5, 0.33);
+    const halo = new T.Mesh(
+      new T.CircleGeometry(0.75, 20),
+      new T.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.2, side: T.DoubleSide, depthWrite: false }),
+    );
+    halo.rotation.x = -Math.PI / 2;
+    halo.position.y = 0.31;
+    g.add(halo, body, lid, lock);
+    return g;
+  }
+
+  /** 每帧摆好宝箱；只要己方士兵跑进箱子那一格 ⇒ 占领开箱 */
+  function syncChests(time) {
+    const s = game.state;
+    const alive = new Set(s.chests.map((ch) => ch.id));
+    for (const [id, g] of chestMeshes) {
+      if (!alive.has(id)) { scene.remove(g); chestMeshes.delete(id); }
+    }
+    for (const ch of [...s.chests]) {
+      const cell = M.fromAbstract(ch.r, ch.c);
+      const w = A.cellToWorld(A.pos(cell.col, cell.row));
+      let g = chestMeshes.get(ch.id);
+      if (!g) { g = makeChest(); scene.add(g); chestMeshes.set(ch.id, g); }
+      g.position.set(w.x, 0.3 + Math.sin(time * 2 + ch.id) * 0.08, w.z);
+      const reached = rally.units.some(
+        (u) => Math.hypot(u.col - cell.col, u.row - cell.row) < 0.85,
+      );
+      if (reached) {
+        const res = R.collectChest(s, ch.id);
+        if (res.ok) message(`占领宝箱 +${res.gold} 金（${res.before} → ${res.total}，可超过上限）`);
+        break;
+      }
+    }
+  }
+
   function paintTiles() {
     const s = game.state;
     const unlocked = hand.unlocked();
+    const chestKeys = new Set(s.chests.map((ch) => {
+      const c = M.fromAbstract(ch.r, ch.c);
+      return key(c.col, c.row);
+    }));
     const blocked = new Set(R.blockedSegments(s, 0));
     terrain.forEach((c, i) => {
       const k = key(c.col, c.row);
@@ -599,6 +666,7 @@ export function createView(host, game) {
       const claim = hand.claims.get(k);
       if (claim) col = FACTION_COLORS[claim.owner];
       else if (unlocked.has(k)) col = GRASS_LIT;
+      if (chestKeys.has(k)) col = CHEST;
       if (kind === 'main' && blocked.has(c.col - M.CENTER.col0)) col = BLOCKED;
       tiles.setColorAt(i, col);
     });
@@ -612,7 +680,7 @@ export function createView(host, game) {
     clockEl.textContent = `${s.tick} / ${R.SPEC.endTick}`;
     infoEl.textContent = `档位 ${M.SIZES[M.SIZE].label} · 地图 ${M.MAP.cols}×${M.MAP.rows} · ` +
       `地形 ${terrain.length} 格 · 中心 ${M.CENTER.size}×${M.CENTER.size} · ` +
-      `来车 ${s.pending.length} · 兵 ${rally.units.length} · 镜头 ${Math.round(rig.zoom)} 格`;
+      `来车 ${s.pending.length} · 兵 ${rally.units.length} · 宝箱 ${s.chests.length} · 镜头 ${Math.round(rig.zoom)} 格`;
     const period = SKY_PERIODS[sky.periodIndex];
     tintEl.style.background = period.tint;
     ui.dataset['period'] = period.key;
@@ -653,7 +721,11 @@ export function createView(host, game) {
     get periodIndex() { return sky.periodIndex; },
     get hand() { return hand; },
     get rally() { return rally; },
+    get chests() { return game.state.chests; },
     get zoom() { return rig.zoom; },
+    /** 探针钩子：规则和实际点击走的是同一条 spawnChest / collectChest */
+    spawnChest() { const res = R.spawnChest(game.state); render(); return res; },
+    collectChest(id) { const res = R.collectChest(game.state, id); render(); return res; },
     get dudesReady() { return !!gallery; },
     setOverview(on) {
       overview = !!on;
@@ -670,6 +742,12 @@ export function createView(host, game) {
     frame(info) {
       hand.tick(info.delta);
       rally.tick(info.delta);
+      // 宝箱按真实秒独立刷新，不依赖「推进 / 暂停」这个调试开关
+      chestAcc += info.delta;
+      if (chestAcc >= CHEST_EVERY) {
+        chestAcc = 0;
+        if (R.spawnChest(game.state).ok) render();
+      }
       if (auto && !game.state.finished) {
         acc += info.delta;
         if (acc >= 1) { acc = 0; R.tick(game.state); render(); }
@@ -683,6 +761,7 @@ export function createView(host, game) {
       sky.update(info.time);
       syncCaravans(info.time);
       syncUnits(info.time);
+      syncChests(info.time);
       composer.render(info.delta);
     },
     dispose() {

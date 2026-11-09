@@ -14,6 +14,18 @@ import { CENTER } from './map.js';
 /** 原型占位数值：全部可调，不写死在逻辑里。 */
 export const SPEC = {
   gold: { start: 50, cap: 50, regenTicks: 20, regenAmount: 1 },
+  /**
+   * 中心区宝箱（2026-11-09 用户）：「中间那个地方改成会定期刷新箱子，
+   * 跑过去占领的时候会随机拿到金币」。
+   * ⚠️ 宝箱金币**不受 gold.cap 限制**：直接加，绝不 Math.min 截断。
+   * cap 只管自然回金 / 商队 / 贸易这些普通收益，而且超额时不许倒扣。
+   */
+  chest: {
+    everySeconds: 5,       // 真实秒，由视图层的独立时钟驱动（不依赖「推进」开关）
+    maxAlive: 5,
+    minGold: 3,
+    maxGold: 12,
+  },
   cost: { build: 6, caravan: 3, escort: 4 },
   trade: { near: 5, far: 14, travel: { near: 2, far: 4 } },
   seizeMultiplier: 2,
@@ -99,6 +111,7 @@ export function createGame(seed = 20261109) {
     ),
     caravans: [],
     pending: [],       // 中立方向拉来的车，等玩家在集市界面决定贸易 / 扣押
+    chests: [],        // 中心公共区里等着被军队跑过去占领的宝箱
     log: [],
     nextId: 1,
     finished: false,
@@ -118,6 +131,54 @@ export function createGame(seed = 20261109) {
 export function note(state, text) {
   state.log.unshift({ tick: state.tick, text });
   if (state.log.length > 40) state.log.pop();
+}
+
+/**
+ * 中心公共区刷一个宝箱：随机空格 + 随机金币。
+ * 只落在中心抽象网格里（视图层用 map.fromAbstract 转成地图格），
+ * 道路格恒不可放，已有楼 / 已有箱子的格跳过。
+ */
+export function spawnChest(state) {
+  if (state.chests.length >= SPEC.chest.maxAlive) return { ok: false, reason: 'full' };
+  const free = [];
+  for (let r = 0; r < SPEC.centerSize; r++) {
+    for (let c = 0; c < SPEC.centerSize; c++) {
+      if (isRoadCell(r, c) || state.cells[r][c].building) continue;
+      if (state.chests.some((ch) => ch.r === r && ch.c === c)) continue;
+      free.push([r, c]);
+    }
+  }
+  if (!free.length) return { ok: false, reason: 'no-space' };
+  const [r, c] = free[Math.floor(nextRandom(state) * free.length)];
+  const gold = SPEC.chest.minGold +
+    Math.floor(nextRandom(state) * (SPEC.chest.maxGold - SPEC.chest.minGold + 1));
+  const chest = { id: state.nextId++, r, c, gold };
+  state.chests.push(chest);
+  note(state, `中心区刷出宝箱 (${r},${c})：派兵跑过去占领，可开 ${gold} 金`);
+  return { ok: true, chest };
+}
+
+/**
+ * 军队跑到箱子格 ⇒ 开箱。
+ * ⚠️ 用户硬口径：「如果是箱子里的金币，即使到了 50 的上限也能接着加，
+ * 不会因为到上限而被废弃或丢弃」—— 所以这里是 `f.gold +=`，**没有 Math.min**。
+ * 上限只约束普通收益（自然回金 / 商队 / 贸易），而且那些收益在超额时不许倒扣。
+ */
+export function collectChest(state, chestId) {
+  const idx = state.chests.findIndex((ch) => ch.id === chestId);
+  if (idx < 0) return { ok: false, reason: 'missing' };
+  const chest = state.chests[idx];
+  state.chests.splice(idx, 1);
+  const f = state.factions[0];
+  const before = f.gold;
+  f.gold += chest.gold;
+  note(state, `占领宝箱 +${chest.gold} 金：${before} → ${f.gold}（不受 ${SPEC.gold.cap} 上限截断）`);
+  return { ok: true, gold: chest.gold, before, total: f.gold };
+}
+
+/** 宝箱在哪一格的判据；视图层每帧拿军队坐标比对用 */
+export function chestAt(state, r, c) {
+  return state.chests.find((ch) => ch.r === r && ch.c === c) ?? null;
 }
 
 export function relationOf(state, a, b) {
@@ -303,17 +364,21 @@ export function resolveIncoming(state, caravanId, choice) {
   const rel = relationOf(state, 0, car.owner);
   if (choice === 'seize') {
     if (rel !== REL.NEUTRAL) return { ok: false, reason: 'not-neutral' };
-    const gain = Math.min(
+    // 宝箱可能把金币顶过上限，普通收益顶多「不涨」，绝不能倒扣成负数
+    const gain = Math.max(0, Math.min(
       SPEC.gold.cap - state.factions[0].gold,
       car.cargo * SPEC.seizeMultiplier,
-    );
+    ));
     state.factions[0].gold += gain;
     state.relations[pairKey(0, car.owner)] = REL.FEUD;
     note(state, `扣押 ${FACTIONS[car.owner].name} 的来车：+${gain} 金，但立即死仇、永不复盟`);
   } else {
-    const gain = Math.min(SPEC.gold.cap - state.factions[0].gold, Math.ceil(car.cargo / 2));
+    const gain = Math.max(0, Math.min(SPEC.gold.cap - state.factions[0].gold, Math.ceil(car.cargo / 2)));
     state.factions[0].gold += gain;
-    state.factions[car.owner].gold = Math.min(SPEC.gold.cap, state.factions[car.owner].gold + Math.ceil(car.cargo / 2));
+    const allyBonus = Math.max(0, Math.min(
+      SPEC.gold.cap - state.factions[car.owner].gold, Math.ceil(car.cargo / 2),
+    ));
+    state.factions[car.owner].gold += allyBonus;
     note(state, `与 ${FACTIONS[car.owner].name} 正常贸易：双方各 +${gain} 金`);
   }
   state.pending.splice(idx, 1);
@@ -358,7 +423,10 @@ export function tick(state) {
   state.tick++;
   if (state.tick % SPEC.gold.regenTicks === 0) {
     for (const f of state.factions) {
-      f.gold = Math.min(SPEC.gold.cap, f.gold + SPEC.gold.regenAmount);
+      // 已经靠宝箱超过上限时，自然回金不生效，但**不许把超额部分抹回去**
+      if (f.gold < SPEC.gold.cap) {
+        f.gold = Math.min(SPEC.gold.cap, f.gold + SPEC.gold.regenAmount);
+      }
     }
   }
 
@@ -379,8 +447,9 @@ export function tick(state) {
       note(state, `${FACTIONS[car.owner].name} 的车到了你的集市，待处理（贸易 / 扣押）`);
     } else {
       const f = state.factions[car.owner];
-      f.gold = Math.min(SPEC.gold.cap, f.gold + car.cargo);
-      note(state, `${f.name} 的商队到站：+${car.cargo} 金`);
+      const landed = Math.max(0, Math.min(SPEC.gold.cap - f.gold, car.cargo));
+      f.gold += landed;
+      note(state, `${f.name} 的商队到站：+${landed} 金`);
     }
   }
 

@@ -211,6 +211,48 @@ describe('模组是卡牌驱动的主模式扩展', () => {
   });
 });
 
+describe('P-090 中心区宝箱：金币可以顶破上限', () => {
+  const rules = (): string => stripComments(read('public/mods/grand-map/rules.js'));
+
+  it('★ 开箱直接加，不许 Math.min / cap 截断或丢弃', () => {
+    const src = rules();
+    const block = src.slice(src.indexOf('export function collectChest'), src.indexOf('export function chestAt'));
+    expect(block).toContain('f.gold += chest.gold');
+    expect(block).not.toContain('Math.min');
+    expect(block).not.toContain('SPEC.gold.cap -');
+    // 反证：写成「先算上限再取小」就是被用户否掉的废弃行为
+    expect('f.gold += Math.min(cap - f.gold, chest.gold);').toContain('Math.min');
+  });
+
+  it('★ 超额之后普通收益最多不涨，绝不倒扣', () => {
+    const src = rules();
+    expect((src.match(/Math\.max\(0, Math\.min\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    // 自然回金被守卫包住：低于上限才补，超额时一分不动
+    expect(src).toContain('if (f.gold < SPEC.gold.cap)');
+    // 商队到站改成「最多不涨」，不再直接赋值 min
+    expect(src).toContain('const landed = Math.max(0, Math.min(SPEC.gold.cap - f.gold, car.cargo))');
+    expect(src).not.toContain('f.gold = Math.min(SPEC.gold.cap, f.gold + car.cargo)');
+    // 反证：旧写法直接 min，超额部分会被一把抹回上限
+    expect('f.gold = Math.min(cap, f.gold + car.cargo)').toContain('Math.min(cap');
+  });
+
+  it('宝箱定期刷新走独立时钟，跑过去占领由视图层判定', () => {
+    const src = view();
+    expect(src).toContain('CHEST_EVERY');
+    expect(src).toContain('R.spawnChest(game.state)');
+    expect(src).toContain('syncChests(info.time)');
+    expect(src).toContain('rally.units.some(');
+    expect(src).toContain('R.collectChest(s, ch.id)');
+    expect(src).toContain('makeChest(');
+  });
+
+  it('金币条超额时照实显示数字并泛金光', () => {
+    const api = stripComments(read('src/arena/modApi.ts'));
+    expect(api).toContain("bank.dataset['over'] = String(gold > max)");
+    expect(view()).toContain('data-over="true"');
+  });
+});
+
 describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
   it('地形轮廓由 inHex 生成，六芒星只是路网', () => {
     const src = map();

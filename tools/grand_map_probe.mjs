@@ -172,14 +172,14 @@ try {
 
   // 干净的第一张图：还没点开任何浮层、还没打牌（默认局部视图，地块明显变大）
   const shotClean = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P089_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P090_局部视图_20261109.png`, Buffer.from(shotClean.data, 'base64'));
   const cardDayBg = await ev(`getComputedStyle(document.querySelector('.ahud__card')).backgroundColor`);
 
   // 「全图」按钮：一键拉远看整张六边形，验镜头真的能逛
   const overviewShot = await ev(`window.__grandMap.setOverview(true); window.__grandMap.zoom`);
   await sleep(500);
   const shotAll = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P089_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P090_全图_20261109.png`, Buffer.from(shotAll.data, 'base64'));
   const backZoom = await ev(`window.__grandMap.setOverview(false); window.__grandMap.zoom`);
 
   const play = await ev(`(() => {
@@ -237,7 +237,50 @@ try {
   })()`);
   await sleep(500);
   const shotRally = await send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(`${OUT}/大地图_P089_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
+  writeFileSync(`${OUT}/大地图_P090_集结军队_20261109.png`, Buffer.from(shotRally.data, 'base64'));
+
+  // ===== 宝箱：独立时钟定期刷新 / 满金 50 也照样加 / 兵跑过去自动开箱 =====
+  await sleep(3000);
+  const clockSpawned = await ev(`window.__grandMap.chests.length`);
+  const chestProbe = await ev(`(() => {
+    const gm = window.__grandMap;
+    const M = gm.map;
+    const cap = 50;
+    gm.state.factions[0].gold = cap;          // 专门验「到上限也能接着加」
+    if (!gm.chests.length) gm.spawnChest();
+    const ch = gm.chests[0];
+    const before = gm.state.factions[0].gold;
+    const collected = gm.collectChest(ch.id);
+    const afterCollect = gm.state.factions[0].gold;
+    // 再刷一个：把兵生成在箱子格，等下一帧由视图层「跑过去占领」自动开箱
+    const ch2 = gm.spawnChest().chest;
+    const cell = M.fromAbstract(ch2.r, ch2.c);
+    const before2 = gm.state.factions[0].gold;
+    gm.rally.spawn(cell.col, cell.row, 1, 'archers');
+    return {
+      chestGold: ch.gold, collected: collected.ok, before, afterCollect,
+      overCap: afterCollect > cap, exact: afterCollect === before + ch.gold,
+      walkChestId: ch2.id, before2,
+    };
+  })()`);
+  await sleep(900); // 等 syncChests 检测到士兵进入箱子格
+  const chestWalk = await ev(`(() => {
+    const gm = window.__grandMap;
+    const bank = document.querySelector('.ahud__bank');
+    return {
+      stillThere: gm.chests.some((c) => c.id === ${chestProbe.walkChestId}),
+      gold: gm.state.factions[0].gold,
+      bankText: document.querySelector('.ahud__bank__num')?.textContent,
+      over: bank?.dataset['over'],
+      cap: document.querySelector('.ahud__bank__cap')?.textContent,
+    };
+  })()`);
+
+  // 截图放在开箱之后：既有宝箱，又能看到金币条上「超过 50」的真实读数
+  await ev(`window.__grandMap.spawnChest(); 'ok'`);
+  await sleep(250);
+  const shotChest = await send('Page.captureScreenshot', { format: 'png' });
+  writeFileSync(`${OUT}/大地图_P090_宝箱_20261109.png`, Buffer.from(shotChest.data, 'base64'));
 
   const panels = await ev(`(() => {
     const gm = window.__grandMap;
@@ -254,7 +297,7 @@ try {
 
   const shotDay = await send('Page.captureScreenshot', { format: 'png' });
   const dayBuf = Buffer.from(shotDay.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P089_白天_20261109.png`, dayBuf);
+  writeFileSync(`${OUT}/大地图_P090_白天_20261109.png`, dayBuf);
   const day = pngStats(dayBuf);
 
   // 收掉浮层再截夜晚，别让面板挡住战场
@@ -267,7 +310,7 @@ try {
   const uiPeriod = await ev(`document.getElementById('arena-ui').dataset.period`);
   const shotNight = await send('Page.captureScreenshot', { format: 'png' });
   const nightBuf = Buffer.from(shotNight.data, 'base64');
-  writeFileSync(`${OUT}/大地图_P089_夜晚_20261109.png`, nightBuf);
+  writeFileSync(`${OUT}/大地图_P090_夜晚_20261109.png`, nightBuf);
   const night = pngStats(nightBuf);
 
   // 三档地图：改 URL + reload 之后真的换成小图（截图都拍完了再切，不影响上面的画面）
@@ -303,6 +346,10 @@ try {
     '士兵真的往旗子走': rallyProbe.moved > 1,
     '像素小人素材已加载': rallyProbe.dudesReady === true,
     '集结默认启用': rallyProbe.rallyEnabled === true,
+    '宝箱按独立时钟定期刷新': clockSpawned > 0,
+    '★ 满金 50 开箱照样加，不截断不丢弃': chestProbe.collected && chestProbe.overCap && chestProbe.exact,
+    '★ 兵跑过去占领自动开箱': !chestWalk.stillThere && chestWalk.gold > chestProbe.before2,
+    '金币条照实显示超额': Number(chestWalk.bankText) > 50 && chestWalk.over === 'true',
     '落牌成功': play.ok,
     '金币只扣一次': play.goldDelta === play.cost,
     '中心抽象网格同步': play.abstractSynced === true,
@@ -320,6 +367,7 @@ try {
   console.log('BASE      ', JSON.stringify(base));
   console.log('PLAY      ', JSON.stringify(play));
   console.log('RALLY     ', JSON.stringify(rallyProbe));
+  console.log('CHEST     ', JSON.stringify({ clockSpawned, chestProbe, chestWalk }));
   console.log('OVERVIEW  ', JSON.stringify({ overviewShot, backZoom }));
   console.log('SMALL     ', JSON.stringify(small));
   console.log('PANELS    ', JSON.stringify(panels));
