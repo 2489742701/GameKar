@@ -1143,10 +1143,10 @@ export class ArenaWorld {
       let target: ArenaUnit | null = null;
       let best = BOMBER.detect;
       for (const e of this.units) {
-        // 炸弹是往下掉的：对空口径和所有地面兵一样读 AA_SOURCES，
-        // 别在这里另写一份"飞行单位不算靶子"。
+        // 炸弹是往下掉的，够不着空中；判据仍统一读 AA_SOURCES
+        //（'bomber' 不在表里），别在这里另写一份"飞行单位不算靶子"。
         if (e.side === u.side || e.hp <= 0 || this.bomberOf(e.defId)) continue;
-        if (!canHitAir('unit') && this.flyingOf(e.defId)) continue;
+        if (!canHitAir('bomber') && this.flyingOf(e.defId)) continue;
         const d = Math.hypot(e.x - u.x, e.z - u.z);
         if (d <= best) { best = d; target = e; }
       }
@@ -1165,7 +1165,7 @@ export class ArenaWorld {
         });
         for (const e of this.units) {
           if (e.side === u.side || e.hp <= 0) continue;
-          if (!canHitAir('unit') && this.flyingOf(e.defId)) continue;
+          if (!canHitAir('bomber') && this.flyingOf(e.defId)) continue;
           if (Math.hypot(e.x - target.x, e.z - target.z) <= BOMBER.splash) this.hurtUnit(e, BOMBER.damage);
         }
       }
@@ -1331,11 +1331,31 @@ export class ArenaWorld {
     unitsOnly = false,
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
+
+    /**
+     * **对空兵优先打空中**（2026-11-09 用户："为什么这个弓箭手先打地面呢？
+     * 弓箭手优先打空中单位啊"）。
+     * 有对空资格的兵种（弓箭手 / 兽人投矛手）在**射程内**只要看到空中单位，
+     * 无条件先打它，压过贴脸的地面兵和建筑。
+     * 用 min(sight, range) 而不是只用 sight：选了"看得见却够不着"的空中目标
+     * 会让兵站着不开火也不推进。
+     */
+    if (!buildingsOnly && canHitAir(u.defId)) {
+      const reach = Math.min(sight, statsOf(u.defId).range);
+      let air: { dist: number; x: number; z: number; unit?: ArenaUnit } | null = null;
+      for (const other of this.units) {
+        if (other.side === u.side || other.hp <= 0 || !this.flyingOf(other.defId)) continue;
+        const d = Math.hypot(other.x - u.x, other.z - u.z);
+        if (d <= reach && (!air || d < air.dist)) air = { dist: d, x: other.x, z: other.z, unit: other };
+      }
+      if (air) return air;
+    }
+
     // buildingsOnly 现在对移动火炮是 false（它要能打兵）；字段留着给以后"纯攻城"的兵种
     for (const other of buildingsOnly ? [] : this.units) {
       if (other.side === u.side || other.hp <= 0) continue;
-      // 地面单位（含移动火炮、弩车、弓箭手）都打不到空军；只有箭塔拦得住
-      if (!canHitAir('unit') && this.flyingOf(other.defId)) continue;
+      // 空中目标统一交给上面那段对空优先逻辑：没有对空资格 / 空中在射程外，都只比地面兵
+      if (this.flyingOf(other.defId)) continue;
       const d = Math.hypot(other.x - u.x, other.z - u.z);
       if (d <= sight && (!best || d < best.dist)) best = { dist: d, x: other.x, z: other.z, unit: other };
     }

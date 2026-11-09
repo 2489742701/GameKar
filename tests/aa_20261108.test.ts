@@ -1,9 +1,14 @@
 /**
- * P-076 对空判据锁（2026-11-08 用户："火炮理论上没办法射击，空军只有箭塔可以射击"）。
+ * P-076 对空判据锁（2026-11-08 起），P-091 口径修正后同步更新。
+ *
+ * 2026-11-08 用户："火炮理论上没办法射击，空军只有箭塔可以射击"。
+ * 2026-11-09 用户修正："弓箭手优先打空中单位啊""有远程兽人投矛手呀，缺防空"——
+ * 对空表从「仅 arrowTower」放宽为「arrowTower + archer + orcThrower」。
  *
  * 这一族锁的要点不是"某个数等于几"，而是**对空资格只有一张表**：
- * 炮塔 / 大本营水晶 / 所有地面兵 / 轰炸机投弹都得跳过飞行单位，
- * 只有箭塔能把它们选成靶子。最后一条用模块注入把判据打开，做反证 ——
+ * 炮塔 / 大本营水晶 / 近战与其余远程地面兵 / 轰炸机投弹仍得跳过飞行单位，
+ * 只有表里的三个来源能把它们选成靶子；弓箭手与投矛手还要**优先**打空中。
+ * 最后一条用模块注入把判据打开，做反证 ——
  * 逻辑里如果藏了硬编码的 `if (flying) return`，反证会直接红。
  */
 import { readFileSync, readdirSync } from 'node:fs';
@@ -87,18 +92,25 @@ describe('P-076 射程：防御性建筑与主城都更远了，但没把白嫖�
 });
 
 describe('P-076 对空资格：唯一来源是 AA_SOURCES', () => {
-  it('表里只有 arrowTower，其余来源一律 false', () => {
-    expect(AA_SOURCES.size).toBe(1);
-    expect(AA_SOURCES.has('arrowTower')).toBe(true);
-    expect(canHitAir('arrowTower')).toBe(true);
-    for (const src of ['cannonTower', 'core', 'unit', 'siege', 'ballista', 'bomber']) {
+  it('表里是箭塔 + 弓箭手 + 兽人投矛手，其余来源一律 false', () => {
+    expect(AA_SOURCES.size).toBe(3);
+    for (const src of ['arrowTower', 'archer', 'orcThrower']) {
+      expect(canHitAir(src), `${src} 该有对空资格`).toBe(true);
+    }
+    for (const src of [
+      'cannonTower', 'core', 'unit', 'siege', 'ballista', 'bomber',
+      'knight', 'orc', 'mage', 'crossbowman', 'mobileCannon', 'spearman',
+    ]) {
       expect(canHitAir(src), `${src} 不该有对空资格`).toBe(false);
     }
   });
 
   it('反证：AA_SOURCES 里多一个来源，上面的 size / 资格断言就得红', () => {
-    expect([...AA_SOURCES]).toEqual(['arrowTower']);
+    expect([...AA_SOURCES]).toEqual(['arrowTower', 'archer', 'orcThrower']);
     expect(canHitAir('cannonTower')).not.toBe(canHitAir('arrowTower'));
+    const opened = new Set([...AA_SOURCES, 'cannonTower']);
+    expect(opened.size).toBe(AA_SOURCES.size + 1);
+    expect(opened.has('cannonTower')).toBe(true);
   });
 
   it('判据只在 config.ts 里定义一次，逻辑层一律走 canHitAir()', () => {
@@ -116,7 +128,7 @@ describe('P-076 对空资格：唯一来源是 AA_SOURCES', () => {
   });
 });
 
-describe('P-076 行为：只有箭塔打得到空军', () => {
+describe('P-076/P-091 行为：箭塔能拦空军，其余建筑与近战兵不能', () => {
   it('炮塔对空军完全不开火：气球一滴血不掉', () => {
     const w = new ArenaWorld({ seed: 761 });
     w.auto.red = false;
@@ -144,17 +156,18 @@ describe('P-076 行为：只有箭塔打得到空军', () => {
     expect(u.hp).toBe(200);
   });
 
-  it('地面兵不把空军当靶子，但同一个位置的地面兵照打不误（对照组）', () => {
+  it('没有对空资格的远程兵不把空军当靶子，但同一个位置的地面兵照打不误（对照组）', () => {
     const air = new ArenaWorld({ seed: 763 });
     air.auto.red = false;
     const balloon = flyer(air, 9503, 'red', 13, 10);
+    // 用弩手：远程、不在 AA 表，和弓箭手同位置同射程，正好做等距反证
     air.units.push({
-      id: 9504, side: 'blue', defId: 'archer', x: 12, z: 10,
+      id: 9504, side: 'blue', defId: 'crossbowman', x: 12, z: 10,
       hp: 200, maxHp: 200, cooldown: 0, stun: 0,
       order: null, detour: 1 as const,
     });
     run(air, 2.5);
-    expect(balloon.hp, '气球不该挨地面兵的箭').toBe(200);
+    expect(balloon.hp, '气球不该挨没有对空资格的远程兵的箭').toBe(200);
 
     const ground = new ArenaWorld({ seed: 763 });
     ground.auto.red = false;

@@ -315,13 +315,22 @@ export const TOWER = {
 };
 
 /**
- * **对空判据的唯一来源**（2026-11-08 用户："火炮理论上没办法射击，空军只有箭塔可以射击"）。
+ * **对空判据的唯一来源**。
  *
- * 炮弹是平射/曲射的，够不着天上的东西；水晶是魔法弹但也只打地面兵；
- * 所有兵种（含移动火炮、弩车、弓箭手）同样不对空。
- * 只有箭塔能拦空军 —— 想加第二个防空单位，改这张表，别在四处 if 里各写一遍。
+ * 2026-11-08 口径：只有箭塔能拦空军（火炮/水晶/所有地面兵都不对空）。
+ * 2026-11-09 用户修正：「弓箭手优先打空中单位啊」「有远程兽人投矛手呀，缺防空」——
+ * 放行**弓箭手 + 兽人投矛手**两个远程射击兵种，箭塔继续对空；
+ * 炮塔、大本营水晶、近战兵、移动火炮、弩车、轰炸机投弹**仍然不对空**。
+ *
+ * source 可以是建筑 kind（`arrowTower` / `cannonTower`）或兵种 defId
+ * （`archer` / `orcThrower` / ...）；兵种索敌一律传 `u.defId`，别再传笼统的 `'unit'`。
+ * 想加第三个防空单位，改这张表，别在四处 if 里各写一遍。
  */
-export const AA_SOURCES: ReadonlySet<string> = new Set(['arrowTower']);
+export const AA_SOURCES: ReadonlySet<string> = new Set([
+  'arrowTower',
+  'archer',
+  'orcThrower',
+]);
 export const canHitAir = (source: string): boolean => AA_SOURCES.has(source);
 
 export const MILL = { hp: 300 };
@@ -553,10 +562,10 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'orcs',
     name: '兽人',
-    blurb: '两个兽人，血厚、冲撞会把对面顶开。需兽人巢穴；不占人口，但吃双份面包。',
+    blurb: '一近一远：兽人冲撞顶开前排，投矛手在后排点射、还能拦空军。需兽人巢穴；不占人口，但吃双份面包。',
     kind: 'squad',
     cost: 7,
-    squad: [{ unitId: 'orc', count: 2 }],
+    squad: [{ unitId: 'orc', count: 1 }, { unitId: 'orcThrower', count: 1 }],
   },
   // ---- 大队：同一兵种的"人多版"（用户 2026-10-28："军队再丰富，比如大队还有小队"）。
   // 人数约翻倍、价不到翻倍 ⇒ 人多那一档性价比更高，但一次要掏的钱也更集中（更难凑）。
@@ -579,10 +588,10 @@ export const CARDS: ArenaCard[] = [
   {
     id: 'orcsBig',
     name: '兽人大队',
-    blurb: '四个兽人。冲撞能把一整排人顶散。需兽人巢穴；不占人口，但吃双份面包。',
+    blurb: '两近两远：兽人冲撞顶散一排，投矛手压后排兼防空。需兽人巢穴；不占人口，但吃双份面包。',
     kind: 'squad',
     cost: 11,
-    squad: [{ unitId: 'orc', count: 4 }],
+    squad: [{ unitId: 'orc', count: 2 }, { unitId: 'orcThrower', count: 2 }],
   },  // ---------------------------------------------------------------- 2026-11-07 四张新军队卡（平衡见设计文档 B 节）
   {
     id: 'spearmen',

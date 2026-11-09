@@ -53,7 +53,12 @@ describe('主程序玩法文件 0 改动', () => {
     expect(read('src/arena/config.ts')).toContain('export const HAND');
   });
 
-  it('P-087 与备份分支逐字一致（分支在就比，不在就只靠上面的标记锁）', () => {
+  /**
+   * 比的是**两个历史提交**，不是当前工作树：P-087~P-091 四轮模组开发确实
+   * 一行没碰玩法文件。之后 `feat/aa-orc-ranged` 上改 config.ts / ArenaWorld.ts
+   * 是用户 2026-11-09 单独授权的对空修正，由 tests/aa_orc_20261109.test.ts 锁。
+   */
+  it('P-087~P-091 模组开发期玩法文件逐字未改（历史基线比对）', () => {
     let base = '';
     try {
       base = execFileSync('git', ['rev-parse', '--verify', 'backup/p086-before-hex'], {
@@ -62,9 +67,11 @@ describe('主程序玩法文件 0 改动', () => {
     } catch {
       return; // 备份分支被清理掉时跳过，不把测试绑死在本地分支上
     }
+    const atP091 = '0a2c984';
     for (const f of GAMEPLAY_FILES) {
       const before = execFileSync('git', ['show', `${base}:${f}`], { cwd: ROOT, encoding: 'utf8' });
-      expect(norm(read(f)), `${f} 被 P-087 改动了`).toBe(norm(before));
+      const after = execFileSync('git', ['show', `${atP091}:${f}`], { cwd: ROOT, encoding: 'utf8' });
+      expect(norm(after), `${f} 在模组开发期被改动了`).toBe(norm(before));
       // 反证：逐字比较不是橡皮图章，多一行就必须红
       if (f === GAMEPLAY_FILES[0]) expect(norm(`${before}\n// touch`)).not.toBe(norm(before));
     }

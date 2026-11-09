@@ -246,6 +246,35 @@ export const UNITS: Record<string, UnitDef> = {
     stockInitial: 2,
   }),
 
+  /**
+   * 兽人投矛手（2026-11-09 用户："兽人大军里面为什么没有远程单位啊？
+   * 有远程兽人投矛手呀，缺防空"）。
+   * 兽人阵营唯一的远程 + 唯一能拦空军的兵，和近战 orc 混编进「兽人 / 兽人大队」。
+   * 投矛走 arrow 弹道（飞行弹道同一套），头/脸沿用兽人段，外观仍是兽人。
+   */
+  orcThrower: U({
+    id: 'orcThrower',
+    name: '兽人投矛手',
+    blurb: '兽人阵营唯一的远程，投矛能拦空军。',
+    role: 'ranged',
+    faction: 'own',
+    hp: 42,
+    attack: 11,
+    defense: 2,
+    range: 4.4,
+    speed: 1.15,
+    cooldown: 1.45,
+    sight: 5,
+    attackAnim: 'bowTall',
+    idleAnim: 'idleBow',
+    anims: COMBAT_ANIMS('bowTall', 'idleBow'),
+    projectile: 'arrow',
+    headBands: [[64, 71], [128, 149]],
+    faceBand: [1, 30],
+    trainSeconds: 15,
+    stockInitial: 2,
+  }),
+
   priest: U({
     id: 'priest',
     name: '牧师',
