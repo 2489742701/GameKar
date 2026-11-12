@@ -203,7 +203,9 @@ describe('机头朝向（局部 +Z → 逻辑 aim）', () => {
 describe('飞行高度与体型', () => {
   it('高度明显高于原来的 1.25 格，又没高到脱离战场', () => {
     expect(FLYER_STYLE.height).toBeGreaterThan(2);
-    expect(FLYER_STYLE.height).toBeLessThan(4);
+    // P-096 用户「飞行单位可以再高一点」：3.8 → 4.8。
+    // 上界放宽到 6 格仍是可证伪的（再往上就会飞出俯视取景、影子脱节）。
+    expect(FLYER_STYLE.height).toBeLessThan(6);
   });
 
   it('三架都变大，热气球最大（用户点名）', () => {

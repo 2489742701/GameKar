@@ -2084,16 +2084,13 @@
 .rp {
   position: absolute;
   transform: translate(-50%, -100%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  /* 用户："那个移动建造的 SVG 小一点" —— 64×50 → 40×32，连底板一起收窄 */
-  padding: 2px 4px 3px;
-  border-radius: 8px;
-  background: rgba(18, 26, 20, 0.82);
-  border: 1px solid rgba(230, 200, 140, 0.45);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  /**
+   * P-096：用户"不需要边框，就是一个动态图标就行了" ⇒ 整块徽章底板
+   * （padding / 圆角 / 深色底 / 金边 / 阴影 / 「修复中」文字）全部拿掉，
+   * 只留这枚 40×32 的会动 SVG。rp-pop 的出场缩放保留。
+   */
+  line-height: 0;
+  pointer-events: none;
   animation: rp-pop 0.24s cubic-bezier(0.2, 1.4, 0.5, 1) both;
 }
 
@@ -2104,11 +2101,16 @@
 
 .rp__svg { display: block; overflow: visible; width: 40px; height: 32px; }
 
-/* 锤子绕柄尾摆；落到 0° 时锤头正压在板子上沿，同一拍闪火星 */
+/**
+ * P-096：**锤子敲打**，不是扳手拧动。
+ * 枢轴挪到柄顶 (29,8)：整把锤子从"举起 + 后仰"加速砸下，锤头压到木板上
+ * 微弹一下再抬回。旧版绕柄尾左右摆 −42°→8°，看着就是一把扳手在拧螺母。
+ * 分段 timing-function 让落下段是加速（ease-in）、抬回段是减速（ease-out）。
+ */
 .rp__hammer {
   transform-box: view-box;
-  transform-origin: 30px 31px;
-  animation: rp-swing 0.56s ease-in-out infinite;
+  transform-origin: 29px 8px;
+  animation: rp-swing 0.56s linear infinite;
 }
 
 .rp__spark {
@@ -2117,22 +2119,17 @@
 }
 
 @keyframes rp-swing {
-  0%, 100% { transform: rotate(-42deg); }
-  46% { transform: rotate(8deg); }
-  58% { transform: rotate(3deg); }
+  0%   { transform: translateY(-10px) rotate(-26deg); animation-timing-function: ease-in; }
+  38%  { transform: translateY(0) rotate(0deg); animation-timing-function: ease-out; }
+  46%  { transform: translateY(1px) rotate(2deg); animation-timing-function: ease-in-out; }
+  62%  { transform: translateY(-10px) rotate(-26deg); }
+  100% { transform: translateY(-10px) rotate(-26deg); }
 }
 
 @keyframes rp-spark {
-  0%, 38% { opacity: 0; }
-  47% { opacity: 1; }
-  62%, 100% { opacity: 0; }
-}
-
-.rp__txt {
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  color: #f0dcae;
-  white-space: nowrap;
+  0%, 37% { opacity: 0; }
+  43% { opacity: 1; }
+  55%, 100% { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2142,7 +2139,6 @@
 
 @media (orientation: landscape) and (max-height: 520px) {
   .rp__svg { width: 32px; height: 26px; }
-  .rp__txt { font-size: 8px; }
 }
 
 /* ---------- 顶栏图标：手机上只留简要 SVG（P-079） ---------- */

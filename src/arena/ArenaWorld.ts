@@ -801,6 +801,16 @@ export class ArenaWorld {
     if (!this.inOwnHalf(side, col)) return '只能放在自己半场';
 
     if (card.kind === 'building') {
+      /**
+       * **场地满 = 绝不生成建筑**（P-096 用户："如果已经没有位置了，
+       * 就不会再出现这个建筑单位，即使建筑卡片已经给我们了"）。
+       *
+       * `buildingPlacementIssue` 只会说"这格被占了"，玩家会以为换个格子就行；
+       * 这里先用 `hasRoomFor` 扫一遍整张图，一个能放这座楼的位置都没有时
+       * 直接给"场地已满"，并且**不进 execute()** ⇒ 不扣钱、不生成建筑、不占人口。
+       * 判据与影子 / 发牌裁量同源，都是 hasRoomFor → buildingPlacementIssue。
+       */
+      if (!this.hasRoomFor(side, card.building!)) return '场地已满 · 这座楼放不下了';
       const spec = BUILDING_SPECS[card.building!];
       return this.buildingPlacementIssue(side, col, row, spec.cols, spec.rows);
     }
@@ -1324,19 +1334,56 @@ export class ArenaWorld {
       // 牧师：每 spec.every 秒给身边 radius 格内的自己人回 amount 血（兵种表里的 special）
       if (u.defId === 'priest') {
         const spec = unitDef('priest').special!;
-        u.healIn = (u.healIn ?? spec.every) - dt;
-        if (u.healIn <= 0) {
-          u.healIn = spec.every;
-          const radius = spec.radius ?? 3;
-          const amount = spec.amount ?? 6;
-          let healed = 0;
-          for (const ally of this.units) {
-            if (ally.side !== u.side || ally.hp <= 0 || ally.hp >= ally.maxHp) continue;
-            if (Math.hypot(ally.x - u.x, ally.z - u.z) > radius) continue;
-            ally.hp = Math.min(ally.maxHp, ally.hp + amount);
-            healed += 1;
+        const radius = spec.radius ?? 3;
+        const amount = spec.amount ?? 6;
+        /**
+         * **优先照顾队友**（P-096 用户："他会优先跑到队友旁边回血，
+         * 在没有队友的时候会自己攻击"）。
+         *
+         * 旧版是"边站着边奶边打"：治疗分支不 continue，牧师照旧索敌开火。
+         * 现在分三种情况，且只有第三种会落到下面的通用攻击流程：
+         *  ① 半径 `UNIT.priestSeek` 内有残血队友但**离得远** ⇒ 跑过去，不攻击；
+         *  ② 已经站在队友旁边 ⇒ 按节拍治疗，不攻击；
+         *  ③ 没有需要治疗的队友 ⇒ 不当奶妈了，走通用索敌，用法术弹道低攻输出。
+         *
+         * 「没有队友」按"没有**需要治疗**的队友"理解，不是字面上的孤身一人：
+         * 否则牧师和一群满血队友站一起会永远不开火，那就废了。
+         * 找队友时排除自己，避免残血牧师原地自奶、再也不推进。
+         */
+        let patient: ArenaUnit | null = null;
+        let best = Infinity;
+        for (const ally of this.units) {
+          if (ally === u || ally.side !== u.side || ally.hp <= 0 || ally.hp >= ally.maxHp) continue;
+          const d = Math.hypot(ally.x - u.x, ally.z - u.z);
+          if (d <= UNIT.priestSeek && d < best) {
+            best = d;
+            patient = ally;
           }
-          if (healed > 0) this.heals.push({ id: this.nextId++, x: u.x, z: u.z, ttl: 0.6 });
+        }
+        if (patient) {
+          // 节拍照走：追赶途中也在攒治疗，一进半径就能立刻奶，不用再等 2.5 秒
+          u.healIn = (u.healIn ?? spec.every) - dt;
+          if (best > radius * 0.75) {
+            /**
+             * 追赶要**比被奶的兵快**，否则残血队友带行军指令一路往前跑时，
+             * 牧师永远追不上 ⇒ 既不治疗也不攻击，整张卡变废兵（实测探针：
+             * 牧师 1.3 格/s 追骑士 1.35 格/s，healIn 卡在 1.45 再也不动）。
+             * 1.4 倍是给"优先照顾队友"这条口径的通行保障，不是加战斗力。
+             */
+            const step = Math.min(best - radius * 0.5, st.speed * 1.4 * dt);
+            this.stepUnit(u, ((patient.x - u.x) / best) * step, ((patient.z - u.z) / best) * step);
+          } else if (u.healIn <= 0) {
+            u.healIn = spec.every;
+            let healed = 0;
+            for (const ally of this.units) {
+              if (ally.side !== u.side || ally.hp <= 0 || ally.hp >= ally.maxHp) continue;
+              if (Math.hypot(ally.x - u.x, ally.z - u.z) > radius) continue;
+              ally.hp = Math.min(ally.maxHp, ally.hp + amount);
+              healed += 1;
+            }
+            if (healed > 0) this.heals.push({ id: this.nextId++, x: u.x, z: u.z, ttl: 0.6 });
+          }
+          continue; // 有伤员要照顾：这一帧不索敌、不开火
         }
       }
 
@@ -1552,11 +1599,22 @@ export class ArenaWorld {
   }
 
   /** 这一格被楼占着吗（兵不许走进去，但可以贴着站）。 */
+  /**
+   * 这个点是不是被楼挡住（P-096 内缩）。
+   *
+   * 旧版按 `Math.floor(x)` 落在整格里就判挡住 —— 两栋楼贴在一起时中间
+   * 一个可站的格子都没有，兵绕障转 11 个角度也出不去（用户："建筑物建得太满，
+   * 军队会无法通行"）。现在把每栋楼的阻挡矩形四边各收 `UNIT.buildingInset`，
+   * 紧贴的两栋之间就留出一条缝；**落牌的 `cellFree` 不读这里**，仍按整格占位，
+   * 所以楼不会盖到彼此身上。
+   */
   private blockedBy(x: number, z: number): boolean {
-    const col = Math.floor(x);
-    const row = Math.floor(z);
+    const inset = UNIT.buildingInset;
     for (const b of this.buildings.values()) {
-      if (col >= b.col && col < b.col + b.cols && row >= b.row && row < b.row + b.rows) return true;
+      if (
+        x > b.col + inset && x < b.col + b.cols - inset &&
+        z > b.row + inset && z < b.row + b.rows - inset
+      ) return true;
     }
     return false;
   }

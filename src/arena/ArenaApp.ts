@@ -169,6 +169,16 @@ const SHOT_FORWARD_X = new THREE.Vector3(1, 0, 0);
 const DRAG_FINGER_OFFSET = 56;
 
 /**
+ * **影子吸附的放弃距离**（P-096）。
+ *
+ * 指针滑出场地/画布时 `dragCell()` 会返回 null，旧版立刻 `ghost.visible=false`
+ * ⇒ 手指刚越过地图边缘影子就闪没，玩家没法判断"再往后就没了"。
+ * 现在影子会**卡在最后一个有效格**；只有从那个位置再拉出这么远（CSS 像素），
+ * 才认为玩家真的放弃这次放置、把影子收掉。
+ */
+const DRAG_HIDE_PX = 180;
+
+/**
  * 一次拖放的全部 3D 资源。打包成一个对象是为了**按玩家**各留一份 ——
  * 双人同屏时两个人在同一块屏上各拖一张牌，影子不能共用一个。
  */
@@ -178,6 +188,15 @@ interface DragState {
   fill: THREE.MeshBasicMaterial;
   edge: THREE.LineBasicMaterial;
   modelMat: THREE.MeshStandardMaterial;
+  /**
+   * 最后一个落过影子的格子（哪怕那一格放不下、影子是红的，也算"最后一个位置"）。
+   * 指针移出场地时影子继续停在这儿；松手也用这一格落牌。
+   */
+  lastCell: GridPos | null;
+  /** 那个格子最后一次对应的客户端坐标，用来量"拉出去多远" */
+  lastClient: { x: number; y: number } | null;
+  /** 拉超过 DRAG_HIDE_PX 才置 true：这时影子隐藏、松手也不落牌 */
+  hidden: boolean;
 }
 
 export class ArenaApp {
@@ -902,32 +921,54 @@ export class ArenaApp {
     }
     g.visible = false;
     this.scene.add(g);
-    this.drags[p.id] = { slot, ghost: g, fill: fillMat, edge: edgeMat, modelMat };
+    this.drags[p.id] = {
+      slot, ghost: g, fill: fillMat, edge: edgeMat, modelMat,
+      lastCell: null, lastClient: null, hidden: false,
+    };
   }
 
-  /** 影子跟随指针：贴着格子中心，合法绿 / 非法红（判据 canPlaceAt）。 */
+  /**
+   * 影子跟随指针（P-096 吸附）：
+   * - 指针在场地上 → 记下这一格，影子跟过去（合法绿 / 非法红）；
+   * - 指针滑出场地 → **影子不消失**，继续停在最后那一格；
+   * - 只有从那一格再拉出 `DRAG_HIDE_PX` 那么远，才收掉影子、放弃本次放置。
+   *
+   * 落牌与影子始终用同一个格子（`dropCardDrag` 读 lastCell），
+   * 不会出现"看着放这、落到那"。
+   */
   moveCardDrag(clientX: number, clientY: number, pointerType = 'mouse', player = 0): void {
     const p = this.playerAt(player);
     const drag = this.dragState(p.id);
     if (!drag) return;
     // 触屏：影子在手指前方（上方），手指不挡预览；桌面鼠标偏移 0
     const cell = this.dragCell(clientX, clientY, pointerType);
-    drag.ghost.visible = cell !== null;
-    if (!cell) return;
+    if (cell) {
+      drag.lastCell = cell;
+      drag.lastClient = { x: clientX, y: clientY };
+      drag.hidden = false;
+    } else if (drag.lastCell && drag.lastClient) {
+      drag.hidden = Math.hypot(clientX - drag.lastClient.x, clientY - drag.lastClient.y) > DRAG_HIDE_PX;
+    } else {
+      // 从按下起就没进过场地：没有"最后一个位置"可卡
+      drag.hidden = true;
+    }
+    drag.ghost.visible = !drag.hidden;
+    const snap = drag.hidden ? null : drag.lastCell;
+    if (!snap) return;
     const card = p.hand[drag.slot];
     const isBuilding = card?.kind === 'building';
     const spec = isBuilding ? BUILDING_SPECS[card!.building!] : { cols: 1, rows: 1 };
-    const c = cellToWorld(pos(cell.col + spec.cols / 2, cell.row + spec.rows / 2));
+    const c = cellToWorld(pos(snap.col + spec.cols / 2, snap.row + spec.rows / 2));
     // 模型影子的摆放公式与真楼一致；占地平面只差一层 0.05 的贴地防 z-fight
     const baseY = isBuilding
-      ? this.map.footprintSurfaceY(pos(cell.col, cell.row), spec.cols, spec.rows)
-      : this.map.surfaceY(cell) + 0.06;
+      ? this.map.footprintSurfaceY(pos(snap.col, snap.row), spec.cols, spec.rows)
+      : this.map.surfaceY(snap) + 0.06;
     drag.ghost.position.set(c.x, baseY, c.z);
     // 模型影子的朝向与落成一致（同一个 落点+类型 key）
     const ghostBody = drag.ghost.userData['body'] as THREE.Object3D | undefined;
     const bId = card?.building;
-    if (ghostBody && bId) ghostBody.rotation.y = spinOf(buildingSpinKey(cell.col, cell.row, bId));
-    const ok = this.world.canPlaceAtOf(p, drag.slot, cell.col, cell.row).ok;
+    if (ghostBody && bId) ghostBody.rotation.y = spinOf(buildingSpinKey(snap.col, snap.row, bId));
+    const ok = this.world.canPlaceAtOf(p, drag.slot, snap.col, snap.row).ok;
     const color = ok ? 0x7fe09a : 0xe2503f;
     drag.fill.color.setHex(color);
     drag.edge.color.setHex(color);
@@ -939,8 +980,9 @@ export class ArenaApp {
     const p = this.playerAt(player);
     const drag = this.dragState(p.id);
     if (!drag) return;
-    // 落牌与影子必须用同一个函数，杜绝"看着放这、落到那"
-    const cell = this.dragCell(clientX, clientY, pointerType);
+    // 落牌与影子必须用同一个格子：指针滑出场地但没拉到放弃距离时，
+    // 用吸附住的 lastCell —— 玩家看到影子停在哪，就落在哪。
+    const cell = this.dragCell(clientX, clientY, pointerType) ?? (drag.hidden ? null : drag.lastCell);
     if (cell) this.playAt(drag.slot, cell, p.id);
     this.cancelCardDrag(p.id);
   }
@@ -1533,7 +1575,8 @@ export class ArenaApp {
 
   /**
    * 被击落的飞行器：整机下坠 + 翻转，**触地那一帧**才打散部件、放火花与尘，
-   * 再转交给 corpses 走原来的残骸渐隐。重力 7.5 格/s² ⇒ 从 3.8 格高约 1 秒落地。
+   * 再转交给 corpses 走原来的残骸渐隐。重力 7.5 格/s² ⇒ 从
+   * `FLYER_STYLE.height`（P-096 起 4.8 格）约 1.13 秒落地，仍在 life=3 兜底内。
    */
   private stepFalling(dt: number): void {
     for (let i = this.fallingFlyers.length - 1; i >= 0; i--) {

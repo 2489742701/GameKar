@@ -1,13 +1,15 @@
 /**
- * 废墟的**样子**：把 `fracture()` 切出来的碎块摆成一堆，以及它那 0.5 秒的摊开动画。
+ * 废墟的**样子**：把 `fracture()` 切出来的碎块摆成一堆，以及它们的落地过程。
  *
  * 和 `ruins.ts` 的分工：那边只算"切成哪几块"（纯数据、可复现），
  * 这边决定"每块是立着还是躺着、往哪散、颜色多暗"。换渲染方式时只动这个文件。
+ * P-096 起落地姿态由 `rigidFall.ts` 的确定性刚体积分给出，这里不再手造缓动。
  */
 
 import * as THREE from 'three';
 import { Random } from '@engine/math/Random';
 import { fracture } from '../ruins';
+import { rigidPoseAt, type RigidState } from './rigidFall';
 
 /** 建筑种类 → 废墟的颜色族。 */
 export function ruinStyleOf(kind: string): 'core' | 'tower' | 'wood' | 'stone' {
@@ -65,9 +67,27 @@ export function makeRuin(
       mesh.rotation.z = (rnd.next() - 0.5) * 0.14;
     }
     mesh.castShadow = true;
-    mesh.userData['home'] = { x: p.x, z: p.z, y: h / 2 };
-    // 摊开的幅度：0.6 倍（0.85 试过，散成一圈砖）
-    mesh.userData['burst'] = { x: p.x * 0.6, z: p.z * 0.6, i };
+    /**
+     * P-096：不再存"手造缓动的起点/摊开量"，改成一块**刚体初态**。
+     * 位置从楼心附近起、带向外上方的初速与角速度；剩下的交给 rigidPoseAt
+     * 按重力/反弹/摩擦解析推进。姿态会一路翻滚，不会"斜着躺好却直直往下掉"。
+     */
+    const body: RigidState = {
+      x: p.x * 0.4,
+      y: h / 2 + 0.7 + (i % 3) * 0.2,
+      z: p.z * 0.4,
+      vx: p.x * 0.9 + (rnd.next() - 0.5) * 0.6,
+      vy: 1.0 + rnd.next() * 1.4,
+      vz: p.z * 0.9 + (rnd.next() - 0.5) * 0.6,
+      rx: mesh.rotation.x,
+      ry: p.spin,
+      rz: mesh.rotation.z,
+      wx: (rnd.next() - 0.5) * 4,
+      wy: (rnd.next() - 0.5) * 1.5,
+      wz: (rnd.next() - 0.5) * 4,
+      floor: h / 2,
+    };
+    mesh.userData['rigid'] = body;
     group.add(mesh);
   });
 
@@ -76,22 +96,20 @@ export function makeRuin(
 }
 
 /**
- * 前 0.5 秒：从原位向四周摊开、从高处落下。之后不再动。
+ * P-096：从**手造缓动**换成确定性刚体模拟。
  *
- * x/z 用 `+ burst * ease`：从**原位**逐渐摊到外侧。
- * 上一版是 `+ burst * (1 - ease)` —— 从外侧吸回原位，读起来像倒放。
+ * 旧版前 0.5 秒用 `ease = 1-(1-k)²` 把碎片从高处"缓"到地面、x/z 摊开，
+ * 而 `rotation` 从造出来那一刻起就固定不动 —— 于是斜躺着的板子直直往下平移，
+ * 姿态和位移各说各话。现在每块按 `rigidPoseAt(初态, age)` 解析推进：
+ * 重力抛物线 + 触地反弹 + 摩擦 + 角动量衰减，旋转与位移来自同一套积分，
+ * 而且不依赖帧率（age 一样，姿态就一定一样）。
  */
 export function settleRuin(group: THREE.Group, age: number): void {
-  const k = Math.min(1, age / 0.5);
-  const ease = 1 - (1 - k) * (1 - k);
   for (const child of group.children) {
-    const home = child.userData['home'] as { x: number; z: number; y: number } | undefined;
-    const burst = child.userData['burst'] as { x: number; z: number; i: number } | undefined;
-    if (!home || !burst) continue;
-    child.position.set(
-      home.x + burst.x * ease,
-      home.y + (1 - ease) * (0.7 + (burst.i % 3) * 0.2),
-      home.z + burst.z * ease,
-    );
+    const body = child.userData['rigid'] as RigidState | undefined;
+    if (!body) continue;
+    const pose = rigidPoseAt(body, age);
+    child.position.set(pose.x, pose.y, pose.z);
+    child.rotation.set(pose.rx, pose.ry, pose.rz);
   }
 }

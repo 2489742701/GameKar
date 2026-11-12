@@ -16,9 +16,9 @@ const app = readFileSync(join(ROOT, 'src/arena/ArenaApp.ts'), 'utf8');
 const flyers = readFileSync(join(ROOT, 'src/arena/visuals/flyers.ts'), 'utf8');
 
 describe('空军：高度与热气球', () => {
-  it('飞行高度 3.8 格（2.6 那版还是贴着屋顶）', () => {
-    expect(FLYER_STYLE.height).toBeGreaterThanOrEqual(3.5);
-    expect(flyers).toContain('height: 3.8');
+  it('飞行高度 4.8 格（P-096 在 3.8 之上再抬一档）', () => {
+    expect(FLYER_STYLE.height).toBeGreaterThanOrEqual(4.5);
+    expect(flyers).toContain('height: 4.8');
   });
 
   it('热气球球囊放大、吊篮是个"小斗子"（有立柱与上下沿）', () => {

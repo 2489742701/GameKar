@@ -5,7 +5,9 @@
  * 落下去的就是**原来那块墙板**（尺寸、颜色、朝向都从模型里来），
  * 所以破洞的轮廓和地上的碎块是同一块东西 —— 不需要另画"破洞贴纸"。
  *
- * 物理只有重力 + 落地躺平：几块板不值得引刚体引擎。
+ * 物理只有重力 + 落地弹一下 —— P-096 起连这段也和废墟共用
+ * `visuals/rigidFall.ts` 的 `stepRigid()`：角动量、摩擦、反弹只有一套常量，
+ * 落地**不再瞬间把板子摆平**（那才是用户说的"斜躺着掉落却直直往下"）。
  * 生成顺序只由（楼号 + 第几档）决定，同一栋楼每次碎在同一个地方。
  */
 
@@ -14,6 +16,7 @@ import { Random } from '@engine/math/Random';
 import type { HitKind } from './ArenaWorld';
 import type { ShellPanel } from './models';
 import type { WallShell } from './shell';
+import { stepRigid, type RigidState } from './visuals/rigidFall';
 
 /** 血量分数降到这些值时各崩一次（从高到低）。 */
 export const HIT_THRESHOLDS = [0.8, 0.62, 0.45, 0.29, 0.15] as const;
@@ -43,16 +46,8 @@ interface Chunk {
   wx: number;
   wy: number;
   wz: number;
-  /** 躺平后的中心高度 */
+  /** 躺平后的中心高度（也是刚体的地面） */
   restY: number;
-  /** 躺平时的朝向（外墙原朝向） */
-  yaw: number;
-  /** 落地后的倾斜与偏转：每块都不一样，不然一排板子躺得像铺地砖 */
-  tiltX: number;
-  tiltZ: number;
-  yawJitter: number;
-  /** 被什么打下来的：炮弹打下来的板子落地就歪着，不再摆正 */
-  kind: HitKind;
   rest: boolean;
   /** 落地之后活了多久（用来"过一会儿慢慢消失"，见 DEBRIS_LIFE） */
   age: number;
@@ -63,8 +58,6 @@ interface Damaged extends DamageInfo {
   shell: WallShell;
 }
 
-const GRAVITY = 16;
-const BOUNCE = 0.3;
 /** 场上最多留多少块碎块：再多就回收最老的（每栋楼最多 5 档 × 6 块 = 30） */
 const MAX_DEBRIS = 70;
 /**
@@ -154,40 +147,34 @@ export class DamageFx {
         }
         continue;
       }
-      c.vy -= GRAVITY * dt;
+      /**
+       * P-096：逐帧刚体积分交给 `stepRigid()`，和废墟的 `rigidPoseAt()` 共用
+       * 同一套重力/反弹/摩擦/角阻尼常量。位移与姿态一起推进，不再"位置在落、
+       * 旋转却从出生起就定死"。
+       */
       const p = c.mesh.position;
-      p.x += c.vx * dt;
-      p.y += c.vy * dt;
-      p.z += c.vz * dt;
-      c.mesh.rotation.x += c.wx * dt;
-      c.mesh.rotation.y += c.wy * dt;
-      c.mesh.rotation.z += c.wz * dt;
-      if (p.y <= c.restY) {
-        p.y = c.restY;
-        if (Math.abs(c.vy) > 1.2) {
-          c.vy = -c.vy * BOUNCE;
-          c.vx *= 0.6;
-          c.vz *= 0.6;
-          c.wx *= 0.5;
-          c.wy *= 0.5;
-          c.wz *= 0.5;
-        } else {
-          /**
-           * 躺平 —— 但**每块都歪一点点**。
-           *
-           * 上一版统一按 `(-π/2, yaw, 0)` 摆，结果一排板子躺得像铺地砖；
-           * 更糟的是薄板正对镜头时只剩一条线，玩家读成"砖头直直插在地上"
-           * （用户 2026-11-02 的原话）。现在每块有自己的倾角与偏转，
-           * 炮击炸下来的歪得更狠，落地就那样，不再摆正。
-           */
-          c.mesh.rotation.set(-Math.PI / 2 + c.tiltX, c.yaw + c.yawJitter, c.tiltZ);
-          // 歪了以后板子的角会扎进土里，抬一点补回来
-          c.mesh.position.y = c.restY + Math.abs(Math.sin(c.tiltX)) * 0.12;
-          c.vy = 0;
-          c.rest = true;
-          c.age = 0;
-          this.onLand?.(c.mesh.position.x, c.mesh.position.z, c.restY);
-        }
+      const s: RigidState = {
+        x: p.x, y: p.y, z: p.z,
+        vx: c.vx, vy: c.vy, vz: c.vz,
+        rx: c.mesh.rotation.x, ry: c.mesh.rotation.y, rz: c.mesh.rotation.z,
+        wx: c.wx, wy: c.wy, wz: c.wz,
+        floor: c.restY,
+      };
+      const r = stepRigid(s, dt);
+      p.set(s.x, s.y, s.z);
+      c.mesh.rotation.set(s.rx, s.ry, s.rz);
+      c.vx = s.vx; c.vy = s.vy; c.vz = s.vz;
+      c.wx = s.wx; c.wy = s.wy; c.wz = s.wz;
+      if (r.rest) {
+        /**
+         * 静止：**姿态保持物理积分的结果**。
+         * 旧版在这里 `rotation.set(-π/2 + tilt, ...)` 把板子瞬间摆平，
+         * 于是翻滚了半天最后"啪"一下归位 —— 位置和旋转各说各话。
+         * 现在每块歪成什么样由初速与角动量决定，落地就那样。
+         */
+        c.rest = true;
+        c.age = 0;
+        this.onLand?.(p.x, p.z, c.restY);
       }
     }
   }
@@ -271,17 +258,15 @@ export class DamageFx {
       vx: blast ? Math.cos(dir) * blastSpeed : nx * (0.5 + rnd.next() * 0.9) + nz * (rnd.next() - 0.5) * 0.8,
       vy: blast ? 1.8 + rnd.next() * 1.8 : 0.9 + rnd.next() * 1.3,
       vz: blast ? Math.sin(dir) * blastSpeed : nz * (0.5 + rnd.next() * 0.9) - nx * (rnd.next() - 0.5) * 0.8,
-      wx: (rnd.next() - 0.5) * (blast ? 18 : 8),
+      /**
+       * 绕 x 的角速度带一个**朝躺倒方向的偏置**：薄墙板从竖着脱落，
+       * 纯粹随机角速度会有一半概率落地时仍立着（旧版注释里的"砖头直插在地上"）。
+       * 这是给定初速的**初始条件**，不是落地后硬摆姿态 —— 姿态仍由积分决定。
+       */
+      wx: (rnd.next() - 0.5) * (blast ? 18 : 8) - (blast ? 2.5 : 3.5),
       wy: (rnd.next() - 0.5) * (blast ? 16 : 8),
       wz: (rnd.next() - 0.5) * (blast ? 18 : 8),
       restY: st.groundY + t / 2 + 0.01,
-      yaw: panel.yaw,
-      // 落地姿态：平常只歪一点点（±0.2 弧度，保证"躺着"而不是立着），
-      // 炮击炸翻的歪到 ±0.7 —— 排得太整齐会像铺地砖，歪太多又会"插在地里"
-      tiltX: (rnd.next() - 0.5) * (blast ? 1.4 : 0.4),
-      tiltZ: (rnd.next() - 0.5) * (blast ? 1.2 : 0.34),
-      yawJitter: (rnd.next() - 0.5) * (blast ? 1.4 : 0.5),
-      kind,
       rest: false,
       age: 0,
     });

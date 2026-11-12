@@ -481,7 +481,7 @@ describe('塔互殴 / 移动火炮 / 废墟', () => {
 });
 
 describe('兵不穿楼', () => {
-  it('同阵营的楼挡在直线上时会绕开，任何一帧都不会站在楼的占地里', () => {
+  it('同阵营的楼挡在直线上时会绕开，任何一帧都不会站在楼的碰撞体里', () => {
     const world = new ArenaWorld({ seed: 61 });
     world.gold.blue = 20;
     give(world, 'mill');
@@ -500,11 +500,16 @@ describe('兵不穿楼', () => {
       stun: 0,
       order: null, detour: 1 as const,
     });
+    /**
+     * P-096：楼的可站立判定和 `ArenaWorld.blockedBy()` 同源 —— 四边各收
+     * `UNIT.buildingInset`。这个锁仍然可证伪：兵只要踩进**内缩后**的核心碰撞体，
+     * 一样算穿模；只是边缘那圈 0.16 格现在允许贴着走（用户要的"夹缝通行"）。
+     */
     const inside = (x: number, z: number): boolean => {
-      const col = Math.floor(x);
-      const row = Math.floor(z);
+      const inset = UNIT.buildingInset;
       for (const b of world.buildings.values()) {
-        if (col >= b.col && col < b.col + b.cols && row >= b.row && row < b.row + b.rows) return true;
+        if (x > b.col + inset && x < b.col + b.cols - inset &&
+            z > b.row + inset && z < b.row + b.rows - inset) return true;
       }
       return false;
     };

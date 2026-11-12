@@ -278,17 +278,23 @@ export const UNITS: Record<string, UnitDef> = {
   priest: U({
     id: 'priest',
     name: '牧师',
-    blurb: '奶附近血少的。',
+    /**
+     * P-096 用户："牧师也能攻击，攻击力比较低，是远程的。他会优先跑到队友旁边回血，
+     * 在没有队友的时候会自己攻击。" ⇒ 低攻 3 保留，补法术弹道与射程，
+     * 索敌/追队友的优先级在 `ArenaWorld.tickUnits()` 里，不在这里写死。
+     */
+    blurb: '优先跑去给队友回血，没人要奶时才远程攻击。',
     role: 'healer',
     faction: 'own',
     hp: 30,
     attack: 3,
     defense: 1,
-    range: 2.4,
+    range: 3.2,
     speed: 1.3,
     cooldown: 2.5,
-    sight: 3.6,
-    attackAnim: 'heal',
+    sight: 4.5,
+    projectile: 'magic',
+    attackAnim: 'cast',
     idleAnim: 'idleStaff',
     anims: [...COMBAT_ANIMS('heal', 'idleStaff'), 'cast'],
     // 尖顶高帽带（35–39 实测是尖顶）+ 头巾段

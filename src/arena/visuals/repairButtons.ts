@@ -17,20 +17,31 @@
 import { el as make } from '@ui/dom';
 import type { ArenaBuilding } from '../types';
 
-/** 锤子打板子：板子固定、锤子绕柄尾摆动、同一拍闪火星。节奏在 arena.css 的 0.56s。 */
+/**
+ * P-096 用户："建筑维修的 SVG 不需要边框，就是一个动态图标就行了……
+ * 我看到你是用了一个锤子，但是动画是扳手的，能不能改成锤子敲打的动画"。
+ *
+ * 改法三处：
+ * 1. **去掉徽章底板**（CSS 里的 border / background / box-shadow）与「修复中」文字，
+ *    整个层只剩这一枚会动的 SVG；
+ * 2. SVG 自身不再给板子/锤子描边（旧版一圈 stroke 把图标读成"一块带框的小牌子"）；
+ * 3. 锤子重画成**柄在上、锤头在下压着木板**，动画从"举起 → 加速砸下 → 微弹 → 抬回"，
+ *    不再绕柄尾左右摆（那个动作看起来像扳手拧螺母）。
+ * 节奏仍在 arena.css 的 0.56s；关键帧名 `rp-swing` 沿用旧锁，内容已换成敲打。
+ */
 const REPAIR_SVG = /* html */ `
   <svg class="rp__svg" viewBox="0 0 56 44" width="40" height="32" aria-hidden="true">
-    <rect x="2" y="29" width="52" height="11" rx="2.5" fill="#a4703f" stroke="#5c3b1f" stroke-width="1.6"/>
-    <path d="M6 33 h44 M6 37 h44" stroke="#7c512b" stroke-width="0.8" opacity=".65"/>
+    <rect x="2" y="29" width="52" height="11" rx="2.5" fill="#a4703f"/>
+    <path d="M6 33 h44 M6 37 h44" fill="none" stroke="#7c512b" stroke-width="0.8" opacity=".65"/>
     <circle cx="10" cy="34.5" r="1.2" fill="#3d4249"/>
     <circle cx="46" cy="34.5" r="1.2" fill="#3d4249"/>
-    <g class="rp__spark" stroke="#ffd884" stroke-width="1.9" stroke-linecap="round">
+    <g class="rp__spark" fill="none" stroke="#ffd884" stroke-width="1.9" stroke-linecap="round">
       <path d="M19 26 l-4 -4 M25 24 l0 -6 M31 26 l4 -4"/>
     </g>
     <g class="rp__hammer">
-      <rect x="28" y="4" width="4.4" height="27" rx="2" fill="#8b5a2f" stroke="#4a2f18" stroke-width="1"/>
-      <rect x="19" y="27" width="20" height="8" rx="2" fill="#c9d2dc" stroke="#5b6673" stroke-width="1.2"/>
-      <rect x="19" y="27" width="4" height="8" rx="1.4" fill="#eaf0f6"/>
+      <rect x="27" y="6" width="4.4" height="22" rx="2" fill="#8b5a2f"/>
+      <rect x="18" y="24" width="22" height="8" rx="2" fill="#c9d2dc"/>
+      <rect x="18" y="24" width="5" height="8" rx="1.5" fill="#eaf0f6"/>
     </g>
   </svg>`;
 
@@ -85,7 +96,8 @@ export class RepairButtons {
 
     const fx = make('div', 'rp rp__fx');
     fx.setAttribute('aria-hidden', 'true');
-    fx.innerHTML = `${REPAIR_SVG}<span class="rp__txt">修复中</span>`;
+    // P-096：只放图标，不再挂「修复中」文字和底板
+    fx.innerHTML = REPAIR_SVG;
     this.el.append(fx);
     this.nodes.set(id, fx);
     return fx;
