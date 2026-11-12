@@ -401,6 +401,8 @@ export class ArenaApp {
     // 外墙崩开时溅火星；碎块落地时扬一小团土
     this.damage.onBreach = (x, z, y, dirX, dirZ) => this.fx.spark(x, z, y, dirX, dirZ, 14);
     this.damage.onLand = (x, z, y) => this.fx.dust(x, z, y);
+    // P-097：一档木板拼回墙面，在补片处扬一小团木屑/尘（一档一次，不是一块一次）
+    this.damage.onRestore = (x, z, y) => this.fx.dust(x, z, y);
     this.renderer = new Renderer(opts.canvas);
     // P-082：背景必须是"渲染出来的几何"而不是 gl.clearColor，否则直出与 composer
     // 对清屏色的色调映射次数不同，一开后期整幅就亮 +10%。详见 visuals/backdrop.ts。
