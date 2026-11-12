@@ -1292,6 +1292,14 @@ export class ArenaHud {
         parts.kind.textContent = '';
         parts.art.innerHTML = '';
         parts.need.textContent = '';
+        /**
+         * P-095：清空图标的同时**必须把图标缓存一起清掉**。
+         * 以前只清 innerHTML，却留着 `data-icon = 刚打出去那张卡的 id`；
+         * 等 2.2 秒后随机补牌补回**同一个 id**（概率 ≈ 1/卡池数），
+         * 下面那句缓存判断会以为"图标还在"而跳过重建 ⇒ 卡面图标永久空白。
+         * 这就是用户看到的「SVG 有概率不显示」—— 不是随机渲染故障，是缓存没失效。
+         */
+        delete el.dataset['icon'];
         seat.playTimers[slot] = null;
       }, 260);
       return;
@@ -1310,6 +1318,7 @@ export class ArenaHud {
       parts.kind.textContent = '';
       parts.art.innerHTML = '';
       parts.need.textContent = '';
+      delete el.dataset['icon']; // 空白格也一样：别给下一张卡留一个假的"已渲染"标记
       return;
     }
     el.dataset['empty'] = '0';
@@ -1319,9 +1328,12 @@ export class ArenaHud {
     parts.name.textContent = card.name;
     // 移动火炮是**军队**（'siege' 只是模型差异），不再单独标'工程'
     parts.kind.textContent = card.kind === 'building' ? '建筑' : '军队';
-    // 图标只在换牌时重建：这是 20Hz 的刷新，每次 innerHTML 会白白重解析 SVG
-    if (el.dataset['icon'] !== card.id) {
-      parts.art.innerHTML = iconOf(card.id);
+    // 图标只在换牌时重建：这是 20Hz 的刷新，每次 innerHTML 会白白重解析 SVG。
+    // 两个条件都要判：① id 变了；② DOM 里的 SVG 真的还在（动画清空过 / 外部改过 DOM）。
+    // 只判 ① 就是 P-095 那个「有概率不显示」的病根。
+    // `card.icon` 给大地图扩展卡用：它们自带 SVG，主模式 CARD_ICON 表里没有。
+    if (el.dataset['icon'] !== card.id || parts.art.childElementCount === 0) {
+      parts.art.innerHTML = card.icon ?? iconOf(card.id);
       el.dataset['icon'] = card.id;
     }
     // 「几人几包」改成 SVG 图标（用户 2026-11-06），**差哪样标哪样红**：

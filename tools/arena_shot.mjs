@@ -108,7 +108,10 @@ try {
   ws.addEventListener('message', (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.method === 'Runtime.exceptionThrown') {
-      errors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+      const d = msg.params.exceptionDetails;
+      const text = d.exception?.description ?? d.text;
+      // 浏览器扩展注入的 content.js 偶发报错，与游戏无关；页面自身异常照旧打印
+      if (!/chrome-extension:\/\//.test(`${d.url ?? ''} ${text ?? ''}`)) errors.push(text);
     }
   });
 

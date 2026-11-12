@@ -121,7 +121,16 @@ try {
   ws.addEventListener('message', (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.method === 'Runtime.exceptionThrown') {
-      errors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);
+      const d = msg.params.exceptionDetails;
+      const text = d.exception?.description ?? d.text;
+      /**
+       * 只忽略**浏览器扩展自己**抛的异常（本机装了一个会往页面注入 content.js 的插件，
+       * 它偶发 `Cannot read properties of undefined (reading 'query')`）。
+       * 判断依据是异常来源 URL / 堆栈里的 `chrome-extension://`，
+       * 页面自身（含模组）的任何异常照旧计入 —— 别拿这条当"忽略所有报错"的口子。
+       */
+      const fromExtension = /chrome-extension:\/\//.test(`${d.url ?? ''} ${text ?? ''}`);
+      if (!fromExtension) errors.push(text);
     }
     if (msg.method === 'Runtime.consoleAPICalled' && (msg.params.type === 'warning' || msg.params.type === 'error')) {
       warnings.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));

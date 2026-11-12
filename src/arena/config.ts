@@ -461,6 +461,15 @@ export interface ArenaCard {
   squad?: { unitId: string; count: number }[];
   /** 每个兵吃几份面包（默认 1）。民兵自带干粮只吃 0.5，6 人才装得进基础 3 面包 */
   breadPerMan?: number;
+  /**
+   * **卡面中央图标的内联 SVG**（P-095）。
+   *
+   * 主模式卡池的图标都注册在 `cardIcons.CARD_ICON` 表里，这里留空即可；
+   * 大地图模组自带的扩展卡（集市 / 商队 / 护航）不走那张表，而是自带 icon。
+   * 主 HUD 现在也读这个字段（`card.icon ?? iconOf(card.id)`），
+   * 所以扩展卡「串台」进主模式时不会变成虚线空框。
+   */
+  icon?: string;
 }
 
 /**
@@ -476,8 +485,15 @@ export interface ArenaCard {
 /**
  * 兽人巢穴（2026-11-07 用户新增）：只要花钱 + 有空位就能盖，不需要民居 / 磨坊 / 兵营。
  * 放在卡池**之前**，卡的 `cost` 直接读它 —— 判据只留一个数字。
+ *
+ * P-095（用户 2026-11-10）：「兽人巢穴应该也自动出一个普通兽人兵，和这个军营一样」。
+ * 出兵节拍 / 在场上限 / 口粮**全部复用兵营那条链**（"和军营一样"）：
+ * 每 `BARRACKS.interval` 秒 1 个、不花金、不借闲置人口、吃 1 份面包。
+ * ⚠️ 卡牌出的兽人军队仍是 `armySupplyOf(orcs)` 的双份口粮 —— 那是"花牌买来的兵"，
+ * 和巢穴白送的守兵不是一回事，别把两条口径混成一个数。
+ * ⚠️ 仍然**不配民居 / 磨坊**：`needsHouse()` 不列它，自动出兵也不加这道闸。
  */
-export const ORC_LAIR = { hp: 520, cost: 12 };
+export const ORC_LAIR = { hp: 520, cost: 12, breadPerMan: 1 };
 
 export const CARDS: ArenaCard[] = [
   {

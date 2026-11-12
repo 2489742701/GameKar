@@ -25,6 +25,7 @@ import {
   CORE,
   ECONOMY,
   NO_BUILD,
+  ORC_LAIR,
   FIELD,
   HAND,
   LOGISTICS,
@@ -1141,6 +1142,33 @@ export class ArenaWorld {
         }
         const at = this.spawnCellOf(b);
         this.spawnSquad(b.side, [{ unitId: b.side === 'blue' ? 'knight' : 'orc', count: 1 }], at.col, at.row, true);
+        continue;
+      }
+      /**
+       * **兽人巢穴自动出兵**（P-095，用户："应该也自动出一个普通兽人兵，和这个军营一样"）。
+       *
+       * 和兵营同一条链：每 `BARRACKS.interval` 秒吐 1 个、不花金、
+       * `fromBarracks=true` 不借闲置人口、场上总兵数受 `BARRACKS.cap` 限制。
+       * 出的是**普通近战兽人 `orc`**（不是投矛手）—— 用户点名"普通兽人兵"。
+       *
+       * 两条和兵营刻意不同的地方（别"顺手对齐"）：
+       * ① **不查后勤**：兽人巢穴的既有口径是"只要花钱 + 有空位就能盖"，
+       *    `needsHouse()` 不列它，加一道民居/磨坊闸等于偷偷改掉这条设定；
+       * ② **面包按兵营口径吃 1 份**（`ORC_LAIR.breadPerMan = 1`）。
+       *    试过给自动兽人按卡牌兽人的双份口粮：它会把面包容器挤满、
+       *    反而卡住真正拆楼的卡牌兵，48 局台账从 2.0 掉到 1.94 栋/局。
+       *    白送的守兵和花牌买的兽人军队不是一回事，别把两条口径混成一个数。
+       */
+      if (b.kind === 'orcLair') {
+        b.timer += dt;
+        if (b.timer < BARRACKS.interval) continue;
+        b.timer = 0;
+        const mine = this.units.filter((u) => u.side === b.side).length;
+        if (mine >= BARRACKS.cap) continue;
+        const sup = this.supplyOf(b.side);
+        if (sup.bread + ORC_LAIR.breadPerMan * SUPPLY.unitBread > sup.breadMax) continue;
+        const at = this.spawnCellOf(b);
+        this.spawnSquad(b.side, [{ unitId: 'orc', count: 1 }], at.col, at.row, true, ORC_LAIR.breadPerMan, 0);
         continue;
       }
       // 产金建筑：磨坊 +1、商行 +2，数量只从 config.GOLD_INCOME 读
