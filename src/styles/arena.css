@@ -694,10 +694,12 @@
 .ahud__end__ledger[hidden] { display: none; }
 
 .ahud__ledger__head {
+  padding: 2px 6px 5px;
   text-align: center;
   font-weight: 700;
   line-height: 1.5;
   color: var(--gold-hi);
+  overflow-wrap: anywhere;
 }
 
 .ahud__ledger__cols {
@@ -819,6 +821,12 @@
     max-height: 50vh;
     gap: 6px;
     padding: 8px;
+  }
+
+  /* 一句话结论在 390px 下会挤成贴边的一整行 ⇒ 缩字号 + 允许换行 */
+  .ahud__ledger__head {
+    font-size: 11px;
+    line-height: 1.45;
   }
 
   .ahud__ledger__cols { gap: 4px; }
@@ -1189,22 +1197,47 @@
 .ahud__supply__pop3__part[data-part='used'] .ahud__supply__num { color: #aebfd6; }
 
 @media (max-width: 560px) {
-  .ahud__supply__pop3 { gap: 3px; }
-  .ahud__supply__pop3__tag { font-size: 8px; }
+  /**
+   * P-095 手机竖屏实测（Edge CDP 390×844）：人口三分加上「闲/占/共」三个标签后，
+   * 左列 `.ahud__supply` 右边界到 189px，而绝对居中的时钟左边界是 167px
+   * ⇒ **重叠 22px**（截图里就是「🏠2:56」连成一坨）。
+   * 时钟居中是红线，不能挪；所以窄屏收掉标签、把三数压成 `8/0/8`：
+   * 闲=金 / 占=冷灰 / 共=白，颜色仍分得开，点击胶囊的 toast 仍解释三项。
+   */
+  .ahud__supply__pop3 { gap: 2px; }
+  .ahud__supply__pop3__tag { display: none; }
+  .ahud__supply__pop3__part + .ahud__supply__pop3__part::before {
+    content: '/';
+    padding: 0 1px;
+    font-size: 9px;
+    color: var(--text-dim);
+  }
+  .ahud__supply__pop3 .ahud__supply__num { font-size: 10px; }
 }
 
 
 /* 窄屏（竖屏手机）：顶部三列本来就挤，supply 再占宽度会把文字压成竖排 */
 @media (max-width: 560px) {
   .ahud__supply {
-    gap: 4px;
+    gap: 3px;
     margin-bottom: 3px;
   }
 
   .ahud__supply__item {
-    padding: 1px 5px;
-    gap: 3px;
+    padding: 1px 3px;
+    gap: 2px;
     font-size: 9px;
+  }
+
+  /**
+   * P-095 手机竖屏：三个胶囊 + 绝对居中的时钟在 320~390px 宽下放不下
+   * （实测 390 重叠 5px / 320 重叠 40px）。时钟居中是红线不能挪，
+   * 所以窄屏把**民居数字**收起：缺配仍有 `checkStaffing()` 通知栏、
+   * 卡面房屋 SVG 与长按说明，不是把告警删掉，只是不占顶栏宽度。
+   * 顶栏仍是「人口三分 + 面包 + 时钟 + 三颗图标按钮」。
+   */
+  .ahud__supply__item:last-child {
+    display: none;
   }
 
   .ahud__supply__num {

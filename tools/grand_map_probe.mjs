@@ -22,6 +22,11 @@ import { inflateSync } from 'node:zlib';
 const EDGE = process.env.EDGE_BIN ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const PAGE_URL = process.argv[2] ?? 'http://127.0.0.1:4188/arena.html?mod=grand-map';
 const OUT = process.argv[3] ?? 'docs';
+/**
+ * 视口可用 `PROBE_SIZE=390,844` 切成手机竖屏（P-095：用户让"用浏览器处理"，
+ * 同一套 37 项检查得能在窄屏复跑，不能只会验桌面）。
+ */
+const [VIEW_W, VIEW_H] = (process.env.PROBE_SIZE ?? '1280,760').split(',').map(Number);
 const PORT = 9351;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -77,7 +82,7 @@ mkdirSync(OUT, { recursive: true });
 const child = spawn(EDGE, [
   '--headless=new', `--remote-debugging-port=${PORT}`,
   '--disable-gpu-sandbox', '--enable-unsafe-swiftshader',
-  '--window-size=1280,760', '--no-first-run',
+  `--window-size=${VIEW_W},${VIEW_H}`, '--no-first-run',
   '--user-data-dir=' + process.env.TEMP + '/grand-map-probe-profile',
   'about:blank',
 ], { stdio: 'ignore' });
@@ -136,7 +141,9 @@ try {
       warnings.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
     }
   });
-  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 760, deviceScaleFactor: 1, mobile: false });
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: VIEW_W, height: VIEW_H, deviceScaleFactor: 1, mobile: VIEW_H > VIEW_W,
+  });
   await send('Page.navigate', { url: PAGE_URL });
   await sleep(3500);
 

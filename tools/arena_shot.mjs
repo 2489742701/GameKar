@@ -43,7 +43,8 @@ const child = spawn(
     '--enable-unsafe-swiftshader',
     // 无头环境默认没有用户手势，AudioContext 会一直 suspended —— 音效探针要靠它
     '--autoplay-policy=no-user-gesture-required',
-    // 竖屏 / 小屏复验：`SHOT_SIZE=390x844 node tools/arena_shot.mjs ...`
+    // 竖屏 / 小屏复验：`SHOT_SIZE=390,844 node tools/arena_shot.mjs ...`
+    // 用**逗号**分隔（代码里是 split(',')），写成 390x844 会被解析成 NaN。
     `--window-size=${process.env.SHOT_SIZE ?? '1280,760'}`,
     '--no-first-run',
     '--user-data-dir=' + process.env.TEMP + '/arena-probe-profile',
