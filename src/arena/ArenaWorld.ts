@@ -54,6 +54,7 @@ import { statsOf } from './types';
 import { decide, placementBand, type AiView } from './ai';
 import { PVE_LEVELS, pveLevel, type PveLevel } from './pve/levels';
 import type { Wave } from './pve/waves';
+import type { GridPos } from '@engine/math/Grid';
 import type {
   ArenaBuilding,
   ArenaOptions,
@@ -603,6 +604,50 @@ export class ArenaWorld {
     return this.scanRoom(side, spec.cols, spec.rows);
   }
 
+  /**
+   * 这一侧**所有**能放 cols×rows 的格子（row → col 顺序）。
+   *
+   * 和 `scanRoom` 共用同一个合法性判据 `buildingPlacementIssue`，只是不提前返回：
+   * `scanRoom` 是每帧影子/AI 都要问的布尔快路径，`freeCellsFor` 只在玩家
+   * **点到一个放不下的格子**时才跑一次完整扫描，为 P-098 的「最后一个位置」数空位。
+   */
+  private freeCellsFor(side: Side, cols: number, rows: number): GridPos[] {
+    const out: GridPos[] = [];
+    for (let row = 0; row <= this.field.rows - rows; row++) {
+      for (let col = 0; col <= this.field.cols - cols; col++) {
+        if (!this.inOwnHalf(side, col)) continue;
+        if (this.buildingPlacementIssue(side, col, row, cols, rows) === null) out.push({ col, row });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * **P-098（2026-11-13）「无论往哪放，就放到最后一个位置上」**：把玩家点的格子
+   * 解析成这张牌的**最终落点**。判据只有这一处，`playCardOf`（落牌）与
+   * `ArenaApp.moveCardDrag`（影子）都调它，所以永远「影子在哪就落在哪」。
+   *
+   * 口径（用户 P-096 两句其实是同一件事的两半，不冲突）：
+   * - 点的格子本来就合法 ⇒ 原地，**零额外扫描**；
+   * - 建筑卡点了个放不下的格子、且全场**只剩最后一处空位** ⇒ 吸附过去；
+   * - 一处空位都没有 ⇒ 返回 null ⇒ 拒绝生成（P-096「场地已满」红线不变）；
+   * - 还有 2 处以上空位 ⇒ 不吸附，照旧回「这格被占了」——
+   *   否则开局手滑点一下，楼会瞬移到地图另一头，那才叫见鬼。
+   *
+   * 军队卡不参与：它们是 1×1、要落在玩家指定的行军起点，吸附没有意义。
+   */
+  snapCellOf(p: PlayerSlot, slot: number, col: number, row: number): GridPos | null {
+    const card = p.hand[slot];
+    const at = { col, row };
+    if (!card || card.kind !== 'building') return at;
+    const spec = BUILDING_SPECS[card.building!];
+    if (this.buildingPlacementIssue(p.side, col, row, spec.cols, spec.rows) === null) return at;
+    const free = this.freeCellsFor(p.side, spec.cols, spec.rows);
+    if (free.length === 0) return null;
+    if (free.length === 1) return free[0]!;
+    return at;
+  }
+
   /** 这一侧还有没有能放下任意建筑（3×3 或 4×3）的空位。 */
   buildingRoom(side: Side): boolean {
     return this.scanRoom(side, 3, 3) || this.scanRoom(side, 4, 3);
@@ -762,11 +807,18 @@ export class ArenaWorld {
    * 只有**金币和手牌**按玩家槽走 —— 谁掏钱、谁那张牌进冷却。
    */
   playCardOf(p: PlayerSlot, slot: number, col: number, row: number): PlayResult {
-    const problem = this.placementProblem(p, slot, col, row);
+    /**
+     * P-098：先把玩家点的格子解析成最终落点（只剩一处空位时吸附过去）。
+     * 放在 `playCardOf` 而不是 UI 里，是为了让 AI / 测试 / 点击 / 拖拽四条路
+     * 都走同一条规则；`placementProblem` 也用解析后的格子，不会算出两套账。
+     */
+    const target = this.snapCellOf(p, slot, col, row);
+    if (!target) return { ok: false, reason: '场地已满 · 这座楼放不下了' };
+    const problem = this.placementProblem(p, slot, target.col, target.row);
     if (problem) return { ok: false, reason: problem };
     const card = p.hand[slot]!;
 
-    this.execute(p, card, col, row);
+    this.execute(p, card, target.col, target.row);
     // 这栋楼落地后可能刚好把最后一处空位占掉：手里剩下的建筑卡立刻换成军队卡
     this.purgeLocked(p.side);
     // 打出去就进冷却，冷却完补一张新的（配卡组以后再做）

@@ -820,8 +820,11 @@ export class ArenaApp {
   /** 真正落一张牌：点击放置和拖拽放置走同一条路（判据在 world.playCardOf）。 */
   private playAt(slot: number, cell: GridPos, player = 0): boolean {
     const p = this.playerAt(player);
+    // P-098：先解析最终落点，后面的「后勤配齐了」提示才能在**真正落楼的那格**找楼。
+    // 判据与落牌同源（world.snapCellOf），playCardOf 里再解析一次是幂等的。
+    const target = this.world.snapCellOf(p, slot, cell.col, cell.row) ?? cell;
     const staffedBefore = this.world.staffedCount(p.side);
-    const res = this.world.playCardOf(p, slot, cell.col, cell.row);
+    const res = this.world.playCardOf(p, slot, target.col, target.row);
     if (!res.ok) {
       this.opts.onToast?.(res.reason ?? '放不下', 'warn');
       return false;
@@ -830,7 +833,7 @@ export class ArenaApp {
     this.syncBuildings(0);
     // 后勤提示：兵营要 1 磨坊 + 1 民居；塔要 1 座民居（2026-10-31 起防御建筑也占民居）。
     // 缺什么直接点名 —— 玩家看到"塔不开火"时不该自己去猜为什么。
-    const placed = this.buildingAtCell(cell);
+    const placed = this.buildingAtCell(target);
     if (placed && needsStaffing(placed.kind) && !this.world.isStaffed(placed.id)) {
       this.opts.onToast?.(
         placed.kind === 'barracks' ? '兵营要 1 磨坊 + 1 民居才会出兵' : '这座塔要 1 座民居才开火',
@@ -930,8 +933,9 @@ export class ArenaApp {
   }
 
   /**
-   * 影子跟随指针（P-096 吸附）：
+   * 影子跟随指针（P-096 吸附 + P-098 落点吸附）：
    * - 指针在场地上 → 记下这一格，影子跟过去（合法绿 / 非法红）；
+   * - P-098：全场只剩最后一处空位时，影子直接跳到那一格（`snapCellOf`）；
    * - 指针滑出场地 → **影子不消失**，继续停在最后那一格；
    * - 只有从那一格再拉出 `DRAG_HIDE_PX` 那么远，才收掉影子、放弃本次放置。
    *
@@ -945,7 +949,13 @@ export class ArenaApp {
     // 触屏：影子在手指前方（上方），手指不挡预览；桌面鼠标偏移 0
     const cell = this.dragCell(clientX, clientY, pointerType);
     if (cell) {
-      drag.lastCell = cell;
+      /**
+       * P-098：影子必须显示**最终落点**。全场只剩最后一处空位时 `snapCellOf`
+       * 会把落点吸附过去，影子跟着跳到那儿 —— 否则就成了「影子在 A、楼落在 B」，
+       * 直接违反 P-096 的「影子在哪落哪」。判据与 playCardOf 同源。
+       */
+      const target = this.world.snapCellOf(p, drag.slot, cell.col, cell.row);
+      drag.lastCell = target ?? cell;
       drag.lastClient = { x: clientX, y: clientY };
       drag.hidden = false;
     } else if (drag.lastCell && drag.lastClient) {

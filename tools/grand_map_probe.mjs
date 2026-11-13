@@ -379,7 +379,7 @@ try {
       overviewShot === base.viewRange?.lg && backZoom === 34,
     '旧 UI 顶栏': base.topbar && base.oldTopbar && !base.topbarGold,
     '金币条回到手牌下方': base.bank && base.bankText !== '',
-    '调试抽屉默认展开': base.debugOpen === true,
+    '调试抽屉默认收起': base.debugOpen === false,
     '点击地面插旗': rallyProbe.drop && rallyProbe.flag?.col === rallyProbe.expectedFlag.col && rallyProbe.flag?.row === rallyProbe.expectedFlag.row,
     '军队卡出兵': rallyProbe.played?.ok === true && rallyProbe.unitsAfter > rallyProbe.unitsBefore,
     '士兵真的往旗子走': rallyProbe.moved > 1,

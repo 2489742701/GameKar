@@ -28,12 +28,16 @@ const OVERVIEW = M.VIEW[M.SIZE];
 const CHEST_EVERY = R.SPEC.chest.everySeconds;
 
 /**
- * ⚠️ 待改回（用户 2026-11-09：「调试的话，我现在可以用，但是后面也要改回来呀」）。
- * 时段切换 / 巡游 / 推进 / 重置 / 读数这些**测试控件**全在 `.gm-debug` 抽屉里，
- * 现在默认展开方便调试；正式版把这一行改成 false（或整块删掉 + 移除顶栏「调试」按钮）即可。
+ * **P-098（2026-11-13）已改回默认收起。**
+ * 用户 2026-11-09：「调试的话，我现在可以用，但是后面也要改回来呀」——
+ * 开发期为了一开页面就能点时段/巡游/推进，这里曾经是 true；现在收口成 false，
+ * 想调试点顶栏那颗「调试」按钮即可，控件本身一个没删。
  * 主程序自己的开发者模式仍是默认关、设置页开关，本模组没有动它。
+ *
+ * ⚠️ 别再改回 true：`tests/mod_api_20261109.test.ts` 与 `tools/grand_map_probe.mjs`
+ * 都钉着「默认收起」。要彻底去掉调试能力就整块删掉 + 移除顶栏按钮。
  */
-const DEBUG_DEFAULT_OPEN = true;
+const DEBUG_DEFAULT_OPEN = false;
 
 const CSS = `
 .gm * { box-sizing: border-box; }
@@ -54,7 +58,7 @@ const CSS = `
           border:1px solid #3b4d68; background:#1b2740; color:#e8edf7; padding:3px 8px; }
 .gm-sizes button[data-on="1"], .gm-debug button[data-on="1"] {
           background:#8a6a2e; border-color:#d8b25c; }
-/* 调试控件集中在这里：现在默认展开方便用，后面要改回只需动 DEBUG_DEFAULT_OPEN */
+/* 调试控件集中在这里；P-098 起默认收起，点顶栏「调试」按钮展开 */
 .gm-debug { position:absolute; right:10px; top:52px; width:min(300px,92vw);
             padding:8px 10px; border-radius:10px; pointer-events:auto;
             background:rgba(12,20,35,.94); border:1px solid rgba(216,178,92,.35); }

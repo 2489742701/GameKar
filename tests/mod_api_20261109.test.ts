@@ -373,15 +373,15 @@ describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
     expect(src).not.toContain('class="gm-top"><h2>');
   });
 
-  it('调试控件收在一处，且明确标了「后面要改回」', () => {
+  it('P-098：调试抽屉默认收起，控件仍集中在一处、按钮还在', () => {
     const src = view();
-    const raw = read('public/mods/grand-map/view.js');
-    expect(src).toContain('DEBUG_DEFAULT_OPEN = true');
-    expect(raw).toContain('待改回'); // 注释里的说明文字要从原文读，结构锁才不误伤
+    expect(src).toContain('DEBUG_DEFAULT_OPEN = false');
+    expect(src).not.toContain('DEBUG_DEFAULT_OPEN = true');
     expect(src).toContain('data-debug');
     expect(src).toContain('data-action="debug"');
-    // 反证：时段按钮散在顶栏（不在调试抽屉里）必须被抓到
     expect(src).toContain('class="gm-debug"');
-    expect(src).toContain('DEBUG_DEFAULT_OPEN');
+    // 反证：把默认值改回 true，这条锁必须红（开发期那个"一开就展开"不能复活）
+    expect(src.replace('DEBUG_DEFAULT_OPEN = false', 'DEBUG_DEFAULT_OPEN = true'))
+      .toContain('DEBUG_DEFAULT_OPEN = true');
   });
 });

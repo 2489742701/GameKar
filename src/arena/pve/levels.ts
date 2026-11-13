@@ -98,7 +98,15 @@ export const PVE_LEVEL_OUTPOST: PveLevel = {
         { unitId: 'spearman', count: 5, row: 22 },
         { unitId: 'crossbowman', count: 2, row: 15 },
         { unitId: 'shieldbearer', count: 1, row: 10 },
-        { unitId: 'orc', count: 3, row: 4 },
+        /**
+         * P-098（2026-11-13）：精英波次的兽人按 P-095 的对空口径混编 ——
+         * 卡池里「兽人 / 兽人大队」是 [orc + orcThrower]，这里之前孤零零 3 个纯近战
+         * 是历史遗留（`AA_SOURCES` 那轮只改了卡池，没改波次表）。
+         * **总人数仍是 3**（2 近 + 1 远），`levelSize()` 与整关怪总数锁不受影响；
+         * 投矛手单独站 row 6，别和 row 4 的两个近战叠成一坨。
+         */
+        { unitId: 'orc', count: 2, row: 4 },
+        { unitId: 'orcThrower', count: 1, row: 6 },
         { unitId: 'mobileCannon', count: 1, row: 26 },
       ],
     },
