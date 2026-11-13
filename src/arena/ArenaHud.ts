@@ -216,6 +216,8 @@ export class ArenaHud {
     dim: HTMLInputElement;
     dimNum: HTMLElement;
     follow: HTMLButtonElement;
+    /** P-099：昼夜跟随时间轴的开关 */
+    dayClock: HTMLButtonElement;
   };
 
   constructor(
@@ -741,7 +743,7 @@ export class ArenaHud {
     };
 
     const tilt = slider('微缩景深', '越高越糊。默认偏高，镜头拉近时还会自动再加一点。', this.app.tiltKnob, (v) => this.app.setTilt(v));
-    const dim = slider('氛围压暗', '夕阳 / 夜晚预留。0 = 白天，两根都归零就不跑后期。', this.app.dim, (v) => this.app.setDim(v));
+    const dim = slider('氛围压暗', '0 = 白天。拖这根会切到手动；想从早打到晚就把下面的自动开关打开。', this.app.dim, (v) => this.app.setDim(v));
 
     const row = make('div', 'ahud__opt');
     const txt = make('div', 'ahud__opt__txt');
@@ -758,7 +760,25 @@ export class ArenaHud {
     row.append(txt, follow);
     box.append(row);
 
-    this.postControls = { tilt: tilt.input, tiltNum: tilt.num, dim: dim.input, dimNum: dim.num, follow };
+    /** P-099：昼夜时间轴开关。默认开 —— 一局从白天打到夕阳再入夜。 */
+    const dayRow = make('div', 'ahud__opt');
+    const dayTxt = make('div', 'ahud__opt__txt');
+    dayTxt.append(
+      make('span', 'ahud__opt__name', '昼夜 · 自动'),
+      make('span', 'ahud__opt__desc', '跟着对局时间从早打到晚；关掉就只看上面那根压暗滑杆。'),
+    );
+    const dayClock = make('button', 'ahud__opt__btn') as HTMLButtonElement;
+    dayClock.type = 'button';
+    dayClock.addEventListener('click', () => {
+      this.app.setDayClock(!this.app.dayClock);
+      this.paintPostOptions();
+    });
+    dayRow.append(dayTxt, dayClock);
+    box.append(dayRow);
+
+    this.postControls = {
+      tilt: tilt.input, tiltNum: tilt.num, dim: dim.input, dimNum: dim.num, follow, dayClock,
+    };
     this.paintPostOptions();
     return box;
   }
@@ -775,6 +795,9 @@ export class ArenaHud {
     c.dimNum.textContent = this.app.dim.toFixed(2);
     c.follow.dataset['on'] = String(this.app.tiltFollowsCamera);
     c.follow.textContent = this.app.tiltFollowsCamera ? '跟随 · 开' : '跟随 · 关';
+    // P-099：自动模式下 dim 每帧在动，10Hz 刷新会让滑杆跟着时间轴走
+    c.dayClock.dataset['on'] = String(this.app.dayClock);
+    c.dayClock.textContent = this.app.dayClock ? '自动 · 开' : '自动 · 关';
   }
 
   /** 工具行按钮 + 设置面板开关，读同一个 `autoPilot.state`。 */

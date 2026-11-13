@@ -35,9 +35,11 @@
  * P-082 后 composer 空转相对直出应约 **0%**；dim=1 相对 composer 空转约 −50.7%
  * （压暗系数一个数没动，变的只是直出基线不再比后期暗 10%）。
  *
- * **dim 是刻意留的接口，不是残余效果**：用户后续要做「10 分钟一大局，从早上打到晚上」
- * 的夕阳 / 夜晚。到时候时间轴只要调 `ArenaApp.setDim(t)`，白天 0 仍然是零后期开销。
- * 色温（暖橙 / 冷蓝）等第二个昼夜用例出现再加，这一版只做曝光。
+ * **dim 是刻意留的接口，不是残余效果**：P-099（2026-11-13）把
+ * 「10 分钟一大局，从早上打到晚上」的时间轴接上了 —— 曲线在 `visuals/dayCycle.ts`，
+ * `ArenaApp` 每帧把 `dim` 与 `tint` 一起灌进来，白天 0 仍然是零后期开销。
+ * 色温这第二个用例出现后才加的 `tint` 通道：只是一层显示空间乘法，
+ * 不动 3D 光照、不碰老模式，tint=(1,1,1) 时亮度闸门仍是 0%。
  *
  * 关键：实际生效值 `tiltEffective` 为 0 且 `dim = 0` 时 ArenaApp 会**完全跳过 composer**，
  * 直接 renderer.render —— 把景深滑杆拉到 0、压暗也归零的人一帧额外开销都没有。
@@ -62,6 +64,11 @@ export interface TiltShiftShaderDef {
     amount: { value: number };
     /** 昼夜氛围压暗：独立通道，0 = 白天/不改画面 */
     dim: { value: number };
+    /**
+     * P-099 昼夜色温乘子（显示空间）：(1,1,1) = 白天不改色。
+     * 由 `visuals/dayCycle.ts` 的同一条曲线算出来，shader 里不另写一套插值。
+     */
+    tint: { value: THREE.Vector3 };
     resolution: { value: THREE.Vector2 };
     focusY: { value: number };
     focusWidth: { value: number };
@@ -75,6 +82,7 @@ export const TILT_SHIFT_SHADER: TiltShiftShaderDef = {
     tDiffuse: { value: null },
     amount: { value: 0 },
     dim: { value: 0 },
+    tint: { value: new THREE.Vector3(1, 1, 1) },
     resolution: { value: new THREE.Vector2(1, 1) },
     /** 清晰带中心（屏幕纵向 0~1）；0.48 略偏高，正好压在建筑线上 */
     focusY: { value: 0.48 },
@@ -92,6 +100,7 @@ export const TILT_SHIFT_SHADER: TiltShiftShaderDef = {
     uniform sampler2D tDiffuse;
     uniform float amount;
     uniform float dim;
+    uniform vec3 tint;
     uniform vec2 resolution;
     uniform float focusY;
     uniform float focusWidth;
@@ -126,12 +135,15 @@ export const TILT_SHIFT_SHADER: TiltShiftShaderDef = {
       float lum = dot(base.rgb, vec3(0.299, 0.587, 0.114));
       base.rgb = mix(vec3(lum), base.rgb, 1.0 + 0.22 * amount);
 
-      // ---- 昼夜氛围：与景深强度完全解耦（后续 10 分钟大局的夕阳/夜晚入口）----
+      // ---- 昼夜氛围：与景深强度完全解耦（P-099 时间轴接进来了）----
+      // tint 恒为 (1,1,1) 时是单位乘法，白天一滴颜色都不改、亮度闸门照旧 0%。
+      // 色温来自 dayCycle.ts 的同一条曲线，不在 GLSL 里另算一遍插值。
       if (dim > 0.001) {
         vec2 off = vUv - 0.5;
         float vignette = 1.0 - dim * ${DIM_SHADE.vignette.toFixed(2)} * dot(off, off) * 3.0;
         base.rgb *= (1.0 - dim * ${DIM_SHADE.exposure.toFixed(2)}) * vignette;
       }
+      base.rgb *= tint;
 
       gl_FragColor = base;
     }
@@ -141,6 +153,8 @@ export const TILT_SHIFT_SHADER: TiltShiftShaderDef = {
 export const TILT_KEY = 'gamekar.tilt.v1';
 /** 昼夜压暗独立存档：不和景深共用 key，调景深不会把昼夜档冲掉 */
 export const DIM_KEY = 'gamekar.dim.v1';
+/** P-099：昼夜是否跟随对局时间轴（默认开）。拖手动滑杆会自动切到「手动」。 */
+export const DAY_CLOCK_KEY = 'gamekar.dayClock.v1';
 /** 「景深跟随镜头」开关独立存档；默认开 */
 export const TILT_AUTO_KEY = 'gamekar.tiltAuto.v1';
 
@@ -215,4 +229,25 @@ export function loadDim(): number {
 
 export function saveDim(value: number): void {
   writeStored(DIM_KEY, value);
+}
+
+/**
+ * 昼夜时间轴开关：默认**开**（P-099 起一局从早打到晚）。
+ * 和 `loadTiltAuto` 同一套写法：只有显式存了 '0' 才算关，没存档 / 无头环境都当开。
+ * 拖手动滑杆会调 `setDim()` 自动切成「手动」，否则下一帧就被时间轴覆盖回去。
+ */
+export function loadDayClock(): boolean {
+  try {
+    return localStorage.getItem(DAY_CLOCK_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function saveDayClock(on: boolean): void {
+  try {
+    localStorage.setItem(DAY_CLOCK_KEY, on ? '1' : '0');
+  } catch {
+    // 存不下不影响这一局
+  }
 }

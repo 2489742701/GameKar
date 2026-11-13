@@ -159,6 +159,23 @@ try {
     return { png, stats: pngStats(png) };
   };
 
+  /**
+   * P-099：以前这里没做启动校验 —— 端口写错 / 预览服务没起，页面是空白的，
+   * `window.arena` 不存在 ⇒ setDim 全是 no-op ⇒ 五档读数一模一样 ⇒
+   * 「GATE PASS 0.00%」是**假绿**。先确认 app 真的活着，再谈亮度。
+   */
+  const booted = await ev(`(() => {
+    const a = window.arena;
+    return { ok: !!a, hasDim: typeof a?.setDim === 'function', url: location.href };
+  })()`);
+  if (!booted?.ok || !booted?.hasDim) {
+    console.log('GATE FAIL: arena 没起来，闸门不许给假绿。', JSON.stringify(booted));
+    console.log('  用法：先 npm run pc:serve（默认 4173），或 PROBE_URL=http://127.0.0.1:4188/arena.html?auto=1');
+    process.exitCode = 1;
+    throw new Error('arena 没起来');
+  }
+  console.log('BOOT OK:', JSON.stringify(booted));
+
   if (process.env.PROBE_INIT) {
     console.log('PROBE_INIT:', JSON.stringify(await ev(process.env.PROBE_INIT)));
   }

@@ -23,13 +23,16 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import {
   TILT_SHIFT_SHADER,
   TILT_ZOOM_SLOPE,
+  loadDayClock,
   loadDim,
   loadTilt,
   loadTiltAuto,
+  saveDayClock,
   saveDim,
   saveTilt,
   saveTiltAuto,
 } from './visuals/tiltShift';
+import { dayPhaseAt, dayPhaseFromDim, dayTotalSeconds, type DayPeriod } from './visuals/dayCycle';
 import { RepairButtons } from './visuals/repairButtons';
 import { installArenaBackdrop } from './visuals/backdrop';
 import { Viewport } from '@engine/viewport/Viewport';
@@ -330,10 +333,16 @@ export class ArenaApp {
   private tiltEffective = 0;
   /**
    * 昼夜氛围压暗 0~1，默认 0（白天）。**和景深完全解耦**：
-   * 用户 2026-11-08 明确"景深不该让画面变暗，但变暗要留着"，后续
-   * 「10 分钟一大局从早打到晚」的时间轴只要调 `setDim(t)` 即可。
+   * 用户 2026-11-08 明确"景深不该让画面变暗，但变暗要留着"。
+   * P-099 起这个值每帧由 `dayCycle.ts` 的时间轴写（自动模式），或由 `setDim()` 写（手动）。
    */
   private dimAmount = loadDim();
+  /** P-099：昼夜是否跟随 `world.elapsed`。默认开；拖手动滑杆自动切成关。 */
+  private dayClockOn = loadDayClock();
+  /** 本帧时段，HUD 主题 / telemetry 都读它，不各自重算 */
+  private periodNow: DayPeriod = 'day';
+  /** 本帧归一化进度 0..1（调试 / telemetry 用） */
+  private dayProgress = 0;
   private composer?: EffectComposer;
   private tiltPass?: ShaderPass;
   /** 上一帧的结算状态：用来抓「这局结束了」这个瞬间（coin 已撤，2026-11-06） */
@@ -1108,6 +1117,8 @@ export class ArenaApp {
     this.director.update(info.delta, this.rig, this.fitZoom, center);
     // 导演刚更新完 zoom，这时读到的才是本帧机位；景深联动必须排在它之后
     this.syncTiltToCamera();
+    // P-099：昼夜时间轴排在 postFx 判定之前 —— 白天 dim=0，composer 该跳还是跳
+    this.syncDay();
     // 两个旋钮实际生效值都为 0 才直出，白天零后期开销
     const postFx = this.tiltEffective > 0.001 || this.dimAmount > 0.001;
     if (postFx && this.composer) this.composer.render(info.delta);
@@ -2281,6 +2292,42 @@ export class ArenaApp {
     return this.rig.zoom / Math.max(1e-6, this.fitZoom);
   }
 
+  /**
+   * **P-099 昼夜时间轴**：每帧从 `world.elapsed / 这一局总时长` 算出
+   * 时段 / 压暗 / 色温，一次性分给三个消费方，谁都不许自己另算一遍：
+   * ① shader 的 `dim` + `tint`；② `#arena-ui` 的 `data-period`（HUD 是 DOM，
+   * 不吃 WebGL 后期）；③ 设置页与 telemetry 的读数。
+   *
+   * 自动关掉时（用户拖了滑杆）反推同一条曲线，所以"手动调到 0.8"和
+   * "时间轴走到夜晚 0.8"看到的是同一套画面，不会出现两种夜晚。
+   * ⚠️ 自动模式**不写 localStorage**：每帧存一次档是灾难，`gamekar.dim.v1`
+   * 只记用户手动选的值。
+   */
+  private syncDay(): void {
+    const phase = this.dayClockOn
+      ? dayPhaseAt(
+          this.world.elapsed,
+          dayTotalSeconds(this.world.mode, this.world.pve?.level.seconds),
+        )
+      : dayPhaseFromDim(this.dimAmount);
+    this.applyDay(phase);
+  }
+
+  private applyDay(phase: ReturnType<typeof dayPhaseAt>): void {
+    this.dimAmount = phase.dim;
+    this.periodNow = phase.period;
+    this.dayProgress = phase.progress;
+    if (this.tiltPass) {
+      this.tiltPass.uniforms['dim']!.value = phase.dim;
+      (this.tiltPass.uniforms['tint']!.value as THREE.Vector3).set(
+        phase.tint[0], phase.tint[1], phase.tint[2],
+      );
+    }
+    // HUD 主题：白天把属性删掉（回到 day 默认），和大地图模组同一套 data-period 命名
+    if (phase.period === 'day') delete this.opts.container.dataset['period'];
+    else this.opts.container.dataset['period'] = phase.period;
+  }
+
   /** 设置页 / F2 现场调景深基准：0 = 关，1 = 最糊。**仍不改画面亮度**。 */
   setTilt(amount: number): void {
     this.tiltBase = Math.min(1, Math.max(0, amount));
@@ -2307,14 +2354,40 @@ export class ArenaApp {
   }
 
   /**
-   * 调试面板现场调昼夜压暗：0 = 白天（不改画面），1 = 最暗。
-   * 这一条是给后续「10 分钟一大局，从早打到晚」的时间轴留的入口 ——
-   * 到时把 `setDim(t)` 接到 `world.elapsed / MATCH 总时长` 上，白天仍是零后期开销。
+   * 设置页 / F2 手动调昼夜压暗：0 = 白天（不改画面），1 = 最暗。
+   *
+   * P-099：拖滑杆等于「我要自己定时刻」，自动切到手动并记进存档，
+   * 否则下一帧 `syncDay()` 就会把值覆盖回时间轴（滑杆看起来会自己弹回去）。
+   * 想回到「从早打到晚」点设置页那颗「昼夜 · 自动」开关。
+   *
+   * 注意自动模式走的是 `applyDay()`，**不调这里** —— 每帧写 localStorage 是灾难。
    */
   setDim(amount: number): void {
+    this.dayClockOn = false;
+    saveDayClock(false);
     this.dimAmount = Math.min(1, Math.max(0, amount));
     saveDim(this.dimAmount);
-    if (this.tiltPass) this.tiltPass.uniforms['dim']!.value = this.dimAmount;
+    this.applyDay(dayPhaseFromDim(this.dimAmount));
+  }
+
+  /** 昼夜是否跟随对局时间轴（设置页开关 / 探针读这个）。 */
+  get dayClock(): boolean {
+    return this.dayClockOn;
+  }
+
+  setDayClock(on: boolean): void {
+    this.dayClockOn = on;
+    saveDayClock(on);
+    if (on) this.syncDay(); // 切回自动立刻跟上当前时刻，别等下一帧
+  }
+
+  /** 本帧时段：HUD 主题已由 applyDay 落到 DOM，这个 getter 给 telemetry / 探针用。 */
+  get dayPeriod(): DayPeriod {
+    return this.periodNow;
+  }
+
+  get dayProgressValue(): number {
+    return this.dayProgress;
   }
 
   get dim(): number {
@@ -2347,6 +2420,9 @@ export class ArenaApp {
       tiltAuto: this.tiltAuto,
       zoomRatio: this.zoomRatio,
       dim: this.dimAmount,
+      dayPeriod: this.periodNow,
+      dayClock: this.dayClockOn,
+      dayProgress: Number(this.dayProgress.toFixed(3)),
       dpr: this.viewport.snapshot.dpr,
     };
   }
