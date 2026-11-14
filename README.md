@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 323 条回归
+npm run check        # 类型检查 + 914 条回归
 npm run build        # 产物在 dist/，three 单独分包
 ```
 
