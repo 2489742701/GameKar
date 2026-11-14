@@ -24,6 +24,10 @@ Desktop.ini
 # 一次性探针与临时读数，不属于回归套件
 .scratch/
 
+# 改素材/大改前的本地快照（含 51MB zip + 51MB git bundle，别进仓库）
+# 备份方法见 backups/*/MANIFEST.md；想长期保存请自行拷到项目外
+backups/
+
 # 本机工具缓存与项目记忆（.workbuddy 是 WorkBuddy 的工作区记忆，不是游戏代码）
 .codegraph/
 .workbuddy/
