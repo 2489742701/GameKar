@@ -43,19 +43,39 @@ function hit(w: ArenaWorld, b: ArenaBuilding, attack = 100): void {
   w['hurtBuilding'](b, attack);
 }
 
-describe('P-081 数值：时间拉长，总回血量守恒', () => {
-  it('脱战 4 秒自动开工、一段 8 秒、每秒 6.4%、大本营排除', () => {
+describe('维修数值：时间拉长 → 再放慢 (P-081 → P-105)', () => {
+  it('脱战 4 秒自动开工、一段 8 秒、每秒 3.8%、大本营排除', () => {
     expect(REPAIR.idleSeconds).toBe(4);
     expect(REPAIR.seconds).toBe(8);
-    expect(REPAIR.fractionPerSecond).toBe(0.064);
+    // 2026-11-16 P-105：用户加了 150 伤导弹之后要"维修的速度更慢一点"，
+    // fractionPerSecond 0.064 → 0.038
+    expect(REPAIR.fractionPerSecond).toBe(0.038);
     expect(REPAIR.excludeCore).toBe(true);
   });
 
-  /** 反证：谁要是把回血率也一起拉长，这条会红 —— 那就不是"时间变长"而是加平衡了。 */
-  it('反证：8 × 0.064 与旧版 3.2 × 0.16 完全相等（都是 51.2%）', () => {
-    expect(REPAIR.seconds * REPAIR.fractionPerSecond).toBeCloseTo(3.2 * 0.16, 10);
-    expect(REPAIR.seconds).toBeGreaterThan(3.2);
-    expect(REPAIR.fractionPerSecond).toBeLessThan(0.16);
+  /**
+   * **P-081 与 P-105 是两件不同的事，别混起来**：
+   * - P-081（11-08）只拉长**过程**，一段的总回血量守恒在 51.2%（8×0.064 = 3.2×0.16）；
+   * - P-105（11-16）**真的降了总量**：8 × 0.038 = 30.4%，比 51.2% 少四成。
+   *
+   * 这一轮必须降总量：导弹 150 伤打箭塔（520 血）是 28.8% 一发，
+   * 如果回血还是 51.2%/段，一发导弹不到两段就自己长回来了 —— 那张 20 金等于白打。
+   */
+  it('★ 现在一段的总回血量是 30.4%，**不再**守恒于旧版 51.2%', () => {
+    const perSegment = REPAIR.seconds * REPAIR.fractionPerSecond;
+    expect(perSegment).toBeCloseTo(0.304, 10);
+    // 明确断言"和旧版不相等" —— 防止有人照着 P-081 那条注释又把它改回去
+    expect(perSegment).not.toBeCloseTo(3.2 * 0.16, 3);
+    expect(perSegment, '必须明显慢于旧版，否则导弹白打').toBeLessThan(0.4);
+  });
+
+  it('反证：回血确实慢过导弹的一发（150 伤 ≈ 箭塔 28.8%）', () => {
+    // 一支箭塔 520 血：一发导弹掉 150×2.2/520 ≈ 63.5%？不 —— hurtBuilding 已含倍率，
+    // 这里只用"一段能修回多少"对比"一发打掉多少"的**比例口径**
+    const towerMax = 520;
+    const missileDrop = 150 * 2.2;               // 走 hurtBuilding 的实际掉血
+    const perSegmentHeal = towerMax * REPAIR.seconds * REPAIR.fractionPerSecond;
+    expect(missileDrop, '一发导弹应该打掉超过"一段能修回来"的量').toBeGreaterThan(perSegmentHeal);
   });
 });
 
@@ -71,7 +91,7 @@ describe('P-081 脱战到点自动开工（不用点任何按钮）', () => {
     expect(b.repairLeft).toBeGreaterThan(0);
   });
 
-  it('血真的在涨：一秒回 maxHp × 6.4%，动画不是假读数', () => {
+  it('血真的在涨：一秒回 maxHp × 3.8%，动画不是假读数', () => {
     const { w, b } = scene();
     hit(w, b);
     expect(b.hp).toBe(400 - damageOf(100 * 2.2, 0));

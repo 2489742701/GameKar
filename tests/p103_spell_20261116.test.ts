@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  CARDS, SPELL, cardById, FIELD, NO_BUILD,
+  CARDS, SPELL, cardById, FIELD, NO_BUILD, BUILDING_DAMAGE_SCALE,
   type ArenaCard,
 } from '@arena/config';
 import { iconOf } from '@arena/cardIcons';
@@ -359,6 +359,13 @@ describe('⑤ 命中走现有伤害入口，不另开一条结算路径', () => 
 });
 
 describe('伤害数值跟着 SPELL 走（基础版可调）', () => {
+  it('导弹是 150 伤（用户 2026-11-16："一发 150 伤"）', () => {
+    expect(SPELL.missile!.damage).toBe(150);
+    // 对楼实际伤害走 BUILDING_DAMAGE_SCALE：150 × 2.2 = 330
+    // 一座箭塔 520 血吃两发、磨坊 300 血一发带走 —— 这是"20 金该有的分量"
+    expect(SPELL.missile!.damage * BUILDING_DAMAGE_SCALE).toBeGreaterThan(300);
+  });
+
   it('兵吃到的伤害 = damageOf(法术伤害 × 对兵倍率, 该兵防御)', () => {
     const w = worldWith(SPELL_CARD);
     const foe = putUnit(w, 'red', FIELD.midCol, 10);

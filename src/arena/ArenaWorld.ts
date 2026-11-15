@@ -39,6 +39,7 @@ import {
   TOWER,
   UNIT,
   armySupplyOf,
+  cardWeightOf,
   BUILDING_LABEL,
   buildingLabelOf,
   buildingPopOf,
@@ -464,7 +465,19 @@ export class ArenaWorld {
       const buildings = pool.filter((c) => c.kind === 'building');
       if (buildings.length > 0) pool = buildings;
     }
-    return this.rng.pick(pool);
+    /**
+     * **建筑卡降权**（2026-11-16 用户："建筑卡现在刷出来的概率更少一些，
+     * 更多的军队帮忙处理一下"）。
+     *
+     * 上面两条保底（后勤缺口 / 手里没建筑卡）是**硬性**的，它们先跑 ——
+     * 这一层只影响"两条保底都没触发"时的自由发牌，所以不会把
+     * 「缺民居就补民居」那条主约束冲掉。
+     *
+     * 权重取 `AI.cardWeightOf`，1 = 军/法术，低于 1 = 建筑。
+     * 用 `rng.weighted` 而不是"先筛掉一部分"：后者会让 pool 大小随权重变，
+     * 抽卡序列的随机性被削弱（同一 seed 下出牌顺序会变得可预测）。
+     */
+    return this.rng.weighted({ items: pool.map((c) => ({ item: c, weight: cardWeightOf(c) })) });
   }
 
   /**
