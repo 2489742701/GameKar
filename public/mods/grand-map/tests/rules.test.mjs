@@ -1,7 +1,7 @@
 /**
- * 大地图规则层自测 —— 用 `node --test public/mods/grand-map/tests/*.mjs` 跑。
+ * 大地图规则层自测 —— 用 `npm run test:mod` 跑（已并入 `npm run check`）。
  *
- * 刻意不进主测试套件：模组是热插拔的，主套件不该执行模组代码
+ * 刻意不并进 vitest 主套件：模组是热插拔的，主套件不该执行模组代码
  * （见 `tests/mod_isolation_20261108.test.ts` 的隔离锁）。
  * 这里锁的是三轮口径里已经 `[定]` 的部分，数值一律从 SPEC 读，不写死。
  */

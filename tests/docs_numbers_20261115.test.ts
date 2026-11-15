@@ -1,0 +1,115 @@
+/**
+ * 文档数值锁（2026-11-15，P-101）—— README / 玩法说明里的数字必须和代码对得上。
+ *
+ * 起因：公开仓库前盘了一遍，README 有 **6 处**数字已经过期（金币上限 20→30、
+ * 开局 8→15、箭塔射程 6.8→7.8、炮塔 5.6→6.8、卡池 17→27 张、回归条数 497→914），
+ * 而它们全是**从 config.ts 抄过去**的。抄的时候是对的，改表的时候没人回头抄。
+ *
+ * 所以这里不查"文档写得好不好"，只查一件事：**文档里那些从代码抄来的数字还在不在原位**。
+ * 判据一律从真实的 config / 数据表读，不写死 —— 否则这条锁自己就是下一处漂移。
+ *
+ * ⚠️ 改数值时**两条路**：要么同步改 README / 玩法说明，要么把这里对应的断言删掉
+ * 并说明理由。不要为了让测试变绿去改文档里的错数 —— 那正好反过来了。
+ */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+import { BUILDINGS } from '@game/data/buildings';
+import { CARDS as OLD_CARDS } from '@game/data/cards';
+import { UNITS } from '@game/data/units';
+import { CARDS, ECONOMY, MATCH, NO_BUILD, TOWER, FIELD, ORC_LAIR, HAND } from '@arena/config';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const read = (p: string): string => readFileSync(ROOT + p, 'utf8');
+const readme = read('README.md');
+const guide = read('docs/玩法说明_20261106.md');
+
+/** 文档里"共 N 条回归"这类自述，实际条数由 vitest 自己保证，这里只锁两处口径一致 */
+describe('README：数据条目数与数据表一致', () => {
+  it('老模式：建筑 / 卡 / 兵种三行数字', () => {
+    const line = readme.split('\n').find((l) => l.includes('buildings.ts（'));
+    expect(line, 'README 目录里的 data/ 那一行不见了').toBeTruthy();
+    expect(line).toContain(`buildings.ts（${Object.keys(BUILDINGS).length} 种建筑）`);
+    expect(line).toContain(`cards.ts（${Object.keys(OLD_CARDS).length} 张卡`);
+    expect(line).toContain(`units.ts（${Object.keys(UNITS).length} 个兵种）`);
+  });
+
+  it('对战模式：卡池张数与 CARDS 一致', () => {
+    expect(readme).toContain(`**卡池${CARDS.length === 27 ? '二十七' : CARDS.length}张**`);
+  });
+
+  it('对战模式：卡表里每一张的价钱都和 CARDS 对得上', () => {
+    // ⚠️ 不能全文抠表格：`箭塔` 同时出现在**老模式三塔表**（伤害 8）和**对战卡表**（价 12），
+    // 全文扫会把两张表串起来。所以先切出卡表那一段，再逐行比对。
+    const block = readme.slice(readme.indexOf('**卡池'), readme.indexOf('- **建筑血条**'));
+    expect(block.length, '切不出卡表那一段，判据失效了').toBeGreaterThan(200);
+
+    const price = new Map(CARDS.map((c) => [c.name, c.cost]));
+    // 卡表是**三列并排**的（`| 民居 | 8 | 民兵集结 | 5 | 移动弩箭 | 10 |`），
+    // 所以不能按"行首第一对"抠 —— 一行里有三对。这个正则每对都吃，且不重叠。
+    const rows = [...block.matchAll(/\|\s*([^|\d][^|]*?)\s*\|\s*(\d+)\s*(?=\|)/g)];
+    const checked: string[] = [];
+    for (const [, rawName, rawCost] of rows) {
+      const name = rawName!.trim();
+      if (!price.has(name)) continue;
+      expect(Number(rawCost), `README 卡表「${name}」的价钱与 config.ts 不一致`).toBe(price.get(name));
+      checked.push(name);
+    }
+    // 卡表里 27 张必须**一张不漏**地出现且价钱对得上 —— 少一张就说明表漏了卡
+    expect(checked.sort()).toEqual([...price.keys()].sort());
+  });
+});
+
+describe('README：对战模式的关键数值', () => {
+  it('金币：上限 / 开局 / 每几秒跳一格', () => {
+    expect(readme).toContain(`**${ECONOMY.cap} 点金**`);
+    expect(readme).toContain(`上限 ${ECONOMY.cap}`);
+    expect(readme).toContain(`开局 ${ECONOMY.start}`);
+    expect(readme).toContain(`**每 ${ECONOMY.tickSeconds} 秒跳 +${ECONOMY.perTick}**`);
+  });
+
+  it('塔的射程：两座塔都和一 config 对齐', () => {
+    const arrow = TOWER.arrow.range;
+    const cannon = TOWER.cannon.range;
+    expect(readme, '箭塔射程写错了').toContain(`箭塔射程 ${arrow}`);
+    expect(readme, '炮塔射程写错了').toContain(`炮塔 ${cannon}`);
+    expect(readme, `跨中线射程那句还留着旧值`).toContain(`箭塔边缘射程 ${arrow}`);
+  });
+
+  it('禁建带宽度 / 地图列数', () => {
+    const width = NO_BUILD.halfWidth * 2 + 1;
+    expect(readme).toContain(`**${width} 列宽**`);
+    expect(readme).toContain(`${FIELD.midCol} ± ${NO_BUILD.halfWidth}`);
+    expect(readme).toContain(`${FIELD.cols} 列`);
+  });
+
+  it('一局的时长', () => {
+    // README 写的是「3 分钟一局」，不是「180 秒」—— 别把判据写成自己脑子里那种写法
+    expect(readme).toMatch(new RegExp(`\\*\\*${MATCH.seconds / 60} 分钟一局`));
+  });
+
+  it('手牌张数', () => {
+    const cn = ['零', '一', '二', '三', '四', '五', '六'];
+    expect(readme).toContain(`**${cn[HAND.size]}张手牌**`);
+  });
+
+  it('兽人巢穴的价钱在卡表里是最新的（它是最后一个加进来、最容易漏的）', () => {
+    const line = readme.split('\n').find((l) => l.includes('| 兽人巢穴 |'));
+    expect(line, 'README 卡表里没有兽人巢穴这一行').toBeTruthy();
+    expect(line).toContain(`| ${ORC_LAIR.cost} |`);
+  });
+});
+
+describe('玩法说明：面向玩家的那份也不能漂', () => {
+  it('金币上限 / 开局与 config 一致', () => {
+    // 玩法说明写的是「开局 15 金、上限 30」这类口语，抠数字比对
+    expect(guide).toMatch(new RegExp(`(开局|初始).{0,6}${ECONOMY.start}`));
+  });
+
+  it('常规时间与加时上限与 MATCH 一致', () => {
+    const total = MATCH.seconds + MATCH.overtimeSeconds;
+    expect(guide).toContain(`${MATCH.seconds / 60} 分钟`);
+    expect(guide).toContain(`总 ${total / 60} 分钟`);
+  });
+});
