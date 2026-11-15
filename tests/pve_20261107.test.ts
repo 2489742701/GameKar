@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ArenaWorld } from '@arena/ArenaWorld';
-import { FIELD, PVE_FIELD, SUPPLY } from '@arena/config';
+import { FIELD, PVE_FIELD, SUPPLY, cardById } from '@arena/config';
 import { PVE_LEVELS, pveLevel } from '@arena/pve/levels';
 import { levelSize, waveSize } from '@arena/pve/waves';
 
@@ -286,6 +286,19 @@ describe('双人同屏：两个钱包、两副手牌，谁也不动谁的', () =
     const w = new ArenaWorld({ mode: 'pve', level: LEVEL.id, players: 2 });
     w.players[0]!.gold = 20;
     w.players[1]!.gold = 20;
+    /**
+     * ⚠️ **必须先把两人的 slot 0 都钉成"占格的卡"**（建筑/军队）。
+     *
+     * 原来这条靠随机发牌，P-104 加了法术卡之后会**偶发变红**：法术卡不检查
+     * 格子占用（它本来就不落地，见 `placementProblem` 的 spell 分支），
+     * 抽到法术的玩家当然能"放在同一格" —— 那是正确行为，不是抢位失败。
+     * 所以这里显式给两张军队卡，测量点回到"占位冲突"本身。
+     */
+    w.players[0]!.hand[0] = cardById('archers');
+    w.players[1]!.hand[0] = cardById('archers');
+    w.players[0]!.cooldowns[0] = 0;
+    w.players[1]!.cooldowns[0] = 0;
+
     const at = spot(w, 0)!;
     expect(w.playCardOf(w.players[0]!, 0, at.col, at.row).ok).toBe(true);
     const gold1 = w.players[1]!.gold;

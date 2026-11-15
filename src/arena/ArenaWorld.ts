@@ -34,6 +34,7 @@ import {
   REROLL,
   RUIN,
   SPELL,
+  SPELL_FORGE,
   SUPPLY,
   TOWER,
   UNIT,
@@ -680,7 +681,7 @@ export class ArenaWorld {
   }
 
   /** 完工（build>=1）才算科技解锁；施工中的楼不干活（项目红线）。 */
-  hasBuilt(side: Side, kind: Extract<BuildingKind, 'barracks' | 'gearFactory' | 'orcLair'>): boolean {
+  hasBuilt(side: Side, kind: Extract<BuildingKind, 'barracks' | 'gearFactory' | 'orcLair' | 'spellForge'>): boolean {
     for (const b of this.buildings.values()) {
       if (b.side === side && b.kind === kind && b.hp > 0 && b.build >= 1) return true;
     }
@@ -723,12 +724,50 @@ export class ArenaWorld {
       if (!cache.has(key)) cache.set(key, this.scanRoom(side, spec.cols, spec.rows));
       return cache.get(key)!;
     }
+    /**
+     * **法术卡**（P-104）—— 不进科技链，但要看"这个模式里有没有它能打的东西"。
+     *
+     * 踩过的坑：PVE 里**没有敌方建筑**（连红方大本营都不生成），而导弹是专打楼的，
+     * 发到手上就是一张永远打不出去的废牌，白占一个手牌位。实测 12 局托管
+     * 从 9 胜掉到 7 胜，就是这么来的。
+     *
+     * 判据是 **"能不能打到任何一类当前存在的目标"**，不是"能不能打到楼"：
+     * - 导弹 `vsUnits: false` + 对面没楼 ⇒ 废牌，不发；
+     * - 火球 `vsUnits: true` 但对面没楼 ⇒ **照样发**（它还能打兵，只是对兵打折）；
+     * - 剑雨 `vsUnits: true` ⇒ 永远发。
+     *
+     * 早先写成"只要 vsBuildings 就查对面有没有楼"，把火球也在 PVE 里禁掉了 ——
+     * 那等于替玩家决定"火球没用"，而实际上它在 PVE 里是能用的次优解。
+     */
+    if (card.kind === 'spell') {
+      const spec = card.spell ? SPELL[card.spell] : null;
+      if (!spec) return false; // 配置错误：不存在的法术 id 不发
+      /**
+       * **剑雨要法术工厂**（2026-11-16 用户："箭雨不需要其他的，需要一个法术工厂"）。
+       * 表在 `TECH.forgeCards`，判据只留这一处；火球 / 导弹不设前置。
+       */
+      if (TECH.forgeCards.includes(card.id) && !this.hasBuilt(side, 'spellForge')) return false;
+      const canHitUnits = spec.vsUnits && spec.unitScale > 0;
+      const canHitBuildings = spec.vsBuildings && this.hasEnemyBuildingTarget(side);
+      return canHitUnits || canHitBuildings;
+    }
     if (card.id === TECH.militia) return true;
     // 飞行器 + 攻城车都要齿轮工厂（同一张表，见 config.TECH.factoryCards）
     if (TECH.factoryCards.includes(card.id)) return this.hasBuilt(side, 'gearFactory');
     // 兽人军队要兽人巢穴（2026-11-07 用户新增建筑）
     if (TECH.orcCards.includes(card.id)) return this.hasBuilt(side, 'orcLair');
     return this.hasBuilt(side, 'barracks');
+  }
+
+  /**
+   * 对面还有没有**可被法术打到**的常规建筑（大本营不算 —— 法术本来就打不到它）。
+   * 给 `techAllows` 的发牌裁量用，和 `castSpell` 的命中判据同一条口径。
+   */
+  hasEnemyBuildingTarget(side: Side): boolean {
+    for (const b of this.buildings.values()) {
+      if (b.side !== side && b.hp > 0 && b.kind !== 'core') return true;
+    }
+    return false;
   }
 
   /** HUD 小标：场地 > 兵营 > 工厂 > 兽人巢穴，按解锁顺序给下一句提示。 */
@@ -943,7 +982,7 @@ export class ArenaWorld {
   }
 
   /**
-   * 施放一次法术（P-103）。
+   * 施放一次法术（P-103；P-104 扩到"打兵 / 打楼 / 两样都打"三种分工）。
    *
    * 结算顺序刻意分成「先算命中、再统一结算」，而不是边遍历边打：
    * 后者会让**同一个目标被重复命中**（`this.units` 里同一帧可能被 push 进来两次），
@@ -952,6 +991,9 @@ export class ArenaWorld {
    * 只打**敌方**：打自己人与"花金币买伤害"的直觉相反，AI 也会误伤前排。
    * 命中判定用**圆心距离**（`Math.hypot`），不是格子的切比雪夫距离 ——
    * 半径 1.6 格要的是"贴在一起的一队兵"，圆比方更符合直觉。
+   *
+   * 三种法术的分工全在 `SPELL` 的 `vsUnits` / `vsBuildings` / `unitScale` 里，
+   * **这里一行数据都不写死**：加第四种法术只加一行表项。
    */
   private castSpell(side: Side, card: ArenaCard, col: number, row: number): void {
     const spec = card.spell ? SPELL[card.spell] : null;
@@ -959,18 +1001,20 @@ export class ArenaWorld {
     const at = cellToWorld(pos(col, row));
 
     // ① 先把命中清单定下来（此时还不动任何血）
-    const foes = this.units.filter(
-      (u) => u.side !== side && u.hp > 0 && Math.hypot(u.x - at.x, u.z - at.z) <= spec.radius,
-    );
+    const foes = spec.vsUnits
+      ? this.units.filter(
+        (u) => u.side !== side && u.hp > 0 && Math.hypot(u.x - at.x, u.z - at.z) <= spec.radius,
+      )
+      : [];
     /**
      * 只算 `BUILDING_SPECS` 里的常规建筑。
      *
      * ⚠️ **大本营（kind === 'core'）被显式排除**：它不在这张表里，本身也没有
-     * 「3×3 占地中心」这套口径。更重要的是**这是刻意的**：5 金的法术如果能砸
-     * 1200 血的主城，「拆家要靠推兵线」这条攻防抓手就废了。
+     * 「3×3 占地中心」这套口径。更重要的是**这是刻意的**：法术如果能砸
+     * 1200 血的主城，「拆家要靠推兵线」这条攻防抓手就废了 —— 20 金的导弹尤其危险。
      * 要改这一点得单独拍板，不能顺手加。
      */
-    const foeBuildings = spec.hitsBuildings
+    const foeBuildings = spec.vsBuildings
       ? [...this.buildings.values()].filter((b) => {
         if (b.side === side || b.hp <= 0 || b.kind === 'core') return false;
         // 建筑按**占地中心**算距离：3×3 的楼，圆心是它占格的中间那一格
@@ -982,8 +1026,17 @@ export class ArenaWorld {
       })
       : [];
 
-    // ② 统一结算：兵走 hurtUnit（吃防御），楼走 hurtBuilding（吃拆楼倍率）
-    for (const u of foes) this.hurtUnit(u, spec.damage);
+    // ② 统一结算：兵走 hurtUnit（吃防御 + 法术的对兵倍率），楼走 hurtBuilding（吃拆楼倍率）
+    //
+    // 对兵倍率**乘在这里**而不是改 spec.damage：楼不该跟着打折（拆楼有自己那条倍率）。
+    // `damageOf` 自带 max(1, …) 下限，所以 `unitScale: 0`（导弹）要给 0 就直接跳过 ——
+    // 否则 max(1, 0 - 防御) 仍会打出 1 点伤害，"打不到兵"就成了谎话。
+    const unitDamage = spec.damage * spec.unitScale;
+    if (unitDamage > 0) {
+      for (const u of foes) this.hurtUnit(u, unitDamage);
+    } else {
+      foes.length = 0; // 倍率 0 = 这一类根本不参战，别虚报命中数
+    }
     for (const b of foeBuildings) this.hurtBuilding(b, spec.damage, 'magic', side);
 
     // ③ 记账 + 通知视图层播特效（视图只读事件，不自己判命中）
@@ -1001,7 +1054,8 @@ export class ArenaWorld {
       t: 0,
       seconds: 0.55,
     });
-    this.noteSpell(`${side === 'blue' ? '蓝方' : '红方'}火球命中 ${foes.length} 兵 / ${foeBuildings.length} 楼`);
+    const label = card.name ?? '法术';
+    this.noteSpell(`${side === 'blue' ? '蓝方' : '红方'}${label}命中 ${foes.length} 兵 / ${foeBuildings.length} 楼`);
   }
 
   /**
@@ -2190,12 +2244,74 @@ export class ArenaWorld {
     if (card) this.play(p, action.slot, card);
   }
 
-  /** 把第 slot 张牌落到半场里一个随机空位。 */
+  /** 把第 slot 张牌落到半场里一个随机空位（法术走另一条：它要在对面找目标）。 */
   private play(p: PlayerSlot, slot: number, card: ArenaCard): void {
     if (slot < 0) return;
-    const cell = this.randomSpot(p.side, card);
+    const cell = card.kind === 'spell'
+      ? this.spellSpot(p.side, card)
+      : this.randomSpot(p.side, card);
     if (!cell) return;
     this.playCardOf(p, slot, cell.col, cell.row);
+  }
+
+  /**
+   * **AI 的法术落点**（P-104）—— 和 `randomSpot` 是两个完全不同的题。
+   *
+   * 为什么必须单独写：`randomSpot` 只在**自家半场**找空位（`lo/hi` 按 `midCol` 切），
+   * 而法术的落点必须越过中线才有价值。如果让 AI 复用 `randomSpot`，
+   * 它抽到法术卡会**永远放不出去**（落点在自己半场 ⇒ 打不到任何敌人 ⇒ 这张牌烂在手里），
+   * 而且 `randomSpot` 还要求"格子空着"，法术所在的位置往往正好有敌兵。
+   *
+   * 策略：在**敌方一侧**按网格采样候选落点，给每个候选打分 = 圈内目标数（按法术的
+   * `vsUnits` / `vsBuildings` 加权），挑最高的那个。**只打兵的剑雨不会往楼堆里丢**，
+   * 只打楼的导弹不会浪费在兵线上 —— 分工由 `SPELL` 表决定，这里不写死。
+   *
+   * 打分全为空（对面没有任何它打得到的敌人）⇒ 返回 `null`，**这张牌这轮不出**。
+   * 宁可烂在手里也不往空地上丢 20 金，这和玩家判断一致。
+   */
+  private spellSpot(side: Side, card: ArenaCard): { col: number; row: number } | null {
+    const spec = card.spell ? SPELL[card.spell] : null;
+    if (!spec) return null;
+
+    // 只在敌方一侧找：蓝方打 col 大的一半，红方打 col 小的一半
+    const cols = this.field.cols;
+    const lo = side === 'blue' ? this.field.midCol : 1;
+    const hi = side === 'blue' ? cols - 2 : this.field.midCol - 1;
+    if (hi < lo) return null;
+
+    // 每 2 格采一次样就够：半径都是 ≥1.6 格，再密只是重复命中同一批目标
+    const STEP = 2;
+    let best: { col: number; row: number; score: number } | null = null;
+    for (let col = lo; col <= hi; col += STEP) {
+      for (let row = 1; row < this.field.rows - 1; row += STEP) {
+        const at = cellToWorld(pos(col, row));
+        let score = 0;
+        if (spec.vsUnits) {
+          for (const u of this.units) {
+            if (u.side === side || u.hp <= 0) continue;
+            if (Math.hypot(u.x - at.x, u.z - at.z) <= spec.radius) score += 1;
+          }
+        }
+        if (spec.vsBuildings) {
+          for (const b of this.buildings.values()) {
+            if (b.side === side || b.hp <= 0 || b.kind === 'core') continue;
+            const bs = BUILDING_SPECS[b.kind];
+            const w = cellToWorld(pos(b.col + (bs.cols - 1) / 2, b.row + (bs.rows - 1) / 2));
+            const reach = spec.radius + Math.max(bs.cols, bs.rows) / 2;
+            if (Math.hypot(w.x - at.x, w.z - at.z) <= reach) {
+              // 楼给更高的权重：一发法术打掉一栋楼的价值远大于打死一个兵
+              score += 3;
+            }
+          }
+        }
+        if (score <= 0) continue;
+        // 同分时用 rng 打散，否则 AI 每一局都往同一个点丢，看起来像脚本
+        if (!best || score > best.score || (score === best.score && this.rng.next() < 0.35)) {
+          best = { col, row, score };
+        }
+      }
+    }
+    return best ? { col: best.col, row: best.row } : null;
   }
 
   /**
@@ -2513,6 +2629,20 @@ export class ArenaWorld {
       if (u.side !== side || u.hp <= 0) continue;
       bread += (u.breadCost ?? 1) * SUPPLY.unitBread;
       // 人口不再按活兵实时累加：借走的那笔记在 popDebt，兵死也不立刻销账
+    }
+    /**
+     * **法术工厂吃面包**（2026-11-16 用户："占用两个人口，一个面包"）。
+     *
+     * 这是第一座**有口粮开销的楼** ——  bisher 面包只被兵吃。所以判据单独写在这里，
+     * 不混进上面那个"按 buildingPopOf 累加"的循环（那循环算的是人口，不是粮）。
+     *
+     * 为什么不塞进 `BUILDING_POP`：那张表是**人口**表，语义不同；
+     * 混在一起以后想给某座楼单独调口粮就没地方放了。
+     * 口粮口径集中在 `SPELL_FORGE.breadCost` 一处。
+     */
+    for (const b of this.buildings.values()) {
+      if (b.side !== side || b.hp <= 0) continue;
+      if (b.kind === 'spellForge') bread += SPELL_FORGE.breadCost;
     }
 
     const debt = this.popDebt[side];

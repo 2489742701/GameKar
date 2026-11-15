@@ -61,9 +61,30 @@ describe('科技前置：默认 / 兵营 / 工厂（设计文档 A 节）', () =
   it('默认：刷新 12 次也只会出现民兵这一种军队卡', () => {
     const w = new ArenaWorld({ seed: 302 });
     const seen = seenAfterRerolls(w);
-    const army = [...seen].filter((id) => cardById(id)?.kind !== 'building');
+    /**
+     * ⚠️ 这里量的是**军队卡**的科技前置，不是"所有非建筑卡"。
+     *
+     * P-104 加了法术卡之后，旧写法 `kind !== 'building'` 会把火球也算进来，
+     * 于是"默认局只能出现民兵"被法术打破 —— 但那是**故意的设计**：
+     * 法术不属于军队，火球是基础牌（剑雨才要法术工厂，见下一条）。
+     * 所以显式排除 `spell`，判据回到"军队只要民兵"。
+     */
+    const army = [...seen].filter((id) => {
+      const k = cardById(id)?.kind;
+      return k !== 'building' && k !== 'spell';
+    });
     expect(army).toEqual([TECH.militia]);
     expect(w.techHint('blue')).toBe('需要军营解锁军队');
+  });
+
+  it('法术的科技前置：火球默认可发、剑雨要法术工厂', () => {
+    const w = new ArenaWorld({ seed: 302 });
+    // 火球是基础牌：没兵营、没法术工厂也能抽到
+    expect(w.techAllows('blue', cardById('fireball'))).toBe(true);
+    // 剑雨要法术工厂（2026-11-16 用户："箭雨不需要其他的，需要一个法术工厂"）
+    expect(w.techAllows('blue', cardById('arrowRain')), '没工厂不该发剑雨').toBe(false);
+    // 判据只留一张表：以后要让别的法术也吃工厂，加进这个数组即可
+    expect(TECH.forgeCards).toEqual(['arrowRain']);
   });
 
   it('盖好兵营：地面军队解锁，飞行器仍然不出现', () => {
@@ -201,8 +222,8 @@ describe('齿轮工厂 4×3（设计文档 C 节）', () => {
     expect(w.hasBuilt('blue', 'gearFactory')).toBe(true);
   });
 
-  it('卡池 28 张（P-093 商行 + P-103 火球术）；工厂不需要后勤配给', () => {
-    expect(CARDS).toHaveLength(28);
+  it('卡池 31 张（P-093 商行 + P-104 三种法术 + 法术工厂）；工厂不需要后勤配给', () => {
+    expect(CARDS).toHaveLength(31);
     const w = new ArenaWorld({ seed: 307 });
     const b = built(w, 'gearFactory');
     expect(w.isStaffed(b.id)).toBe(true); // 被动科技，不挂「缺民居」

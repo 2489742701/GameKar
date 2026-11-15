@@ -494,7 +494,9 @@ export const UNIT = {
 export type CardKind = 'building' | 'squad' | 'siege' | 'spell';
 
 /**
- * **法术牌**（2026-11-16，P-103）—— 用户："我们要加一个法术牌远程攻击"。
+ * **法术牌**（2026-11-16，P-103；P-104 扩到三种）—— 用户："我们要加一个法术牌远程攻击"，
+ * 之后追加："不同的法术，火球可以砸建筑，剑雨更适合砸军队，我们额外会准备一个导弹，
+ * 价值 20，可以炸毁敌人的一小片的建筑物"。
  *
  * 和前三种卡的本质区别：**不生成任何实体**。打出后立即在落点结算一次范围伤害，
  * 然后这张牌就没了（不占人口、不占面包、不吃后勤名额、不留兵）。
@@ -502,29 +504,76 @@ export type CardKind = 'building' | 'squad' | 'siege' | 'spell';
  * 三条口径先写死，免得后面到处各判各的：
  * 1. **可以落在对面半场**，也可以落在黄区 —— 否则"远程"两个字没意义。
  *    这是唯一能跨过中线直接造成伤害的卡（远程兵和塔都只能打到自己射程内）。
- * 2. **对楼也要吃 `BUILDING_DAMAGE_SCALE`**：走 `hurtBuilding()` 那一个入口，
+ * 2. **对楼要吃 `BUILDING_DAMAGE_SCALE`**：走 `hurtBuilding()` 那一个入口，
  *    和塔/兵拆楼同一条倍率，不给法术开小灶。
- * 3. **落点半径内敌我通吃还是只打敌方**：只打**敌方**。打自己人是惩罚，
- *    和"花金币买伤害"的直觉相反，而且 AI 会误伤自己的前排。
+ * 3. **只打敌方**。打自己人是惩罚，和"花金币买伤害"的直觉相反，而且 AI 会误伤自己的前排。
  *
- * ⚠️ 数值是**基础版占位**（用户 2026-11-16："先做基础版，数值后调"）。
+ * ## 三种法术的分工（P-104）
+ *
+ * 三类目标用**两个独立的开关**表达，而不是"伤害类型"：
+ * - `vsUnits` / `vsBuildings`：打不打兵、打不打楼；
+ * - `unitScale`：对兵的伤害倍率（剑雨 1.0、火球 0.55、导弹 0）。
+ *
+ * 为什么不用 `kind: 'antiUnit' | 'antiBuilding'`：海外那套"类型克制"要额外一张表，
+ * 而这里只有"打谁"和"多疼"两件事，两个布尔 + 一个倍率就说完了。
+ * 加第四种法术时只加一行数据，不用改逻辑。
+ *
+ * ⚠️ **都打不到大本营**（`ArenaWorld.castSpell` 里显式排除 `kind === 'core'`）：
+ * 20 金的导弹若能直接炸 1200 血主城，"拆家靠推兵线"这条攻防抓手就废了。
+ *
+ * ⚠️ 数值是基础版占位（用户 2026-11-16："先做基础版，数值后调"）。
  * 调的时候只改这里 + `CARDS` 里那张卡的 price，逻辑层不写死任何一个数。
  */
 export interface SpellSpec {
-  /** 伤害值（对兵走 damageOf 扣防御；对楼再乘 BUILDING_DAMAGE_SCALE） */
+  /** 基础伤害值（对兵会再乘 `unitScale` 并扣防御；对楼走 hurtBuilding 乘拆楼倍率） */
   damage: number;
   /** 作用半径（格）。以落点为圆心，圆内的敌方目标全部命中 */
   radius: number;
+  /** 打不打部队 */
+  vsUnits: boolean;
+  /** 打不打建筑（不含大本营） */
+  vsBuildings: boolean;
   /**
-   * 对建筑是否也生效。
-   * `true` = 拆楼也能用（当前口径）；`false` = 只打兵。
+   * 对**兵**的伤害倍率（0~1）。楼不吃这个 —— 拆楼有自己那条 `BUILDING_DAMAGE_SCALE`。
+   * 剑雨 = 1（专精），火球 = 0.55（通用所以对兵要打折），导弹 = 0（打不到兵）。
    */
-  hitsBuildings: boolean;
+  unitScale: number;
 }
 
 export const SPELL: Record<string, SpellSpec> = {
-  /** 火球：基础版。半径 1.6 格 ≈ 盖住一个 3×3 占地的中心，够打到贴在一起的一队兵 */
-  fireball: { damage: 26, radius: 1.6, hitsBuildings: true },
+  /**
+   * 火球术：**通用**。伤害中等、半径小，打兵打楼都行但都不专精。
+   * 用户口径："火球可以砸建筑" —— 所以 `vsBuildings` 为真，对兵打折留出专精度。
+   */
+  fireball: {
+    damage: 26,
+    radius: 1.6,
+    vsUnits: true,
+    vsBuildings: true,
+    unitScale: 0.55,
+  },
+  /**
+   * 剑雨：**专杀部队**。半径大、对兵满伤，但**打不到楼**。
+   * 用户口径："剑雨更适合砸军队"。
+   */
+  arrowRain: {
+    damage: 22,
+    radius: 2.2,
+    vsUnits: true,
+    vsBuildings: false,
+    unitScale: 1,
+  },
+  /**
+   * 导弹：**专拆建筑**，20 金。半径大、对楼高伤，但**打不到兵**。
+   * 用户口径："价值 20，可以炸毁敌人的一小片的建筑物"。
+   */
+  missile: {
+    damage: 40,
+    radius: 2.6,
+    vsUnits: false,
+    vsBuildings: true,
+    unitScale: 0,
+  },
 };
 
 export interface ArenaCard {
@@ -578,6 +627,24 @@ export interface ArenaCard {
  * ⚠️ 仍然**不配民居 / 磨坊**：`needsHouse()` 不列它，自动出兵也不加这道闸。
  */
 export const ORC_LAIR = { hp: 520, cost: 12, breadPerMan: 1 };
+
+/**
+ * **法术工厂**（2026-11-16，P-104）—— 用户："箭雨不需要其他的，需要一个法术工厂，
+ * 法国工厂是一个大大的干锅炉，旁边有个小房子。占用两个人口，一个面包"。
+ *
+ * 它是**剑雨的科技前置**：没有这座楼就抽不到剑雨（发牌裁量在 `ArenaWorld.techAllows`
+ * 读 `TECH.forgeCards`）。
+ *
+ * 口径：
+ * - 和兵营 / 齿轮工厂 / 兽人巢穴同一条"要干活的楼"红线 —— 占 2 人口；
+ * - **吃 1 份面包**（用户明确说的）：这是第一座**有口粮开销的楼**
+ *   （其它建筑都不吃面包，面包只被兵吃）。判据落在 `ArenaWorld.buildingBreadCost`，
+ *   别顺手塞进"民居名额"那套里 —— 那套问的是人手，不是粮；
+ * - 占地 3×3，模型是"大干锅炉 + 旁边一间小屋"。
+ *
+ * 声明位置必须在 `CARDS` **之前**：卡池里那张卡的 `cost` / 文案要读它。
+ */
+export const SPELL_FORGE = { hp: 420, breadCost: 1 };
 
 export const CARDS: ArenaCard[] = [
   {
@@ -804,13 +871,37 @@ export const CARDS: ArenaCard[] = [
     building: 'orcLair',
   },
   {
+    id: 'spellForge',
+    name: '法术工厂',
+    blurb: `大干锅炉 + 旁边一间小屋（3×3）。盖好后解锁剑雨。占 2 人口，还要吃 ${SPELL_FORGE.breadCost} 份面包。`,
+    kind: 'building',
+    cost: 12,
+    building: 'spellForge',
+  },
+  {
     id: 'fireball',
     name: '火球术',
     // 数字从 SPELL 读，不写死在卡面文案里：改数值时卡面不会留一个假读数
-    blurb: `对落点 ${SPELL.fireball!.radius} 格内的敌方部队与建筑造成一次伤害，可以越过中线。`,
+    blurb: `通用法术：${SPELL.fireball!.radius} 格内敌兵与建筑都吃伤害，对兵打折。可越过中线。`,
     kind: 'spell',
     cost: 5,
     spell: 'fireball',
+  },
+  {
+    id: 'arrowRain',
+    name: '剑雨',
+    blurb: `专杀部队：${SPELL.arrowRain!.radius} 格内敌兵满伤，打不到建筑。需法术工厂。可越过中线。`,
+    kind: 'spell',
+    cost: 8,
+    spell: 'arrowRain',
+  },
+  {
+    id: 'missile',
+    name: '导弹',
+    blurb: `专拆建筑：${SPELL.missile!.radius} 格内敌方建筑成片炸毁，打不到兵。可越过中线。`,
+    kind: 'spell',
+    cost: 20,
+    spell: 'missile',
   },
 ];
 
@@ -827,6 +918,7 @@ export const cardById = (id: string): ArenaCard => {
  */
 /** 齿轮工厂：第一栋 4×3 建筑（解锁空军），血厚一点、被动科技不配民居。 */
 export const GEAR_FACTORY = { hp: 700 };
+
 
 /** `ORC_LAIR` 定义在卡池之前（卡的 cost 要读它），这里不再重复声明。 */
 
@@ -847,6 +939,15 @@ export const TECH = {
   /** 兽人巢穴解锁全部兽人军队（2026-11-07 用户新增建筑） */
   orcLair: 'orcLair',
   orcCards: ['orcs', 'orcsBig'] as string[],
+  /**
+   * **法术工厂解锁剑雨**（2026-11-16 用户："箭雨不需要其他的，需要一个法术工厂"）。
+   *
+   * 只有剑雨要前置：火球是基础牌（谁都能发），导弹是贵价拆楼牌（也不设前置）。
+   * 所以这里用 `forgeCards` 单列，不走"全部法术"那条 —— 以后要再挂一张法术上来，
+   * 加进这个数组即可。
+   */
+  spellForge: 'spellForge',
+  forgeCards: ['arrowRain'] as string[],
 };
 
 export const BUILDING_SPECS = {
@@ -858,6 +959,7 @@ export const BUILDING_SPECS = {
   house: { cols: 3, rows: 3, hp: HOUSE.hp },
   gearFactory: { cols: 4, rows: 3, hp: GEAR_FACTORY.hp },
   orcLair: { cols: 3, rows: 3, hp: ORC_LAIR.hp },
+  spellForge: { cols: 3, rows: 3, hp: SPELL_FORGE.hp },
 } as const;
 
 /** 模型放大倍率：占到 3×3 之后，不放大就只是格子里的一小块。 */
@@ -885,6 +987,7 @@ export const BUILDING_LABEL: Record<BuildingKind | 'core', string> = {
   house: '民居',
   gearFactory: '齿轮工厂',
   orcLair: '兽人巢穴',
+  spellForge: '法术工厂',
 };
 
 export const buildingLabelOf = (kind: string): string =>
@@ -907,6 +1010,8 @@ export const BUILDING_POP: Record<BuildingKind, number> = {
   barracks: 2,
   gearFactory: 2,
   orcLair: 2,
+  // 法术工厂：用户 2026-11-16「占用两个人口，一个面包」
+  spellForge: 2,
 };
 
 export const buildingPopOf = (kind: BuildingKind): number => BUILDING_POP[kind] ?? 2;

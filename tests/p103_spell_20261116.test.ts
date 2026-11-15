@@ -16,6 +16,7 @@ import {
   CARDS, SPELL, cardById, FIELD, NO_BUILD,
   type ArenaCard,
 } from '@arena/config';
+import { iconOf } from '@arena/cardIcons';
 import { ArenaWorld } from '@arena/ArenaWorld';
 import { statsOf } from '@arena/types';
 import { readFileSync } from 'node:fs';
@@ -82,16 +83,143 @@ describe('法术牌是卡池里的一等公民', () => {
     expect(SPELL_CARD.building).toBeUndefined();
   });
 
-  it('卡池里恰好一张法术，且 id 唯一', () => {
+  it('卡池里有三种法术（火球 / 剑雨 / 导弹），且 id 唯一', () => {
     const spells = CARDS.filter((c) => c.kind === 'spell');
-    expect(spells).toHaveLength(1);
+    expect(spells).toHaveLength(3);
+    expect(spells.map((c) => c.spell).sort()).toEqual(['arrowRain', 'fireball', 'missile']);
     expect(new Set(CARDS.map((c) => c.id)).size).toBe(CARDS.length);
+  });
+
+  it('每张法术卡都带能画的卡面图标（不是虚线空框兜底）', () => {
+    for (const c of CARDS.filter((x) => x.kind === 'spell')) {
+      const svg = iconOf(c.id);
+      expect(svg, `${c.id} 没有专属图标`).not.toContain('stroke-dasharray');
+    }
   });
 
   it('SPELL 的每个键都被某张卡引用（没有孤立的法术数据）', () => {
     for (const key of Object.keys(SPELL)) {
       expect(CARDS.some((c) => c.spell === key), `SPELL.${key} 没有任何卡在用`).toBe(true);
     }
+  });
+});
+
+/**
+ * P-104 三种法术的**分工** —— 用户口径：
+ * 「火球可以砸建筑，剑雨更适合砸军队，我们额外会准备一个导弹，价值 20，
+ *   可以炸毁敌人的一小片的建筑物」。
+ *
+ * 这一族不测数值大小（基础版可调），只测**打谁 / 不打谁**这条分工不能弄反。
+ */
+describe('★ 三种法术的分工：打兵还是打楼', () => {
+  const spec = (id: string) => SPELL[cardById(id).spell!]!;
+
+  it('火球：两样都打，但对兵打折（通用不专精）', () => {
+    const s = spec('fireball');
+    expect(s.vsUnits).toBe(true);
+    expect(s.vsBuildings).toBe(true);
+    expect(s.unitScale).toBeGreaterThan(0);
+    expect(s.unitScale, '通用法术对兵要打折，否则专精的剑雨没有存在意义').toBeLessThan(1);
+  });
+
+  it('剑雨：只打兵，满伤，打不到楼', () => {
+    const s = spec('arrowRain');
+    expect(s.vsUnits).toBe(true);
+    expect(s.vsBuildings, '剑雨不该能拆楼').toBe(false);
+    expect(s.unitScale, '剑雨是专精，对兵满伤').toBe(1);
+  });
+
+  it('导弹：只打楼，打不到兵，且是最贵的（20 金）', () => {
+    const s = spec('missile');
+    expect(s.vsUnits, '导弹不该能打兵').toBe(false);
+    expect(s.vsBuildings).toBe(true);
+    expect(s.unitScale).toBe(0);
+    const missile = cardById('missile');
+    expect(missile.cost).toBe(20);
+    // 三种里最贵，且明显贵一档（拆楼的代价）
+    for (const other of CARDS.filter((c) => c.kind === 'spell' && c.id !== 'missile')) {
+      expect(missile.cost).toBeGreaterThan(other.cost);
+    }
+  });
+
+  it('导弹确实炸不动兵：数值打到兵身上是 0（不是被 max(1,…) 兜成 1）', () => {
+    const w = worldWith(cardById('missile'));
+    w.players[0]!.gold = 999;
+    const foe = putUnit(w, 'red', FIELD.midCol + 6, 10);
+    const before = foe.hp;
+    w.playCard('blue', 0, FIELD.midCol + 6, 10);
+    expect(foe.hp, '导弹打兵应该是 0 伤害').toBe(before);
+  });
+
+  it('剑雨确实拆不动楼', () => {
+    const w = worldWith(cardById('arrowRain'));
+    w.players[0]!.gold = 999;
+    const mill = putBuilding(w, 'red', 'mill', FIELD.midCol + 6, 8);
+    const before = mill.hp;
+    w.playCard('blue', 0, mill.col + 1, mill.row + 1);
+    expect(mill.hp, '剑雨不该拆楼').toBe(before);
+  });
+
+  it('火球两样都能打（和上面两条形成对照）', () => {
+    const w1 = worldWith(cardById('fireball'));
+    w1.players[0]!.gold = 999;
+    const foe = putUnit(w1, 'red', FIELD.midCol + 6, 10);
+    const hp0 = foe.hp;
+    w1.playCard('blue', 0, FIELD.midCol + 6, 10);
+    expect(foe.hp, '火球应该能打兵').toBeLessThan(hp0);
+
+    const w2 = worldWith(cardById('fireball'));
+    w2.players[0]!.gold = 999;
+    const mill = putBuilding(w2, 'red', 'mill', FIELD.midCol + 6, 8);
+    const mhp0 = mill.hp;
+    w2.playCard('blue', 0, mill.col + 1, mill.row + 1);
+    expect(mill.hp, '火球应该能砸楼').toBeLessThan(mhp0);
+  });
+});
+
+/**
+ * ★ 发牌裁量：只打楼的卡在没有敌方建筑的模式里不该发。
+ *
+ * 踩过的坑：PVE **没有敌方建筑**，导弹发到手上是永远打不出去的废牌，
+ * 白占一个手牌位。实测 12 局托管从 9 胜掉到 7 胜。
+ */
+describe('★ 只打楼的法术不会发到"对面没楼"的局里', () => {
+  it('PVE：导弹退出卡池；剑雨要法术工厂（没工厂不发）', () => {
+    const w = new ArenaWorld({ mode: 'pve', seed: 20261116 });
+    expect(w.hasEnemyBuildingTarget('blue'), 'PVE 开局对面应该没有楼').toBe(false);
+    expect(w.techAllows('blue', cardById('missile')), '导弹在 PVE 里是废牌（打不到兵也没有楼）').toBe(false);
+    // 剑雨要法术工厂（2026-11-16 用户口径），PVE 里同样适用
+    expect(w.techAllows('blue', cardById('arrowRain')), '没工厂不该发剑雨').toBe(false);
+    // ⚠️ 火球是基础牌：对面没楼时它对兵仍能造成打折伤害 ⇒ **不该**被禁发
+    expect(w.techAllows('blue', cardById('fireball'))).toBe(true);
+  });
+
+  it('盖好法术工厂后，剑雨就发得出来了', () => {
+    const w = new ArenaWorld({ mode: 'pve', seed: 20261116 });
+    expect(w.techAllows('blue', cardById('arrowRain'))).toBe(false);
+    // 直接摆一座完工的工厂（不走施工，只验发牌判据）
+    w.buildings.set(7001, {
+      id: 7001, side: 'blue', kind: 'spellForge', col: 4, row: 4,
+      hp: 420, maxHp: 420, build: 1, buildLeft: 0,
+      lastHit: 'blade', lastHitAt: -99, repairLeft: 0,
+    } as never);
+    expect(w.techAllows('blue', cardById('arrowRain')), '工厂盖好后剑雨该放行了').toBe(true);
+  });
+
+  it('1v1：对面有楼时导弹正常发', () => {
+    const w = new ArenaWorld({ seed: 20261116 });
+    // 1v1 开局双方各有一座大本营 —— 但大本营不算"可被法术打到"的目标
+    expect(w.hasEnemyBuildingTarget('blue'), '大本营不算导弹目标').toBe(false);
+    putBuilding(w, 'red', 'mill', FIELD.midCol + 6, 8);
+    expect(w.hasEnemyBuildingTarget('blue')).toBe(true);
+    expect(w.techAllows('blue', cardById('missile'))).toBe(true);
+  });
+
+  it('反证：判据不是"永远 false"（喂一栋楼必须翻成 true）', () => {
+    const w = new ArenaWorld({ seed: 20261116 });
+    const before = w.hasEnemyBuildingTarget('blue');
+    putBuilding(w, 'red', 'house', FIELD.midCol + 7, 12);
+    expect(w.hasEnemyBuildingTarget('blue')).toBe(!before);
   });
 });
 
@@ -191,8 +319,8 @@ describe('⑤ 命中走现有伤害入口，不另开一条结算路径', () => 
     const src = stripComments(read('src/arena/ArenaWorld.ts'));
     const cast = src.slice(src.indexOf('private castSpell'), src.indexOf('private noteSpell'));
     expect(cast.length).toBeGreaterThan(400); // 切到了正确的函数
-    // 伤害必须走这两个唯一入口
-    expect(cast).toContain('this.hurtUnit(u, spec.damage)');
+    // 伤害必须走这两个唯一入口（对兵那次带的是乘过倍率的 unitDamage）
+    expect(cast).toContain('this.hurtUnit(u, unitDamage)');
     expect(cast).toContain("this.hurtBuilding(b, spec.damage, 'magic', side)");
     // 反证：自己写 hp -= 就是绕过了唯一入口
     expect(cast).not.toMatch(/\.hp\s*-=/);
@@ -231,14 +359,26 @@ describe('⑤ 命中走现有伤害入口，不另开一条结算路径', () => 
 });
 
 describe('伤害数值跟着 SPELL 走（基础版可调）', () => {
-  it('兵吃到的伤害 = damageOf(法术伤害, 该兵防御)', () => {
+  it('兵吃到的伤害 = damageOf(法术伤害 × 对兵倍率, 该兵防御)', () => {
     const w = worldWith(SPELL_CARD);
     const foe = putUnit(w, 'red', FIELD.midCol, 10);
     const def = statsOf('archer').defense;
     const before = foe.hp;
     w.playCard('blue', 0, FIELD.midCol, 10);
-    const expectDmg = Math.max(1, SPELL.fireball!.damage - def);
+    // P-104 起对兵要乘 unitScale（通用法术打折、专精法术满伤）
+    const scaled = SPELL.fireball!.damage * SPELL.fireball!.unitScale;
+    const expectDmg = Math.max(1, scaled - def);
     expect(before - foe.hp).toBe(expectDmg);
+  });
+
+  it('剑雨是满伤：不乘折扣，打到兵身上就是 damage − 防御', () => {
+    const w = worldWith(cardById('arrowRain'));
+    w.players[0]!.gold = 999;
+    const foe = putUnit(w, 'red', FIELD.midCol, 10);
+    const def = statsOf('archer').defense;
+    const before = foe.hp;
+    w.playCard('blue', 0, FIELD.midCol, 10);
+    expect(before - foe.hp).toBe(Math.max(1, SPELL.arrowRain!.damage - def));
   });
 
   it('楼吃到的伤害 = 法术伤害 × 拆楼倍率（和塔/兵同一档，不开小灶）', () => {

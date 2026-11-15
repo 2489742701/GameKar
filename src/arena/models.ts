@@ -20,6 +20,20 @@
 
 export type Vec3 = readonly [number, number, number];
 
+/**
+ * 法术工厂的模型单独放在 `./models/spellForge.ts`（P-104）。
+ *
+ * 本文件到 891 行了，每个建筑都带一段上百行的建模说明；再往里塞会把主文件推到
+ * 没人愿意读的长度。所以新建筑先按这个办法分流：**模型独立成文件、导出仍从
+ * `ARENA_MODELS` 汇总**，调用方一行不用改。
+ *
+ * ⚠️ 循环依赖注意：`spellForge.ts` 从本文件 import `ARENA_PAL` / `roofOf` /
+ * `Node` 等；本文件从它 import `spellForgeModel`。ESM 能处理这种互相引用，
+ * 因为调用发生在**运行期**（`ARENA_MODELS` 是模块求值时构造的，
+ * 但 `spellForgeModel` 只在渲染时才被调用）。别把 `ARENA_PAL` 改成在
+ * 模块顶层求值就依赖 `spellForgeModel` 的写法 —— 那会真的炸。
+ */
+
 export interface PaintOptions {
   rough?: number;
   metal?: number;
@@ -211,7 +225,7 @@ function toneShift(color: number, k: number): number {
  * 方墙四面切面片：前后两面铺满宽，左右两面缩进一个板厚（角上不重叠，免得闪面）。
  * `cols` 是每面的列数，`rows` 是行数；面板外皮正好落在 ±w/2 / ±d/2（和原来的实心墙同轮廓）。
  */
-function boxShell(
+export function boxShell(
   w: number,
   d: number,
   y0: number,
@@ -798,6 +812,91 @@ export function orcLairModel(accent: number): ArenaModel {
 }
 
 /**
+ * **法术工厂**（2026-11-16，P-104）—— 用户："箭雨不需要其他的，需要一个法术工厂，
+ * 法国工厂是一个大大的干锅炉，旁边有个小房子。占用两个人口，一个面包"。
+ * （"法国"是"法术"的口误）
+ *
+ * 造型口径：
+ *   · **大干锅炉**（主角，占左 2/3）：圆筒炉体 + 顶部圆穹 + 三道铆钉箍 +
+ *     正面发光的炉膛门 + 一根高烟囱。它是"法术"这件东西的视觉锚点。
+ *   · **小屋**（配角，占右 1/3）：矮房子 + 坡顶，就是"旁边有个小房子"那句话。
+ *   · 一条矮连廊把两件接成"一座厂"，而不是两栋并排。
+ *
+ * 和另外两座"厂"的剪影区别（免得又变成用户说过的"重复性太高"）：
+ *   磨坊 = 四叶风车帆；齿轮工厂 = 侧面大齿轮 + 钝角顶；法术工厂 = **圆肚子 + 烟囱 + 小屋**。
+ *
+ * 可掉落墙皮只给**小屋**做：炉体是圆的，`boxShell` 切出的方壳会浮在圆筒外面穿模。
+ * 打起来看见"旁边那间屋子塌了一块"，视觉上讲得通。
+ */
+export function spellForgeModel(accent: number): ArenaModel {
+  const BOILER_X = -0.42;   // 锅炉偏左（占地左 2/3）
+  const HUT_X = 0.62;       // 小屋偏右
+  const BOILER_R = 0.34;
+  const BOILER_H = 0.92;
+  const HUT_W = 0.5;
+
+  const out: Node[] = [
+    // ---- 台基：一整块，把炉子和小屋坐在同一个地基上（看着是"一座厂"）
+    plinth([1.74, 0.06, 1.14], ARENA_PAL.stoneDark),
+
+    // ================= 大干锅炉 =================
+    // 炉身：下粗上细的圆筒（rTop 略小，像一口收口的锅）
+    cyl([BOILER_R * 0.94, BOILER_R, BOILER_H], ARENA_PAL.iron,
+      [BOILER_X, mid(0.06, BOILER_H), 0], 12),
+    // 三道铆钉箍：比炉身略粗一点，箍出来才有"大铁锅"的分量
+    ...[0.24, 0.52, 0.8].map((y) => cyl(
+      [BOILER_R * 1.02, BOILER_R * 1.02, 0.05], ARENA_PAL.stoneDark,
+      [BOILER_X, y, 0], 12,
+    )),
+    // 炉膛门（正面）：深色外框 + 里面一团**发光**的炉火
+    box([0.3, 0.24, 0.04], ARENA_PAL.stoneDark,
+      [BOILER_X, mid(0.2, 0.24), BOILER_R * 0.96]),
+    box([0.22, 0.16, 0.03], 0xff8a3c,
+      [BOILER_X, mid(0.24, 0.16), BOILER_R * 0.98],
+      { emissive: 0xff5a18, emissiveIntensity: 0.9 }),
+    // 炉顶穹盖：一口倒扣的锅盖，把圆筒收住
+    cone(BOILER_R * 1.1, 0.24, ARENA_PAL.stoneDark,
+      [BOILER_X, mid(0.06 + BOILER_H, 0.24), 0], 12),
+    // 烟囱：从穹盖侧后穿出，细而高 —— "这是座厂"最直白的剪影
+    cyl([0.07, 0.08, 0.5], ARENA_PAL.stone,
+      [BOILER_X + 0.16, mid(0.06 + BOILER_H + 0.16, 0.5), -0.12], 8),
+    box([0.16, 0.05, 0.16], ARENA_PAL.stoneDark,
+      [BOILER_X + 0.16, mid(0.06 + BOILER_H + 0.66, 0.05), -0.12]),
+
+    // ================= 旁边的小房子 =================
+    // 墙：矮，只有炉子的一半高 —— "小房子"要的就是这个比例差
+    box([HUT_W, 0.42, 0.46], ARENA_PAL.wall,
+      [HUT_X, mid(0.06, 0.42), 0]),
+    // 坡顶（阵营色）：一眼分敌我的那道色留在这里
+    prism([HUT_W + 0.06, 0.2, 0.52], roofOf(accent),
+      [HUT_X, 0.06 + 0.42, 0]),
+    // 压脊
+    box([HUT_W + 0.1, 0.05, 0.16], ridgeOf(accent),
+      [HUT_X, mid(0.06 + 0.42 + 0.14, 0.05), 0]),
+    // 门：一间小房子得看得出是"能进人的"
+    box([0.16, 0.24, 0.03], ARENA_PAL.wood,
+      [HUT_X, mid(0.06, 0.24), 0.24]),
+    // 窗：一小块，和炉膛的火区分开（不发光）
+    box([0.12, 0.12, 0.03], ARENA_PAL.stoneDark,
+      [HUT_X - 0.14, 0.34, 0.24]),
+
+    // ================= 连廊：把两件接成一座厂 =================
+    box([0.32, 0.18, 0.3], ARENA_PAL.woodLight,
+      [BOILER_X + BOILER_R + 0.12, mid(0.06, 0.18), 0.06]),
+  ];
+
+  return {
+    /** 静件（不脱落）：台基 / 炉体 / 穹盖 / 烟囱 / 小屋主体 / 屋顶 / 连廊 */
+    static: out,
+    /**
+     * 可掉落墙皮：**小屋**四面墙（2 列 × 2 行），尺寸与上面小屋墙体严格对齐
+     * （宽 HUT_W、深 0.46、从 y=0.06 起、高 0.42）。
+     */
+    shell: boxShell(HUT_W, 0.46, 0.06, 0.42, ARENA_PAL.wall, 2, 2, 1043),
+  };
+}
+
+/**
  * 商行（P-093 新增，P-095 精致化）：民居的体量 + **匾额 / 斜布篷 / 门柱 / 货箱 / 柜台**。
  *
  * P-093 那版只在民居骨架上贴了一块金招牌 + 一条柜台，远看和民居几乎一样 ——
@@ -842,6 +941,12 @@ export const ARENA_MODELS = {
   house: houseModel,
   gearFactory: gearFactoryModel,
   orcLair: orcLairModel,
+  /**
+   * 法术工厂（P-104）：大干锅炉 + 旁边一间小房子。
+   * 建模单独放 `models/spellForge.ts` —— 本文件已经 885 行，每个建筑一段说明，
+   * 再塞进去就没人愿意读了；导出仍然是这一个键，调用方不用知道文件分了几份。
+   */
+  spellForge: spellForgeModel,
 } as const;
 
 export type ArenaModelName = keyof typeof ARENA_MODELS;
@@ -882,4 +987,9 @@ export const ARENA_FLAGS: Record<ArenaModelName, FlagSpot> = {
   // P-095 弯羊角长出穹顶后总高约 2.33 格；旗插在角根旁的穹顶侧面。
   // 旧值 1.4 是给「穹顶 1.98 格 + 两根细骨刺」那版的，新角高出后会插进角里。
   orcLair: { x: 0.92, z: -0.1, base: 1.7, pole: 0.95 },
+  // 法术工厂（P-104）：旗插在**小屋**的屋脊端（x 正侧），别插在锅炉上 ——
+  // 炉顶有穹盖 + 烟囱，插那儿会和烟囱穿模。
+  // 实测总高 3.7 格（烟囱最高），锁要求"旗顶 ≥ 楼身下半截"：
+  // base 2.35 + pole 1.1 = 3.45 ≥ 3.7/2 = 1.85 ✓，且低于炉顶烟囱、不抢主角。
+  spellForge: { x: 0.86, z: 0.1, base: 2.35, pole: 1.1 },
 };

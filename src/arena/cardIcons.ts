@@ -204,7 +204,22 @@ export const CARD_ICON: Record<string, string> = {
     <rect x="9.5" y="14" width="5" height="7" rx="2.5" fill="#0e0b08"/>
   </svg>`,
 
-  // ---------------------------------------------------------------- 法术（P-103）
+  // ---------------------------------------------------------------- 法术（P-103 / P-104）
+
+  /**
+   * 法术工厂（P-104）：一口大锅炉 + 旁边一间小屋。
+   *
+   * 和「磨坊」（风车帆）、「齿轮工厂」（大齿轮）都要一眼分开：
+   * 这里主体必须是**圆肚子 + 烟囱**，右边再挂一个方方正正的小屋。
+   */
+  spellForge: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M3.2 21v-2.2h1.1V11a4.2 4.2 0 0 1 8.4 0v7.8h1.1V21H3.2Z"/>
+    <path fill="currentColor" d="M6.6 2.2h1.4v3.6H6.6z"/>
+    <path fill="currentColor" d="M5.9 2.2h2.8v.9H5.9z"/>
+    <rect x="6.6" y="13" width="2.8" height="2.4" rx=".4" fill="#0e0b08"/>
+    <path fill="currentColor" d="M15 21v-6.6h6V21h-1.7v-5h-2.6v5H15Z"/>
+    <path fill="currentColor" d="M14.4 13.2 18 10.6l3.6 2.6v1.1h-7.2v-1.1Z"/>
+  </svg>`,
 
   /**
    * 火球术：一团火球 + 内层更亮的心（用 opacity 分两层，卡面变色时跟着 currentColor 走）。
@@ -215,6 +230,32 @@ export const CARD_ICON: Record<string, string> = {
   fireball: `<svg viewBox="0 0 24 24" aria-hidden="true">
     <path fill="currentColor" d="M12 2.4c2.7 2.7 2.2 4.7 1.2 6.3 1.4-.3 2.4-1.2 3-2.3 2 2.4 3.4 5 3.4 7.8a7.6 7.6 0 1 1-15.2 0c0-3.4 2-7.1 4.6-9.8.1 1.4.4 2.4 1.1 3.1.7-1.7.7-3.6 1.9-5.1Z"/>
     <path fill="currentColor" opacity=".5" d="M12 12.2c1.4 1.5 1.2 2.6.6 3.5.8-.2 1.3-.7 1.6-1.3 1.1 1.3 1.8 2.7 1.8 4.2a4 4 0 0 1-8 0c0-1.8 1.1-3.9 2.5-5.4.1.8.2 1.3.5 1.7.5-1 .5-1.9 1-2.7Z"/>
+  </svg>`,
+
+  /**
+   * 剑雨：五把朝下的短剑从上往下落。
+   *
+   * 剪影要和火球**完全不像** —— 火球是一个圆团，这里必须是"一堆细长竖条"，
+   * 24×24 下一眼就能分出"这是打兵的"。
+   */
+  arrowRain: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M4.6 2h1.6v9.6l2.6 3.2-3.4 4.4-3.4-4.4 2.6-3.2V2Z"/>
+    <path fill="currentColor" d="M11.2 1h1.6v7.4l2.6 3.2-3.4 4.4-3.4-4.4 2.6-3.2V1Z"/>
+    <path fill="currentColor" d="M17.8 2h1.6v9.6l2.6 3.2-3.4 4.4-3.4-4.4 2.6-3.2V2Z"/>
+    <path fill="currentColor" opacity=".55" d="M8.4 15.4h1.4v3H8.4zM15 15.4h1.4v3H15z"/>
+  </svg>`,
+
+  /**
+   * 导弹：一枚朝下坠的弹体（尖头 + 尾翼 + 尾焰）。
+   *
+   * 和剑雨的"多根细条"要分开，所以这里必须是**单个粗壮的纺锤**；
+   * 尾翼用两条斜线，24×24 下能看出"带翅膀的弹"。
+   */
+  missile: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M12 1.6c2.2 2.6 3.2 5.6 3.2 8.8v4.2H8.8v-4.2c0-3.2 1-6.2 3.2-8.8Z"/>
+    <path fill="currentColor" d="M8.8 10.4 5.2 14.6v3l3.6-2.2v-5Zm6.4 0 3.6 4.2v3l-3.6-2.2v-5Z"/>
+    <rect x="9.6" y="15.4" width="4.8" height="2.2" rx=".6" fill="currentColor"/>
+    <path fill="currentColor" opacity=".6" d="M12 18.4l1.8 4-1.8-1.2-1.8 1.2 1.8-4Z"/>
   </svg>`,
 };
 
