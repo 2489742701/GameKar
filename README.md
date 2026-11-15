@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 925 条回归（914 主套件 + 11 条文档数值锁）
+npm run check        # 类型检查 + 927 条回归（914 主套件 + 13 条文档数值锁）
 npm run test:mod     # 模组自带 40 条（node --test，已含在 check 里）
 npm run build        # 产物在 dist/，three 单独分包
 ```
@@ -103,7 +103,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）· start.css（开始菜单）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 925 条
+                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 927 条
                       （含 P-101 新增的 `docs_numbers_20261115`：README/玩法说明里的数字必须和 config 对得上）
                       另有模组自带回归 40 条（`public/mods/grand-map/tests/`，`npm run test:mod`，已并入 check）
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
@@ -965,10 +965,10 @@ facingFlip(dx, dz, yawDeg, previous, deadzone = 0.012)  // 世界位移 → 要�
 实机读数（Chromium 里跑真页面）：五栋楼的实测尺寸（格）—— 大本营 4.0×4.3、高 6.4；兵营 3.6×2.7、高 3.0；
 箭塔 3.0×2.8、高 6.2；炮塔 3.6×3.1、高 2.9；磨坊 2.8×2.9、高 5.3（都落在 3×3 占地附近）。
 一座兵营 7 秒内出第一个兵；AI 前 40 秒会先立起箭塔/磨坊；
-金币从 8 涨到 20 停住；手牌四张、打出扣费并进冷却补牌。
+金币从 15 涨到 30 停住；手牌四张、打出扣费并进冷却补牌。
 逻辑全在 `src/arena/ArenaWorld.ts`（不 import three、不碰 DOM），
-`tests/arena.test.ts` 26 条锁在 node 里把一局跑完；
-模型另有 `tests/models.test.ts` 5 条（体型/件数/旗位 + 预览器两次出图一致、换俯角会变）。
+`tests/arena.test.ts` 130 条锁在 node 里把一局跑完；
+模型另有 `tests/models.test.ts` 18 条（体型/件数/旗位 + 预览器两次出图一致、换俯角会变）。
 
 ## 分发（2026-11-06）
 

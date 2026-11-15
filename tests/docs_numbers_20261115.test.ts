@@ -99,6 +99,25 @@ describe('README：对战模式的关键数值', () => {
     expect(line, 'README 卡表里没有兽人巢穴这一行').toBeTruthy();
     expect(line).toContain(`| ${ORC_LAIR.cost} |`);
   });
+
+  it('「实机读数」那段里的金币区间也是最新的', () => {
+    // 这一句历史上抄错过两次（8→20 一直没跟着 15→30 改）
+    expect(readme).toContain(`金币从 ${ECONOMY.start} 涨到 ${ECONOMY.cap} 停住`);
+  });
+});
+
+describe('README：测试条数的自述不能虚报', () => {
+  /** 直接数源码里的 it( —— 和 vitest 报的数一致，比手写数字可靠 */
+  const countTests = (file: string): number =>
+    [...read(file).matchAll(/^\s*it\(/gm)].length;
+
+  it('arena.test.ts / models.test.ts 的条数与 README 一致', () => {
+    const arena = countTests('/tests/arena.test.ts');
+    const models = countTests('/tests/models.test.ts');
+    expect(arena).toBeGreaterThan(50); // 判据本身没失效
+    expect(readme).toContain(`\`tests/arena.test.ts\` ${arena} 条`);
+    expect(readme).toContain(`\`tests/models.test.ts\` ${models} 条`);
+  });
 });
 
 describe('玩法说明：面向玩家的那份也不能漂', () => {
