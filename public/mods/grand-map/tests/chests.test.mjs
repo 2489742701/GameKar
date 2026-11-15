@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import {
   SPEC, REL, createGame, spawnChest, collectChest, chestAt,
   resolveIncoming, sendCaravan, tick, placeBuilding, note,
-} from '../rules.js';
+} from '../core/rules.js';
 
 const fresh = () => createGame(90);
 

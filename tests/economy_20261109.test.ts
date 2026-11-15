@@ -108,8 +108,9 @@ describe('① 判据表：图标数 = 吐金数，只有一张表', () => {
 
 describe('② 卡池 / 卡面 / 模型', () => {
   it('商行真的进了卡池，卡 id 不重复，卡面文案写明配套代价', () => {
-    expect(CARDS).toHaveLength(27);
-    expect(new Set(CARDS.map((c) => c.id)).size).toBe(27);
+    expect(CARDS).toHaveLength(28);
+    // id 唯一性也读同一张表，别跟着 28 手抄（P-103 加火球术时要改两个数就漏了）
+    expect(new Set(CARDS.map((c) => c.id)).size).toBe(CARDS.length);
     const g = cardById('guild');
     expect(g.kind).toBe('building');
     expect(g.building).toBe('guild');

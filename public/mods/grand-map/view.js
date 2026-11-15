@@ -1,7 +1,7 @@
 /**
- * 大地图 3D 视图（2026-11-09，P-087 续）—— 卡牌驱动的主模式扩展。
+ * 大地图 3D 视图（2026-11-09，P-087 续；2026-11-15 分层）—— 卡牌驱动的主模式扩展。
  *
- * 地图：大六边形像素地形（map.js，半径 38 格 ≈ 3750 格 = 竞技场的 4.3 倍），
+ * 地图：大六边形像素地形（core/map.js，半径 38 格 ≈ 3750 格 = 竞技场的 4.3 倍），
  *       内部六芒星道路 + 相邻近路小道 + 三条对径远路，中心 17×17 公共区。
  *       中心区非道路格一律**正常草地**，只有真道路格才染道路色。
  * 镜头：默认拉近看局部（tilesAcross 34），滚轮缩放 / 拖动平移 / Shift+拖动旋转，
@@ -10,12 +10,17 @@
  *          ARENA_MODELS 全部来自 host 注入，和 /arena.html 是同一套。
  * 集结：点地面插旗 ⇒ 主程序同款像素小人（loadPack + DudeGallery + DudeSprite）朝旗行进。
  * HUD：顶栏 + 底部四张手牌（host.modApi.createModHand，复用主程序卡面样式与图标）。
+ *
+ * ⚠️ 本文件是**装配层**：只负责"把状态画出来 + 把点击变成动作"。
+ * 纯逻辑在 `core/`（零 DOM / 零 three），纯出件在 `parts/`（给参数就出 Object3D）。
+ * 别再往这个文件里塞新的面板和同步逻辑 —— 它已经到 800 行了。
  */
-import * as R from './rules.js';
-import * as M from './map.js';
-import { createHand, EXTRA_CARDS } from './hand.js';
-import { createRally } from './rally.js';
-import { createSky, PERIODS as SKY_PERIODS } from './sky.js';
+import * as R from './core/rules.js';
+import * as M from './core/map.js';
+import { createHand, EXTRA_CARDS } from './core/hand.js';
+import { createRally } from './core/rally.js';
+import { createSky, PERIODS as SKY_PERIODS } from './view/sky.js';
+import { makeChest, chestBob } from './parts/chest.js';
 
 const colorNum = (hex) => parseInt(hex.slice(1), 16);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -258,7 +263,12 @@ export function createView(host, game) {
   scene.add(flagGroup);
 
   const hand = createHand(API, game);
-  const rally = createRally();
+  // 战斗数值一律借原版那一套（host.engine.unitDef / damageOf），不自己写死攻防血。
+  // 见 core/rally.js 顶部说明：以后调平衡只改 src/game/data/units.ts 一处，三条线同时变。
+  const rally = createRally({
+    unitDef: host.engine.unitDef,
+    damageOf: host.engine.damageOf,
+  });
   const buildingMeshes = new Map();
   const caravanMeshes = new Map();
   const unitViews = new Map();
@@ -335,7 +345,10 @@ export function createView(host, game) {
     const card = res.card;
     if (card && card.kind !== 'building') {
       const count = Math.min(8, Math.max(3, card.squad?.reduce((n, s) => n + s.count, 0) ?? 3));
-      rally.spawn(col, row, count, card.id);
+      // 把卡上的**真实兵种 id** 传下去，rally 才能按原版表算出攻防血
+      // （不传的话它只能拿卡 id 去猜，猜不到就退默认值）
+      const unitId = card.squad?.[0]?.unitId ?? card.id;
+      rally.spawn(col, row, count, card.id, unitId);
     }
     render();
     return res;
@@ -608,36 +621,6 @@ export function createView(host, game) {
     }
   }
 
-  /** 一只宝箱：木箱 + 金盖 + 锁扣 + 地上一圈金光（全用注入的具名 three 类） */
-  function makeChest() {
-    const g = new T.Group();
-    // 俯视 50° 下模型本体只有 1 格大，放大一点才看得出是箱子而不是一枚金币
-    g.scale.setScalar(1.35);
-    const body = new T.Mesh(
-      new T.BoxGeometry(0.8, 0.5, 0.6),
-      new T.MeshStandardMaterial({ color: 0x8a5a28, roughness: 0.9, flatShading: true }),
-    );
-    body.position.y = 0.25;
-    const lid = new T.Mesh(
-      new T.BoxGeometry(0.86, 0.18, 0.66),
-      new T.MeshStandardMaterial({ color: 0xfac775, roughness: 0.55, metalness: 0.35, flatShading: true }),
-    );
-    lid.position.y = 0.57;
-    const lock = new T.Mesh(
-      new T.BoxGeometry(0.16, 0.2, 0.08),
-      new T.MeshBasicMaterial({ color: 0xfff0b8 }),
-    );
-    lock.position.set(0, 0.5, 0.33);
-    const halo = new T.Mesh(
-      new T.CircleGeometry(0.75, 20),
-      new T.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.2, side: T.DoubleSide, depthWrite: false }),
-    );
-    halo.rotation.x = -Math.PI / 2;
-    halo.position.y = 0.02;
-    g.add(halo, body, lid, lock);
-    return g;
-  }
-
   /** 每帧摆好宝箱；只要己方士兵跑进箱子那一格 ⇒ 占领开箱 */
   function syncChests(time) {
     const s = game.state;
@@ -649,8 +632,8 @@ export function createView(host, game) {
       const cell = M.fromAbstract(ch.r, ch.c);
       const w = A.cellToWorld(A.pos(cell.col, cell.row));
       let g = chestMeshes.get(ch.id);
-      if (!g) { g = makeChest(); scene.add(g); chestMeshes.set(ch.id, g); }
-      g.position.set(w.x, groundY(cell.col, cell.row) + 0.02 + Math.sin(time * 2 + ch.id) * 0.08, w.z);
+      if (!g) { g = makeChest(T); scene.add(g); chestMeshes.set(ch.id, g); }
+      g.position.set(w.x, groundY(cell.col, cell.row) + 0.02 + chestBob(time, ch.id), w.z);
       const reached = rally.units.some(
         (u) => Math.hypot(u.col - cell.col, u.row - cell.row) < 0.85,
       );

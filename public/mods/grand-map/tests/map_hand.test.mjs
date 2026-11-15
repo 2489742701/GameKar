@@ -11,9 +11,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as M from '../map.js';
-import * as R from '../rules.js';
-import { createHand, EXTRA_CARDS } from '../hand.js';
+import * as M from '../core/map.js';
+import * as R from '../core/rules.js';
+import { createHand, EXTRA_CARDS } from '../core/hand.js';
 
 /** 测试用的最小开放 API，形状对齐 host.modApi（真卡片数据由主程序注入）。 */
 const API = {

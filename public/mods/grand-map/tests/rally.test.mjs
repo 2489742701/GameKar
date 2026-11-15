@@ -6,8 +6,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as M from '../map.js';
-import { createRally, MARCH_SPEED } from '../rally.js';
+import * as M from '../core/map.js';
+import { createRally, MARCH_SPEED } from '../core/rally.js';
 
 const center = () => ({ col: M.MAP.cx, row: M.MAP.cy });
 

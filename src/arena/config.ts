@@ -491,7 +491,41 @@ export const UNIT = {
   priestSeek: 5,
 };
 
-export type CardKind = 'building' | 'squad' | 'siege';
+export type CardKind = 'building' | 'squad' | 'siege' | 'spell';
+
+/**
+ * **法术牌**（2026-11-16，P-103）—— 用户："我们要加一个法术牌远程攻击"。
+ *
+ * 和前三种卡的本质区别：**不生成任何实体**。打出后立即在落点结算一次范围伤害，
+ * 然后这张牌就没了（不占人口、不占面包、不吃后勤名额、不留兵）。
+ *
+ * 三条口径先写死，免得后面到处各判各的：
+ * 1. **可以落在对面半场**，也可以落在黄区 —— 否则"远程"两个字没意义。
+ *    这是唯一能跨过中线直接造成伤害的卡（远程兵和塔都只能打到自己射程内）。
+ * 2. **对楼也要吃 `BUILDING_DAMAGE_SCALE`**：走 `hurtBuilding()` 那一个入口，
+ *    和塔/兵拆楼同一条倍率，不给法术开小灶。
+ * 3. **落点半径内敌我通吃还是只打敌方**：只打**敌方**。打自己人是惩罚，
+ *    和"花金币买伤害"的直觉相反，而且 AI 会误伤自己的前排。
+ *
+ * ⚠️ 数值是**基础版占位**（用户 2026-11-16："先做基础版，数值后调"）。
+ * 调的时候只改这里 + `CARDS` 里那张卡的 price，逻辑层不写死任何一个数。
+ */
+export interface SpellSpec {
+  /** 伤害值（对兵走 damageOf 扣防御；对楼再乘 BUILDING_DAMAGE_SCALE） */
+  damage: number;
+  /** 作用半径（格）。以落点为圆心，圆内的敌方目标全部命中 */
+  radius: number;
+  /**
+   * 对建筑是否也生效。
+   * `true` = 拆楼也能用（当前口径）；`false` = 只打兵。
+   */
+  hitsBuildings: boolean;
+}
+
+export const SPELL: Record<string, SpellSpec> = {
+  /** 火球：基础版。半径 1.6 格 ≈ 盖住一个 3×3 占地的中心，够打到贴在一起的一队兵 */
+  fireball: { damage: 26, radius: 1.6, hitsBuildings: true },
+};
 
 export interface ArenaCard {
   id: string;
@@ -515,6 +549,11 @@ export interface ArenaCard {
    * 所以扩展卡「串台」进主模式时不会变成虚线空框。
    */
   icon?: string;
+  /**
+   * **法术卡：用哪一条法术规格**（`SPELL` 的键）。
+   * 只有 `kind === 'spell'` 的卡读它；其余卡留空。
+   */
+  spell?: string;
 }
 
 /**
@@ -763,6 +802,15 @@ export const CARDS: ArenaCard[] = [
     kind: 'building',
     cost: ORC_LAIR.cost,
     building: 'orcLair',
+  },
+  {
+    id: 'fireball',
+    name: '火球术',
+    // 数字从 SPELL 读，不写死在卡面文案里：改数值时卡面不会留一个假读数
+    blurb: `对落点 ${SPELL.fireball!.radius} 格内的敌方部队与建筑造成一次伤害，可以越过中线。`,
+    kind: 'spell',
+    cost: 5,
+    spell: 'fireball',
   },
 ];
 

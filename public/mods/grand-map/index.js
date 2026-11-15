@@ -1,20 +1,61 @@
 /**
- * 大地图模组入口（2026-11-09，P-087）—— 卡牌驱动的主模式扩展。
+ * 大地图模组入口（2026-11-09，P-087；2026-11-15 分层）—— 卡牌驱动的主模式扩展。
  *
- * 只做三件事：建规则状态、挂视图、按帧驱动。规则在 rules.js、地图在 map.js、
- * 手牌判据在 hand.js、画面在 view.js，这里不写任何玩法逻辑。
- * 全部文件都在 public/mods/ 内，主程序玩法文件零改动，能力靠 host.modApi 注入。
+ * 只做三件事：建规则状态、挂视图、按帧驱动。
+ * 本文件是**唯一的模组公开面**，目录结构：
  *
- * 表现层用的是主游戏那套 3D 零件（Renderer / 光照 / 相机 / OutputPass /
- * ARENA_MODELS）；地图形态是大六边形像素地形 + 内部六芒星道路网。
- * 四时段天光与云朵面片在 sky.js。仍是原型：单位战斗 / 拆家没做，胜负暂用积分占位。
+ *   index.js          ← 你在这里：入口 / 生命周期 / 探针钩子
+ *   view.js           ← 装配层：把状态画出来 + 把点击变成动作
+ *   core/             纯逻辑，零 DOM / 零 three，可直接 node 测
+ *     rules.js           六方外交 / 商路 / 集市扣押 / 宝箱 / 回合
+ *     map.js             大六边形地形 + 六芒星路网 + 三档尺寸
+ *     hand.js            四张手牌 / 补牌 / 落牌判据（金币只扣一次）
+ *     rally.js           点击地面集结的状态机
+ *   view/             纯出件与场景层
+ *     sky.js             四时段天光 + 云朵面片
+ *   parts/            给参数就出 Object3D 的小件（血条 / 弹丸 / 单位视图）
+ *   tests/            node --test 自测（npm run test:mod）
+ *
+ * ⚠️ 主程序玩法文件零改动，能力全部靠 host 注入（three / engine / assets / modApi）。
+ * 仍是原型：**单位战斗与拆家没做**，胜负暂用积分占位。
  * 口径与待拍板项见 `docs/工作笔记/大地图原型设计_20261108.md`。
  */
-import { createGame, tick, placeBuilding, spawnChest, collectChest } from './rules.js';
-import * as M from './map.js';
+import { createGame, tick, placeBuilding, spawnChest, collectChest } from './core/rules.js';
+import * as M from './core/map.js';
 import { createView } from './view.js';
 
 let cleanup = null;
+
+/**
+ * 模组在页面上的**独立命名空间**（2026-11-15）。
+ *
+ * 原来探针钩子直接挂在 `window.__grandMap` / `window.__modActive` 上 —— 每个模组
+ * 各自占一个全局键，谁都不知道别人用了什么名字，迟早撞车（`__dbg` 已经归主程序了）。
+ *
+ * 现在统一收到一个根命名空间下：
+ *
+ *     window.GamekarMods                 ← 根（由 modHost 保证存在）
+ *       .active                          ← 当前挂着的模组 id
+ *       .grandMap                        ← 本模组的探针面
+ *       .<otherMod>                      ← 别的模组各占一个子键，互不干扰
+ *
+ * 好处有三：
+ *   ① 命名冲突一眼可查 —— 想加钩子先看根下有没有同名；
+ *   ② 卸载时删自己那个子键就行，不用记得清了几个全局变量；
+ *   ③ 探针 / 调试工具只认 `window.GamekarMods` 一个入口，不用列举模组。
+ *
+ * ⚠️ 向后兼容：`window.__grandMap` 与 `window.__modActive` 仍然保留为
+ * **同名别名**，因为 `tools/grand_map_probe.mjs` 和若干测试钉着它们。
+ * 新代码请用 `GamekarMods.grandMap`；别名等探针改造完再撤。
+ */
+const NS_ROOT = 'GamekarMods';
+
+/** 拿到（或建出）根命名空间。模组不该假设别人先建过它。 */
+function namespace() {
+  const w = window;
+  if (!w[NS_ROOT] || typeof w[NS_ROOT] !== 'object') w[NS_ROOT] = {};
+  return w[NS_ROOT];
+}
 
 export function mount(host) {
   if (!host || host.api !== 1) {
@@ -36,9 +77,9 @@ export function mount(host) {
   // 用注入的 GameLoop 驱动（不自己 setInterval，卸载时 loop.stop() 一起收干净）。
   const loop = host.makeLoop({ onFrame: (info) => view.frame(info) });
 
-  // 无头探针靠这几个读得到状态 / 触发操作
-  window.__modActive = 'grand-map';
-  window.__grandMap = {
+  /** 无头探针 / 调试工具读状态、触发动作的唯一入口 */
+  const surface = {
+    id: 'grand-map',
     get state() { return game.state; },
     get map() { return M; },
     get hand() { return view.hand; },
@@ -63,9 +104,23 @@ export function mount(host) {
     setPeriod(i) { view.setPeriod(i); },
   };
 
+  const ns = namespace();
+  ns.active = 'grand-map';
+  ns.grandMap = surface;
+  // 兼容别名（见上方说明，探针改造完再撤）
+  window.__modActive = 'grand-map';
+  window.__grandMap = surface;
+
   cleanup = () => {
     loop.stop();
     view.dispose();
+    const root = window[NS_ROOT];
+    if (root) {
+      delete root.grandMap;
+      delete root.active;
+      // 根上什么都不剩就整个撤掉，别在页面上留一个空对象
+      if (Object.keys(root).length === 0) delete window[NS_ROOT];
+    }
     delete window.__modActive;
     delete window.__grandMap;
   };

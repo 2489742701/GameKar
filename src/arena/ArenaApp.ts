@@ -302,6 +302,8 @@ export class ArenaApp {
   private readonly seenHeals = new Set<number>();
   /** 已经放过粒子效果的近战命中 id（world.hits 是逐帧还在的事件，别重复放） */
   private readonly seenHits = new Set<number>();
+  /** 已经放过的法术爆炸 id（world.spellCasts 同上是逐帧还在的事件） */
+  private readonly seenSpells = new Set<number>();
   readonly director = new ArenaDirector();
   /**
    * 操作方向偏好（2026-11-07）：从 localStorage 读，**四个手势回调每帧直接读它**。
@@ -1100,6 +1102,7 @@ export class ArenaApp {
     this.syncShots(info.time);
     this.syncHeals();
     this.syncHits();
+    this.syncSpells();
     this.syncRuins();
     this.syncParts(info.time);
     this.damage.update(info.delta);
@@ -2163,6 +2166,31 @@ export class ArenaApp {
       if (h.unitId !== undefined) this.unitFlash.set(h.unitId, this.lastFrame.time);
     }
     for (const id of this.seenHits) if (!live.has(id)) this.seenHits.delete(id);
+  }
+
+  /**
+   * 法术命中的特效（P-103）。
+   *
+   * 逻辑层已经把"打在哪、多大圈、命中几个"算完了（`world.spellCasts`），
+   * 这里**只负责画** —— 和 `syncHits` / `syncHeals` 同一条约定，不重新判命中。
+   *
+   * 爆点直接复用 `fx.impact(..., 'magic', radius)`：法术弹和法师的攻击是同一个弹种，
+   * 颜色/粒子形状早就调好了，没必要为火球再开一套视觉。
+   */
+  private syncSpells(): void {
+    const live = new Set<number>();
+    for (const s of this.world.spellCasts) {
+      live.add(s.id);
+      if (this.seenSpells.has(s.id)) continue;
+      this.seenSpells.add(s.id);
+      const y = this.groundY(s.x, s.z);
+      this.fx.impact(s.x, s.z, y, 'magic', s.radius);
+      // 法术比普通命中沉一点：拉高音高 + 随机抖动，免得同帧连放听起来像卡带
+      this.sfx.play('cannon', { pitch: 1.18 });
+      // 命中多的时候给一点震屏：一发火球砸中一片，手感要跟普通命中区分开
+      if (s.hitUnits + s.hitBuildings >= 2) this.rig.shake(0.18);
+    }
+    for (const id of this.seenSpells) if (!live.has(id)) this.seenSpells.delete(id);
   }
 
   /** 废墟：被拆掉的楼在原地留一堆碎石，RUIN.seconds 之后自己塌平（最后几秒淡出）。 */

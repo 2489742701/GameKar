@@ -48,6 +48,9 @@ import { LightingRig } from '@engine/render/Lighting';
 import { TileMap } from '@game/world/TileMap';
 import { GroundView } from '@game/world/GroundView';
 import { TERRAIN, TERRAIN_ORDER } from '@game/config';
+// 战斗口径：纯函数 + 纯数据，模组复用原版那一套（不是 Combat 类，那个要 GameWorld）
+import { UNITS, damageOf, unitDef } from '@game/data/units';
+import { levelScale } from '@game/systems/Combat';
 import { ARENA_MODELS } from './models';
 import { buildStand } from './stand';
 import { AmbientDust } from './ambient';
@@ -109,11 +112,28 @@ export const modApi = {
   createModBank,
 };
 
-/** 只借引擎，不借玩法：没有 ArenaWorld / config / ArenaApp。 */
+/**
+ * 只借引擎，不借玩法：没有 ArenaWorld / config / ArenaApp。
+ *
+ * **2026-11-15 补：战斗口径也在这里**。用户：「单位战斗原版中就有了」——
+ * 意思是别在模组里重写一套攻防血，直接借原版那张表。所以这里放进来的是
+ * **纯函数 + 纯数据**（`damageOf` / `unitDef` / `UNITS` / `levelScale`），
+ * 不是 `Combat` 类 —— 后者构造时要一个 `GameWorld`（老模式的账本），
+ * 模组拿不到也不该拿，那是"借玩法"，越线了。
+ */
 export const modEngine = {
   GameLoop,
   Random,
   cellToWorld,
+  // ===== 战斗口径（纯函数 / 纯数据，原版唯一来源）=====
+  /** 伤害 = max(1, 攻 − 防)。锁在 tests/combat.test.ts。 */
+  damageOf,
+  /** 兵种表查询，未知 id 会抛（别静默返回 undefined）。 */
+  unitDef,
+  /** 全部 19 个兵种，只读。 */
+  UNITS,
+  /** 升级缩放（攻/射程/装填），老模式三塔共用同一条。 */
+  levelScale,
 };
 
 /**

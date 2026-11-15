@@ -33,7 +33,7 @@ const MOD_MARKER = /modApi|modHost|grand-map|createModHand|__grandMap|\?mod=/;
 const fromSpecs = (src: string): string[] =>
   [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
 const view = (): string => stripComments(read('public/mods/grand-map/view.js'));
-const map = (): string => stripComments(read('public/mods/grand-map/map.js'));
+const map = (): string => stripComments(read('public/mods/grand-map/core/map.js'));
 
 describe('主程序玩法文件 0 改动', () => {
   it('反证：这条判据真的能抓到模组污染', () => {
@@ -212,7 +212,7 @@ describe('模组是卡牌驱动的主模式扩展', () => {
   });
 
   it('金币只扣一次：盖楼走卡牌 cost，规则层 claimCell 只镜像', () => {
-    const hand = stripComments(read('public/mods/grand-map/hand.js'));
+    const hand = stripComments(read('public/mods/grand-map/core/hand.js'));
     expect((hand.match(/gold\s*-=\s*card\.cost/g) ?? []).length).toBe(1);
     expect(hand).toContain('R.claimCell(s, 0, a.r, a.c)');
     expect(hand).not.toContain('R.placeBuilding');   // 它内部还会再扣 SPEC.cost.build
@@ -245,13 +245,15 @@ describe('模组是卡牌驱动的主模式扩展', () => {
 
   it('集结走主程序同款像素小人素材，不自己拼几何糊弄', () => {
     const src = view();
-    const rally = stripComments(read('public/mods/grand-map/rally.js'));
+    const rally = stripComments(read('public/mods/grand-map/core/rally.js'));
     expect(src).toContain('createRally(');
     expect(src).toContain('A.loadPack()');
     expect(src).toContain('new A.DudeGallery(pack)');
     expect(src).toContain('new A.DudeSprite(');
     expect(src).toContain('rally.dropFlag(col, row)');
-    expect(rally).toContain('export function createRally()');
+    // 2026-11-15：createRally 现在收依赖（战斗口径由 host 注入），不再是零参形式
+    expect(rally).toContain('export function createRally(');
+    expect(rally).toContain('deps.unitDef');
     expect(rally).toContain('M.inHex(col, row)');   // 旗子也得落在地图里
     // 反证：把集结做成一列策略按钮（而不是点地面），判据抓得到
     const FORBIDDEN = /data-action="send-troops"|class="gm-troop-list"/;
@@ -319,7 +321,7 @@ describe('P-091 开发版标记 / 主程序 3D 地板 / 左下角收干净', () 
 });
 
 describe('P-090 中心区宝箱：金币可以顶破上限', () => {
-  const rules = (): string => stripComments(read('public/mods/grand-map/rules.js'));
+  const rules = (): string => stripComments(read('public/mods/grand-map/core/rules.js'));
 
   it('★ 开箱直接加，不许 Math.min / cap 截断或丢弃', () => {
     const src = rules();
@@ -386,7 +388,7 @@ describe('地图形态：大六边形地形 + 内部六芒星道路', () => {
 
   it('中心网格与规则层逐格对齐：数值只在 map.js 的 CENTER 算一次', () => {
     const src = map();
-    const rules = stripComments(read('public/mods/grand-map/rules.js'));
+    const rules = stripComments(read('public/mods/grand-map/core/rules.js'));
     expect(src).toContain('size: S.center');
     expect(src).toContain('roadRow: half');
     expect(rules).toContain('centerSize: CENTER.size');

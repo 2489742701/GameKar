@@ -12,7 +12,7 @@ import {
   createGame, relationOf, setRelation, backstab, allyCount,
   unlockedCells, placeBuilding, blockedSegments, canTrade,
   sendCaravan, resolveIncoming, tick, score,
-} from '../rules.js';
+} from '../core/rules.js';
 
 const fresh = () => createGame(42);
 

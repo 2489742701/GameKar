@@ -33,6 +33,7 @@ import {
   REPAIR,
   REROLL,
   RUIN,
+  SPELL,
   SUPPLY,
   TOWER,
   UNIT,
@@ -55,6 +56,7 @@ import { decide, placementBand, type AiView } from './ai';
 import { PVE_LEVELS, pveLevel, type PveLevel } from './pve/levels';
 import type { Wave } from './pve/waves';
 import type { GridPos } from '@engine/math/Grid';
+import { cellToWorld, pos } from '@engine/math/Grid';
 import type {
   ArenaBuilding,
   ArenaOptions,
@@ -242,6 +244,30 @@ export class ArenaWorld {
   units: ArenaUnit[] = [];
   /** 在飞的弹丸（纯视觉，不参与结算） */
   shots: ArenaShot[] = [];
+  /**
+   * **法术施放的视觉事件**（P-103，纯装饰，到点自己消失）。
+   *
+   * 为什么放在世界层而不是让视图自己判：命中判定需要**半径内的目标清单**，
+   * 那是逻辑层才知道的事。所以逻辑层算完就把"打了哪、多大圈、命中几个"报出来，
+   * 视图只负责画（和 `hits` / `heals` 同一条约定）。
+   */
+  readonly spellCasts: {
+    id: number;
+    side: Side;
+    spell: string;
+    col: number;
+    row: number;
+    /** 落点世界坐标（视图直接用，不用再换算一次） */
+    x: number;
+    z: number;
+    radius: number;
+    hitUnits: number;
+    hitBuildings: number;
+    t: number;
+    seconds: number;
+  }[] = [];
+  /** 法术事件的自增 id（和 shots / hits 各自的 id 空间分开，互不干扰） */
+  private spellCastId = 1;
   /** 回血的视觉事件（纯装饰，到点自己消失） */
   heals: { id: number; x: number; z: number; ttl: number }[] = [];
   /**
@@ -850,6 +876,22 @@ export class ArenaWorld {
     if (p.gold < card.cost) return `金币不够（要 ${card.cost}）`;
     const blocked = this.supplyBlocked(side, card);
     if (blocked) return blocked;
+
+    /**
+     * **法术卡：唯一能越过半场与黄区的卡**（P-103）。
+     *
+     * 三条判据顺序有讲究：
+     * ① 边界 —— 必须在地图内（法术也不能扔到图外）；
+     * ② **不查 `inOwnHalf` / `inNoBuild`** —— 这就是"远程攻击"的意义，
+     *    不然玩家只能往自己脚下丢火球，牌就没用了；
+     * ③ 不查格子占用 —— 法术打在空地上也允许（提前封锁、封走位）。
+     *    打空地＝白花 5 金，这是玩家的判断，不由规则替他兜。
+     */
+    if (card.kind === 'spell') {
+      if (col < 0 || row < 0 || col >= this.field.cols || row >= this.field.rows) return '落在地图外了';
+      return null;
+    }
+
     if (!this.inOwnHalf(side, col)) return '只能放在自己半场';
 
     if (card.kind === 'building') {
@@ -876,6 +918,14 @@ export class ArenaWorld {
   /** 真正的花钱与落位。AI 也用这一条，保证两边走同一套规则。 */
   private execute(p: PlayerSlot, card: ArenaCard, col: number, row: number): void {
     this.spend(p, card.cost);
+    if (card.kind === 'spell') {
+      /**
+       * **法术不生成任何实体**（P-103）：当场在落点结算一次范围伤害就结束。
+       * 不借人口、不占面包、不吃后勤名额 —— 这三件事都由"没有 squad"天然满足。
+       */
+      this.castSpell(p.side, card, col, row);
+      return;
+    }
     if (card.kind === 'building') {
       this.place(p.side, card.building!, col, row, BUILDING_SPECS[card.building!].hp);
     } else {
@@ -890,6 +940,80 @@ export class ArenaWorld {
       this.popDebt[p.side] += men * sup.popPerMan;
       this.spawnSquad(p.side, card.squad ?? [], col, row, false, sup.breadPerMan, sup.popPerMan);
     }
+  }
+
+  /**
+   * 施放一次法术（P-103）。
+   *
+   * 结算顺序刻意分成「先算命中、再统一结算」，而不是边遍历边打：
+   * 后者会让**同一个目标被重复命中**（`this.units` 里同一帧可能被 push 进来两次），
+   * 而且 `hurtBuilding` 会把被拆的楼从 Map 里删掉，边遍历边删是经典的踩坑点。
+   *
+   * 只打**敌方**：打自己人与"花金币买伤害"的直觉相反，AI 也会误伤前排。
+   * 命中判定用**圆心距离**（`Math.hypot`），不是格子的切比雪夫距离 ——
+   * 半径 1.6 格要的是"贴在一起的一队兵"，圆比方更符合直觉。
+   */
+  private castSpell(side: Side, card: ArenaCard, col: number, row: number): void {
+    const spec = card.spell ? SPELL[card.spell] : null;
+    if (!spec) return; // 卡上写了不存在的法术 id：不结算（配置错误，测试会抓）
+    const at = cellToWorld(pos(col, row));
+
+    // ① 先把命中清单定下来（此时还不动任何血）
+    const foes = this.units.filter(
+      (u) => u.side !== side && u.hp > 0 && Math.hypot(u.x - at.x, u.z - at.z) <= spec.radius,
+    );
+    /**
+     * 只算 `BUILDING_SPECS` 里的常规建筑。
+     *
+     * ⚠️ **大本营（kind === 'core'）被显式排除**：它不在这张表里，本身也没有
+     * 「3×3 占地中心」这套口径。更重要的是**这是刻意的**：5 金的法术如果能砸
+     * 1200 血的主城，「拆家要靠推兵线」这条攻防抓手就废了。
+     * 要改这一点得单独拍板，不能顺手加。
+     */
+    const foeBuildings = spec.hitsBuildings
+      ? [...this.buildings.values()].filter((b) => {
+        if (b.side === side || b.hp <= 0 || b.kind === 'core') return false;
+        // 建筑按**占地中心**算距离：3×3 的楼，圆心是它占格的中间那一格
+        const bs = BUILDING_SPECS[b.kind];
+        const cx = b.col + (bs.cols - 1) / 2;
+        const cz = b.row + (bs.rows - 1) / 2;
+        const w = cellToWorld(pos(cx, cz));
+        return Math.hypot(w.x - at.x, w.z - at.z) <= spec.radius + Math.max(bs.cols, bs.rows) / 2;
+      })
+      : [];
+
+    // ② 统一结算：兵走 hurtUnit（吃防御），楼走 hurtBuilding（吃拆楼倍率）
+    for (const u of foes) this.hurtUnit(u, spec.damage);
+    for (const b of foeBuildings) this.hurtBuilding(b, spec.damage, 'magic', side);
+
+    // ③ 记账 + 通知视图层播特效（视图只读事件，不自己判命中）
+    this.spellCasts.push({
+      id: this.spellCastId++,
+      side,
+      spell: card.spell!,
+      col,
+      row,
+      x: at.x,
+      z: at.z,
+      radius: spec.radius,
+      hitUnits: foes.length,
+      hitBuildings: foeBuildings.length,
+      t: 0,
+      seconds: 0.55,
+    });
+    this.noteSpell(`${side === 'blue' ? '蓝方' : '红方'}火球命中 ${foes.length} 兵 / ${foeBuildings.length} 楼`);
+  }
+
+  /**
+   * 法术播报（P-103）。战斗层没有通用的 `log()`（那是模组规则层的东西），
+   * 这里走和 `destroyLog` 同一条思路：**留一份可读的最近事件**，给 HUD 与探针用。
+   *
+   * 只保留最近若干条 —— 这是"给玩家看的一句提示"，不是审计日志。
+   */
+  readonly spellNotes: { at: number; text: string }[] = [];
+  private noteSpell(text: string): void {
+    this.spellNotes.push({ at: this.elapsed, text });
+    if (this.spellNotes.length > 8) this.spellNotes.shift();
   }
 
   /**
@@ -1062,6 +1186,12 @@ export class ArenaWorld {
     this.heals = this.heals.filter((h) => h.ttl > 0);
     for (const h of this.hits) h.ttl -= dt;
     this.hits = this.hits.filter((h) => h.ttl > 0);
+    // 法术特效：走自己的 t 计时到 seconds 就摘掉（和上面三个同一条约定）
+    for (const s of this.spellCasts) s.t += dt;
+    // 数组是 readonly，所以**原地压缩**而不是重新赋值（视图持有的就是这一个引用）
+    for (let i = this.spellCasts.length - 1; i >= 0; i--) {
+      if (this.spellCasts[i]!.t >= this.spellCasts[i]!.seconds) this.spellCasts.splice(i, 1);
+    }
     this.tickUnits(dt);
     // 修复放在伤害之后：同一帧挨打会先把 repairLeft 清零，这一帧就不会还回血
     this.tickRepairs(dt);

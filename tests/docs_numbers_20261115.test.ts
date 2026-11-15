@@ -25,6 +25,23 @@ const read = (p: string): string => readFileSync(ROOT + p, 'utf8');
 const readme = read('README.md');
 const guide = read('docs/玩法说明_20261106.md');
 
+/**
+ * 阿拉伯数字 → 中文数字（只覆盖文档里会用到的量级：1~99）。
+ *
+ * 为什么需要它：README 里写的是「卡池二十八张」这种**中文数**，
+ * 而判据要从 `CARDS.length` 现算。早先的写法是 `n === 27 ? '二十七' : n`，
+ * 加第 28 张卡时就把 `28` 这个阿拉伯数字塞进了中文句子 —— 测试红在一个
+ * 和数值本身无关的地方，很容易被误判成"文档没改"。
+ */
+function zhNumber(n: number): string {
+  const d = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n < 10) return d[n]!;
+  if (n < 20) return n === 10 ? '十' : `十${d[n % 10]}`;
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return ones === 0 ? `${d[tens]}十` : `${d[tens]}十${d[ones]}`;
+}
+
 /** 文档里"共 N 条回归"这类自述，实际条数由 vitest 自己保证，这里只锁两处口径一致 */
 describe('README：数据条目数与数据表一致', () => {
   it('老模式：建筑 / 卡 / 兵种三行数字', () => {
@@ -36,7 +53,9 @@ describe('README：数据条目数与数据表一致', () => {
   });
 
   it('对战模式：卡池张数与 CARDS 一致', () => {
-    expect(readme).toContain(`**卡池${CARDS.length === 27 ? '二十七' : CARDS.length}张**`);
+    // ⚠️ 别写成 `CARDS.length === 27 ? '二十七' : ...` —— 那种写法在加第 28 张卡时
+    // 会把阿拉伯数字塞进中文句子，然后测试红在一个和数值无关的地方。
+    expect(readme).toContain(`**卡池${zhNumber(CARDS.length)}张**`);
   });
 
   it('对战模式：卡表里每一张的价钱都和 CARDS 对得上', () => {

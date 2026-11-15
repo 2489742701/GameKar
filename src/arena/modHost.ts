@@ -8,6 +8,18 @@
  *
  * 这个文件只被薄薄的 `main.ts` 引用；vanilla.ts 完全不知道它存在。
  * 所有引擎依赖都是**动态** import —— 普通对战不会为模组多加载一个字节。
+ *
+ * ## 页面上的命名空间（2026-11-15）
+ *
+ * 模组挂到页面上之后，调试工具 / 无头探针要能读到它。约定是有**一个根命名空间**：
+ *
+ *     window.GamekarMods            ← 根，模组自己建、自己撤（空了要删掉）
+ *       .active                     ← 当前挂着的模组 id
+ *       .<modId>                    ← 各模组自己的探针面，互不干扰
+ *
+ * 主程序**不去写**这个对象（主程序不该知道有哪些模组），但测试会校验：
+ * 模组不许再往 `window.__xxx` 上散挂全局（`__dbg` 是主程序自己的，别撞）。
+ * 见 `tests/mod_isolation_20261108.test.ts` 的命名空间锁。
  */
 
 import type { GameLoop, GameLoopOptions } from '@engine/core/GameLoop';

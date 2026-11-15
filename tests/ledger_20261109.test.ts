@@ -182,12 +182,15 @@ describe('③ 装配点：HUD 真的把账单摆成左右两栏', () => {
     expect(worldSrc).toContain('ledger: this.ledger');
   });
 
-  it('拆楼伤害两处调用都把「谁动的手」传进去了', () => {
+  it('拆楼伤害每一处调用都把「谁动的手」传进去了', () => {
     const worldSrc = read('src/arena/ArenaWorld.ts');
     const calls = worldSrc.match(/this\.hurtBuilding\(/g) ?? [];
-    expect(calls).toHaveLength(2);
+    // 塔开火 / 兵砍楼 / 法术（P-103 新增）三处，每一处都必须带 `by`
+    expect(calls).toHaveLength(3);
     expect(worldSrc).toContain("b.kind === 'arrowTower' ? 'arrow' : 'cannon', b.side)");
     expect(worldSrc).toContain('this.hurtBuilding(foe.building, st.damage, hit, u.side)');
+    // 法术：伤害类型是 magic，动手方是施法方
+    expect(worldSrc).toContain("this.hurtBuilding(b, spec.damage, 'magic', side)");
   });
 
   it('结算第二行不再把四组数字挤成一行，改指向账单', () => {

@@ -52,7 +52,7 @@ describe('① 卡面 SVG 不再「有概率不显示」', () => {
       expect(CARD_ICON[card.id], `${card.id} 没注册卡面图标`).toBeTruthy();
       expect(iconOf(card.id)).not.toContain('stroke-dasharray');
     }
-    const hand = read('public/mods/grand-map/hand.js');
+    const hand = read('public/mods/grand-map/core/hand.js');
     expect(hand).toContain('const MARKET_ICON');
     expect(hand).toContain('const CARAVAN_ICON');
     expect(hand).toContain('const ESCORT_ICON');

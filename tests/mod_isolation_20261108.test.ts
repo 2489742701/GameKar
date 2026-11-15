@@ -145,15 +145,29 @@ describe('模组自身不静态依赖主程序（允许内部相对 import）', 
     mods: { id: string; name: string; entry: string; api: number }[];
   };
 
-  /** 模组根目录下的 .js（不含 tests/），合并成一份文本做静态断言 */
+  /**
+   * 模组**递归**收集所有 .js（排除 tests/），合并成文本做静态断言。
+   *
+   * ⚠️ 2026-11-15 拆目录时踩过：原来只 `readdirSync(dir)` 扫根目录，
+   * 把 rules/map/hand/rally 挪进 `core/` 之后，锁**静默只扫到 2 个文件**
+   * （index.js / view.js），core/ 里那 4 个纯逻辑文件和 view/ 全在锁外面 ——
+   * 注入面白名单、禁止 import 主程序、unmount 契约全成了空转。
+   * 当时是"锁红了"才发现的（`modSources().length` 断言兜住），
+   * 所以这里除了改成递归，还保留"至少要扫到 N 个文件"的下限断言。
+   */
   const modSources = (): string[] => {
     const out: string[] = [];
-    for (const m of manifest.mods) {
-      const dir = join(ROOT, 'public/mods', m.id);
-      for (const name of readdirSync(dir)) {
-        if (name.endsWith('.js')) out.push(readFileSync(join(dir, name), 'utf8'));
+    const walk = (dir: string): void => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (ent.isDirectory()) {
+          if (ent.name === 'tests') continue;   // 自测不进结构锁
+          walk(join(dir, ent.name));
+        } else if (ent.name.endsWith('.js')) {
+          out.push(readFileSync(join(dir, ent.name), 'utf8'));
+        }
       }
-    }
+    };
+    for (const m of manifest.mods) walk(join(ROOT, 'public/mods', m.id));
     return out;
   };
 
@@ -274,9 +288,146 @@ describe('模组自身不静态依赖主程序（允许内部相对 import）', 
     expect(missingOf(['Group', 'ThisMemberDoesNotExist'])).toEqual(['ThisMemberDoesNotExist']);
     // 而 modDeps 的真实白名单里，确实没这个成员 —— 与上面一致
     expect(read('src/arena/modDeps.ts')).not.toContain('ThisMemberDoesNotExist');
-    // 形参路径也必须被覆盖：sky.js / hand.js 是靠实参注入的，不能只锁显式 const 绑定
-    const sky = stripComments(read('public/mods/grand-map/sky.js'));
+    // 形参路径也必须被覆盖：view/ 下的 sky.js 是靠实参注入的，不能只锁显式 const 绑定
+    const sky = stripComments(read('public/mods/grand-map/view/sky.js'));
     expect(sky).toMatch(/export function createSky\(\s*\w+/);
     expect(sky).toContain('T.');
+    // 递归扫描的下限：拆目录后如果 walk 漏了子目录，这条会先红
+    expect(modSources().length, '模组源码扫描数量异常（可能没递归进子目录）').toBeGreaterThanOrEqual(5);
+  });
+});
+
+/**
+ * 目录分层与命名空间（2026-11-15）。
+ *
+ * 用户：「可以给模组文件夹来处理，然后用单独命名空间，额外的命名空间」。
+ * 拆目录的风险是**锁会静默失效**（`modSources()` 原来只扫根目录，见上方注释），
+ * 所以这里把目录约定本身也锁住，并规定页面上的全局钩子必须收在一个根命名空间下。
+ */
+describe('模组目录分层与独立命名空间', () => {
+  /** 递归收集模组源码（和外层同一条判据，这里独立一份，避免跨 describe 共享作用域） */
+  const allModSources = (): string[] => {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (ent.isDirectory()) {
+          if (ent.name === 'tests') continue;
+          walk(join(dir, ent.name));
+        } else if (ent.name.endsWith('.js')) {
+          out.push(readFileSync(join(dir, ent.name), 'utf8'));
+        }
+      }
+    };
+    walk(join(ROOT, 'public/mods/grand-map'));
+    return out;
+  };
+  const fromSpecsLocal = (src: string): string[] =>
+    [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
+
+  it('core/ 是纯逻辑（零 DOM 零 three），view/ 与 parts/ 才碰三维', () => {
+    const dirOf = (p: string): string => read(`public/mods/grand-map/${p}`);
+    // core 下四个纯逻辑文件：不许出现 three 注入别名、不许碰 document/window
+    for (const name of ['rules.js', 'map.js', 'hand.js', 'rally.js']) {
+      const src = stripComments(dirOf(`core/${name}`));
+      expect(src, `core/${name} 不该碰 DOM`).not.toMatch(/\bdocument\.|\bwindow\./);
+      expect(src, `core/${name} 不该用注入的 three`).not.toMatch(/\bT\.\w/);
+      // 只能 import 同目录内的相对路径
+      for (const spec of fromSpecsLocal(src)) {
+        expect(spec.startsWith('./'), `core/${name} 出现外部依赖 ${spec}`).toBe(true);
+      }
+    }
+    // 出件层确实在建 Object3D
+    expect(stripComments(dirOf('parts/chest.js'))).toContain('new T.Group()');
+    expect(stripComments(dirOf('view/sky.js'))).toContain('T.');
+  });
+
+  it('页面钩子收在 window.GamekarMods 下，不再散挂 __xxx', () => {
+    const idx = stripComments(read('public/mods/grand-map/index.js'));
+    expect(idx).toContain("const NS_ROOT = 'GamekarMods'");
+    expect(idx).toContain('ns.grandMap = surface');
+    expect(idx).toContain('ns.active');
+    // 卸载要连子键一起收，空了还得把根删掉
+    expect(idx).toContain('delete root.grandMap');
+    expect(idx).toContain('delete window[NS_ROOT]');
+    // 散挂判据：只允许两个**向后兼容别名**（探针还钉着，见 index.js 注释），
+    // 除它俩之外任何 `window.__xxx =` 都是新塞的全局，必须红
+    const SCATTER = /^\s*window\.__(\w+)\s*=/gm;
+    const allowed = new Set(['grandMap', 'modActive']);
+    const scattered = [...idx.matchAll(SCATTER)].map((m) => m[1]!).filter((k) => !allowed.has(k));
+    expect(scattered, `模组在散挂全局：${scattered.join(', ')}`).toEqual([]);
+    // 反证：判据本身抓得住（塞一个 __debugPanel 就该被点名）
+    const probe = [...'window.__debugPanel = 1;'.matchAll(SCATTER)].map((m) => m[1]!);
+    expect(probe.filter((k) => !allowed.has(k))).toEqual(['debugPanel']);
+  });
+
+  it('主程序仍然不认识任何模组的命名空间细节', () => {
+    // modHost 只在注释里描述约定，代码里不许出现具体模组 id 或它的钩子
+    const host = stripComments(read('src/arena/modHost.ts'));
+    expect(host).not.toContain('grandMap');
+    expect(host).not.toContain('GamekarMods.grandMap');
+    // 但文档注释里要讲清约定（防止下一个人又去散挂）
+    expect(read('src/arena/modHost.ts')).toContain('GamekarMods');
+  });
+
+  it('目录结构本身：entry 在根、core/view/parts 都在、tests 不进结构锁', () => {
+    const base = join(ROOT, 'public/mods/grand-map');
+    expect(existsSync(join(base, 'index.js'))).toBe(true);
+    for (const sub of ['core', 'view', 'parts', 'tests']) {
+      expect(existsSync(join(base, sub)), `缺少 ${sub}/ 目录`).toBe(true);
+    }
+    // 递归扫描不该把 tests 里的自测当源码收进来
+    const sources = allModSources();
+    expect(sources.length).toBeGreaterThanOrEqual(7);
+    expect(sources.some((s) => s.includes('node:test'))).toBe(false);
+  });
+});
+
+/**
+ * 单位战斗借原版口径（2026-11-15）。
+ *
+ * 用户：「单位战斗原版中就有了」—— 别在模组里重写一套攻防血。
+ * 所以模组的兵必须从 `host.engine.unitDef()` 拿数值，伤害走 `damageOf()`。
+ * 这条锁防的是"图省事又抄一份数值进模组" —— 那样一改平衡就会两边不一样。
+ */
+describe('模组战斗数值来自原版，不自己抄一份', () => {
+  it('modDeps 把战斗口径注入到 engine（不是 assets，也不是让模组 import 主程序）', () => {
+    const deps = stripComments(read('src/arena/modDeps.ts'));
+    const engineBlock = deps.slice(deps.indexOf('export const modEngine'), deps.indexOf('export const modAssets'));
+    expect(engineBlock).toContain('damageOf');
+    expect(engineBlock).toContain('unitDef');
+    expect(engineBlock).toContain('UNITS');
+    // 必须来自原版数据表与战斗内核，不是模组自己写的
+    expect(deps).toContain("} from '@game/data/units'");
+    expect(deps).toContain("import { levelScale } from '@game/systems/Combat'");
+    // 但 Combat **类**不许进注入面：它构造要一个 GameWorld，那是借玩法
+    expect(engineBlock).not.toContain('Combat,');
+    expect(engineBlock).not.toContain('new Combat');
+  });
+
+  it('rally 用注入的 unitDef / damageOf，不写死攻防血', () => {
+    const rally = stripComments(read('public/mods/grand-map/core/rally.js'));
+    expect(rally).toContain('deps.unitDef');
+    expect(rally).toContain('deps.damageOf');
+    // 伤害只能走注入进来的那条公式
+    expect(rally).toContain('damageOf(attacker.attack, target.defense)');
+    // 反证：模组内不许出现自己的伤害公式（那就会和原版漂开）
+    expect(rally).not.toMatch(/Math\.max\(1,\s*attacker\.attack\s*-\s*target\.defense\)/);
+  });
+
+  it('view 把 host.engine 的战斗口径真的传下去了', () => {
+    const v = read('public/mods/grand-map/view.js');
+    expect(v).toContain('createRally({');
+    expect(v).toContain('host.engine.unitDef');
+    expect(v).toContain('host.engine.damageOf');
+    // 落牌时要把**真实兵种 id** 传进去，否则 rally 只能拿卡 id 猜
+    expect(v).toContain('card.squad?.[0]?.unitId');
+  });
+
+  it('反证：模组自测钉着原版数值（改平衡两边都得动）', () => {
+    const t = read('public/mods/grand-map/tests/combat.test.mjs');
+    expect(t).toContain('src/game/data/units.ts');
+    // 数值必须从原版源码现读，不许手抄一份进测试
+    expect(t).toContain('originalStats');
+    expect(t).toContain('readFileSync');
   });
 });
