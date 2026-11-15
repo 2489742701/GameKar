@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 import { ArenaWorld } from '@arena/ArenaWorld';
-import { AA_SOURCES, CORE, MOBILE, TOWER, canHitAir } from '@arena/config';
+import { AA_SOURCES, BALLISTA, CORE, MOBILE, TOWER, canHitAir } from '@arena/config';
 import type { ArenaUnit } from '@arena/types';
 
 const ARENA_SRC = fileURLToPath(new URL('../src/arena/', import.meta.url));
@@ -78,8 +78,23 @@ describe('P-076 射程：防御性建筑与主城都更远了，但没把白嫖�
     expect(CORE.attack.range).toBeGreaterThan(5.5);
   });
 
-  it('箭塔反超移动火炮；炮塔和主城仍留在火炮之下（白嫖窗口只窄了，没消失）', () => {
-    expect(TOWER.arrow.range).toBeGreaterThan(MOBILE.range);
+  /**
+   * **P-105 反转了这条关系**（2026-11-16 用户："就移动火炮提 8.6，弩箭提 8.2，
+   * 移动火炮优先打塔，弩箭优先打兵"）。
+   *
+   * 原来是"箭塔反超移动火炮"（7.8 > 7.2）—— 那意味着火炮**打不到箭塔**，
+   * "白嫖塔楼"这个存在理由就不成立了。用户要它真的能白嫖，所以射程提到箭塔之上。
+   *
+   * 现在的窗口：**火炮 8.6 > 弩箭 8.2 > 箭塔 7.8 > 炮塔 6.8 > 主城 6.5**
+   * （弩箭过了箭塔，但它只打兵不拆楼，射程的意义是"站在安全处点塔边的守军"）。
+   */
+  it('移动火炮 / 弩箭都超过了箭塔（白嫖窗口重新打开）', () => {
+    expect(MOBILE.range).toBeGreaterThan(TOWER.arrow.range);
+    expect(BALLISTA.range).toBeGreaterThan(TOWER.arrow.range);
+    // 但不该超得离谱：留 1 格左右余量，塔仍然是"必须有人去处理"的威胁
+    expect(MOBILE.range - TOWER.arrow.range).toBeLessThan(1.5);
+    expect(BALLISTA.range - TOWER.arrow.range).toBeLessThan(1.5);
+    // 对炮塔与主城的窗口更大（它们本来就短）
     expect(TOWER.cannon.range).toBeLessThan(MOBILE.range);
     expect(CORE.attack.range).toBeLessThan(MOBILE.range);
   });

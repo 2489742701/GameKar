@@ -32,6 +32,7 @@ import {
   MATCH,
   REPAIR,
   REROLL,
+  SIEGE_AI,
   RUIN,
   SPELL,
   SPELL_FORGE,
@@ -1657,7 +1658,44 @@ export class ArenaWorld {
           }
         }
       }
-      const foe = this.nearestHostile(u, sight, st.buildingsOnly, st.unitsOnly);
+      const foe = this.nearestHostile(u, sight, st.buildingsOnly, st.unitsOnly, st.prefer);
+
+      /**
+       * **攻城器械的"外围站位"**（2026-11-16 用户："无论如何都不会进入塔的射程，
+       * 并且一直会保持在塔的外围射程"）。
+       *
+       * 只对 `st.siege`（移动火炮 / 弩箭）生效，普通兵种照旧。两件事：
+       *
+       * ① **够得着且能打**：照常开火（下面那段）。
+       * ② **会被塔瞄上**：先往后撤，撤到塔的射程外再打。
+       *
+       * 为什么光有射程不够：射程 8.6 但一头扎进塔的 7.8 里，塔先手打它，
+       * "白嫖"就不成立。所以这里算的是"我离**最近的那座敌塔**有多远"，
+       * 而不是"我离目标有多远"。
+       *
+       * ⚠️ 危险半径按**塔心到塔射程 + 占地半径 + 余量**算：塔的判定是从占地边缘量的
+       * （3×3 的楼半宽 1.5），只按 `range` 算会让它站在"边缘刚好吃到"的位置。
+       */
+      if (st.siege) {
+        const danger = this.nearestTowerRange(u);
+        if (danger && danger.dist < danger.radius) {
+          /**
+           * 撤到**安全线以外再多一点**再停（`radius + 0.5`），加一道迟滞。
+           *
+           * 否则会出现经典的抖动：撤到刚好 =radius 的地方停下 → 下一帧
+           * `dist < radius` 已经不成立 → 又朝目标推进 → 又进圈 → 再撤……
+           * 推车速度只有 0.5 格/秒，抖动一次就是半秒白费，画面上还看得出"抽搐"。
+           */
+          const safe = danger.radius + 0.5;
+          const away = Math.hypot(u.x - danger.x, u.z - danger.z) || 1;
+          const step = Math.min(safe - danger.dist, st.speed * SIEGE_AI.retreatBoost * dt);
+          if (step > 0) {
+            this.stepUnit(u, ((u.x - danger.x) / away) * step, ((u.z - danger.z) / away) * step);
+            continue;
+          }
+        }
+      }
+
       if (foe && foe.dist <= st.range) {
         // 锁敌即转向目标（哪怕还在装填）—— 站着开火时位移为 0，
         // 旧视图会保持行军朝向，于是敌兵从背后压上来就出现"背对背开打"。
@@ -1744,7 +1782,33 @@ export class ArenaWorld {
       const tz = foe ? foe.z : gz;
       const dist = Math.hypot(tx - u.x, tz - u.z);
       if (dist < 0.001) continue;
-      const step = Math.min(dist, st.speed * dt);
+      /**
+       * **攻城器械不贴脸**（2026-11-16）：有目标但够不着时，走到
+       * "射程边缘"就停 —— 停在射程边缘而不是一路怼到目标脚下。
+       * 这是"保持在塔的外围射程"的另一半：撤退解决"已经进了危险圈"，
+       * 这条解决"别自己走进去"。
+       *
+       * ⚠️ **两种距离口径必须对齐**（这里踩过坑）：
+       * - `dist` 是**到目标点**的直线距离（建筑给的是**占地中心**，见下方 `tx/tz`）；
+       * - `foe.dist` 却是**边缘距离**（`nearestHostile` 返回时扣掉了占地半径）。
+       *
+       * `stopAt` 只按 `range` 算的话，中心距离永远大于边缘距离 ⇒ 车会一直走进
+       * 目标脚下（实测卡在 9.90 边缘 / 11.40 中心处来回抵消，完全不动）。
+       * 所以这里把**占地半径补回来**：停在 `range + 半个占地` 的中心距离上，
+       * 等价于"边缘距离 = range"，正好是射程边缘。
+       *
+       * 普通兵种不受影响（`st.siege` 为假 ⇒ `stopAt = 0`，照旧直冲）。
+       */
+      const targetRadius = foe?.building
+        ? Math.max(foe.building.cols, foe.building.rows) / 2
+        : 0;
+      const stopAt = st.siege && foe ? st.range * SIEGE_AI.approach + targetRadius : 0;
+      if (stopAt > 0 && dist <= stopAt) {
+        // 到位了：站在射程边缘（下一帧就会走进上面的开火分支），不再前进
+        continue;
+      }
+      const travel = stopAt > 0 ? dist - stopAt : dist;
+      const step = Math.min(travel, st.speed * dt);
       this.stepUnit(u, ((tx - u.x) / dist) * step, ((tz - u.z) / dist) * step);
     }
     this.units = this.units.filter((u) => u.hp > 0);
@@ -1756,6 +1820,17 @@ export class ArenaWorld {
     sight: number,
     buildingsOnly: boolean,
     unitsOnly = false,
+    /**
+     * **优先打哪一类**（2026-11-16 用户："移动火炮优先打塔，弩箭优先打兵"）。
+     *
+     * ⚠️ 只在**两类都够得着**时才起作用：
+     * - `'building'`（火炮）：有楼在射程内就先打楼，没楼才打兵；
+     * - `'unit'`（弩箭）：有兵在射程内就先打兵，没兵才打楼。
+     *
+     * 它不改"能不能打"（那是 `buildingsOnly` / `unitsOnly` 的事），
+     * 也不改射程判定 —— 返回的 `dist` 仍是真实距离。
+     */
+    prefer?: 'building' | 'unit',
   ): { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null {
     let best: { dist: number; x: number; z: number; unit?: ArenaUnit; building?: ArenaBuilding } | null = null;
 
@@ -1786,8 +1861,30 @@ export class ArenaWorld {
       const d = Math.hypot(other.x - u.x, other.z - u.z);
       if (d <= sight && (!best || d < best.dist)) best = { dist: d, x: other.x, z: other.z, unit: other };
     }
+
+    /**
+     * **火炮优先打塔 —— 必须在"贴脸的兵先还手"之前判**（2026-11-16 修）。
+     *
+     * 踩过的坑：这段原来写在函数末尾，而上面那行 `if (best || unitsOnly) return best;`
+     * 会在**发现任何敌兵时就提前返回**，于是"优先打塔"永远执行不到。
+     * 实测表现：火炮一看到路过的弓箭手就停下打兵，塔一点血没掉，车还被塔白打。
+     *
+     * 顺序因此是：**先问"有没有该优先打的塔"，有就直接返回**；
+     * 没有塔才走"贴脸的兵先还手"。
+     */
+    if (prefer === 'building') {
+      const tower = this.bestEnemyTower(u, Math.max(sight, SIEGE_AI.towerSeek));
+      if (tower) return tower;
+    }
+
     // 贴脸的敌兵仍然先还手，否则兵会被围死（这条不动）
     if (best || unitsOnly) return best;
+
+    /**
+     * **弩箭先打兵、没兵才打楼**（`prefer: 'unit'`）。
+     * 上面那轮已经把射程内的地面兵挑出来了（`best`），到这里还是 null ⇒ 视野内没兵，
+     * 才落到下面的建筑逻辑。这条不用额外代码 —— `best` 已经是"最近的兵"。
+     */
 
     /**
      * 建筑按「距离 − 威胁加权」排序（用户 2026-11-06）：
@@ -1813,6 +1910,36 @@ export class ArenaWorld {
         best = { dist: edge, x: c.x, z: c.z, building: b };
       }
     }
+
+    /**
+     * **火炮优先打塔**（`prefer: 'building'`）已经在上方处理（必须早于"贴脸的兵先还手"）。
+     * 走到这里说明没有可优先的塔，正常返回建筑候选。
+     */
+    return best;
+  }
+
+  /**
+   * 视野内**最近的一座敌方防御塔**（给 `prefer: 'building'` 用）。
+   *
+   * `seek` 刻意比 `sight` 大：攻城车该"找到塔再走过去"，而不是等塔进 10 格才反应 ——
+   * 那样路上会被路过的兵反复打断推进节奏（实测表现为卡在原地不动）。
+   *
+   * 返回的 `dist` 是**边缘距离**（扣掉占地半径），和 `nearestHostile` 其他分支同口径。
+   */
+  private bestEnemyTower(
+    u: ArenaUnit,
+    seek: number,
+  ): { dist: number; x: number; z: number; building: ArenaBuilding } | null {
+    let best: { dist: number; x: number; z: number; building: ArenaBuilding } | null = null;
+    for (const b of this.buildings.values()) {
+      if (b.side === u.side || b.hp <= 0) continue;
+      if (b.kind !== 'arrowTower' && b.kind !== 'cannonTower') continue;
+      const c = this.buildingCenter(b);
+      const d = Math.hypot(c.x - u.x, c.z - u.z);
+      const edge = Math.max(0, d - Math.max(b.cols, b.rows) / 2);
+      if (edge > seek) continue;
+      if (!best || edge < best.dist) best = { dist: edge, x: c.x, z: c.z, building: b };
+    }
     return best;
   }
 
@@ -1821,6 +1948,33 @@ export class ArenaWorld {
     if (b.kind === 'core') return 0;
     if (b.kind === 'arrowTower' || b.kind === 'cannonTower') return 4;
     return 1.5;
+  }
+
+  /**
+   * **离我最近的敌塔有多危险**（2026-11-16，给攻城器械的走位用）。
+   *
+   * `radius` = 塔射程 + 占地半径 + `SIEGE_AI.safety`：
+   * 塔的判定是从**占地边缘**量的，而在场地里我们是按中心算距离，
+   * 3×3 的楼半宽 1.5 —— 只按 `range` 算会让攻城车站在"边缘刚好吃到"的位置。
+   *
+   * 只算箭塔 / 炮塔（大本营的水晶也打兵，但它不构成"需要保持距离"的威胁：
+   * 打大本营本来就是终局，绕开它没有意义）。
+   *
+   * 返回 null = 视野里没有敌塔，随便站。
+   */
+  private nearestTowerRange(u: ArenaUnit): { x: number; z: number; dist: number; radius: number } | null {
+    let best: { x: number; z: number; dist: number; radius: number } | null = null;
+    for (const b of this.buildings.values()) {
+      if (b.side === u.side || b.hp <= 0) continue;
+      if (b.kind !== 'arrowTower' && b.kind !== 'cannonTower') continue;
+      const c = this.buildingCenter(b);
+      const d = Math.hypot(c.x - u.x, c.z - u.z);
+      // 塔的实际威胁半径：射程 + 占地半径 + 安全余量
+      const ownRange = b.kind === 'arrowTower' ? TOWER.arrow.range : TOWER.cannon.range;
+      const radius = ownRange + Math.max(b.cols, b.rows) / 2 + SIEGE_AI.safety;
+      if (!best || d - radius < best.dist - best.radius) best = { x: c.x, z: c.z, dist: d, radius };
+    }
+    return best;
   }
 
   /** 塔的目标池：敌兵与敌方建筑放在一起比距离（建筑按占地边缘算）。 */

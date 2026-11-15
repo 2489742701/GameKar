@@ -113,6 +113,15 @@ export interface UnitStats {
   unitsOnly: boolean;
   /** 画成"推车 + 小人" */
   siege: boolean;
+  /**
+   * **优先打哪一类**（2026-11-16 用户："移动火炮优先打塔，弩箭优先打兵"）。
+   *
+   * 和 `buildingsOnly` / `unitsOnly` 不是一回事：那两个是**能不能打**，
+   * 这个是**同时够得着时先打谁**。缺省 = 按距离取最近。
+   *
+   * 只有两台攻城车用：火炮 `'building'`（拆塔优先）、弩箭 `'unit'`（点兵优先）。
+   */
+  prefer?: 'building' | 'unit';
 }
 
 /** 一个兵种的口径。兵走 UNITS 表，移动火炮 / 弩车走 config 里的 MOBILE / BALLISTA —— 判据只在这里分一次。 */
@@ -130,6 +139,8 @@ export function statsOf(defId: string): UnitStats {
       buildingsOnly: false,
       unitsOnly: false,
       siege: true,
+      // 2026-11-16 用户："移动火炮优先打塔"
+      prefer: 'building',
     };
   }
   if (defId === 'ballista') {
@@ -144,6 +155,8 @@ export function statsOf(defId: string): UnitStats {
       buildingsOnly: false,
       unitsOnly: true,
       siege: true,
+      // 2026-11-16 用户："弩箭优先打兵"
+      prefer: 'unit',
     };
   }
   const d = unitDef(defId);
