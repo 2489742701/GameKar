@@ -120,6 +120,60 @@ describe('README：测试条数的自述不能虚报', () => {
   });
 });
 
+/**
+ * 模组契约文档（`大地图模组化架构_20261108.md` §2.3）里的**成员数**必须等于代码。
+ *
+ * 起因：这张表是 2026-11-15 才补的，之前文档写的是初版草案（`services: {...}`），
+ * 而代码早就有 `assets` / `modApi` 两块 —— 照过期文档写模组会直接踩空。
+ * 既然补了，就别让它再漂：数字从 modDeps.ts 现算，文档只负责写。
+ */
+describe('架构文档 §2.3：注入面的成员数与 modDeps 一致', () => {
+  const arch = read('/docs/工作笔记/大地图模组化架构_20261108.md');
+  const deps = read('/src/arena/modDeps.ts');
+
+  /** 从 `export const <name> = { ... }` 里数键名 */
+  const keyCount = (name: string): number => {
+    const start = deps.indexOf(`export const ${name}`);
+    expect(start, `modDeps.ts 里找不到 ${name}`).toBeGreaterThanOrEqual(0);
+    const end = deps.indexOf('\n};', start);
+    return [...deps.slice(start, end).matchAll(/^\s+(\w+)\s*[,:]/gm)].length;
+  };
+
+  it('three / engine / assets / modApi 四个数字都对得上', () => {
+    const table: [string, number][] = [
+      ['three', keyCount('modThree')],
+      ['engine', keyCount('modEngine')],
+      ['assets', keyCount('modAssets')],
+      ['modApi', keyCount('modApi')],
+    ];
+    for (const [kind, count] of table) {
+      expect(count, `${kind} 一个成员都没数出来，判据失效了`).toBeGreaterThan(2);
+      const row = arch.split('\n').find((l) => l.startsWith(`| \`${kind}\` |`));
+      expect(row, `文档 §2.3 的注入面表里没有 ${kind} 这一行`).toBeTruthy();
+      expect(row, `文档里 ${kind} 的成员数写错了（实际 ${count}）`).toContain(`| \`${kind}\` | ${count} |`);
+    }
+  });
+
+  it('文档不再残留初版草案的 services: { ... } 写法', () => {
+    // 那版契约早已被平铺成员取代，留着会让人以为 toast 和 makeLoop 是嵌套的。
+    // ⚠️ 只查**代码块**：小节开头那段"以前写的是 services: {...}"是历史说明，
+    //    它提到旧写法是故意的（讲清这次为什么重写），不该被判为残留。
+    const contract = arch.slice(arch.indexOf('### 2.3 契约'), arch.indexOf('### 2.4'));
+    expect(contract.length).toBeGreaterThan(500); // 切到了正确的小节
+    const codeStart = contract.indexOf('export interface ModHost');
+    expect(codeStart, '§2.3 里找不到 ModHost 的契约代码块').toBeGreaterThanOrEqual(0);
+    const code = contract.slice(codeStart, contract.indexOf('```', codeStart));
+    expect(code.length).toBeGreaterThan(200);
+    expect(code).not.toContain('services: {');
+    expect(code).toContain('makeLoop(options: GameLoopOptions): GameLoop;');
+    expect(code).toContain('readonly assets:');
+    expect(code).toContain('readonly modApi:');
+    // 两个版本号必须分开讲清楚
+    expect(contract).toContain('host.api === 1');
+    expect(contract).toContain('host.modApi.version === 2');
+  });
+});
+
 describe('玩法说明：面向玩家的那份也不能漂', () => {
   it('金币上限 / 开局与 config 一致', () => {
     // 玩法说明写的是「开局 15 金、上限 30」这类口语，抠数字比对

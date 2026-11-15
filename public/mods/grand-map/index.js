@@ -20,6 +20,15 @@ export function mount(host) {
   if (!host || host.api !== 1) {
     throw new Error('host 契约不匹配（需要 api=1）');
   }
+  // 开放 API 也带版本，和 host.api 分属两件事（modApi.ts 顶部说清了）：
+  //   host.api    —— 宿主契约，决定 mount/exit/makeLoop 这层形状；
+  //   modApi.version —— 卡池 / 手牌 / 金币条这层能力。
+  // 只查前者的话，开放 API 从 2 升到 3 时模组会**静默**用错形状，到运行期才崩。
+  // 这里要求 >= 2 而不是 ===：开放 API 只增不改，向后兼容的版本可以照跑。
+  const apiVersion = host.modApi && host.modApi.version;
+  if (typeof apiVersion !== 'number' || apiVersion < 2) {
+    throw new Error(`开放 API 版本不匹配（需要 >= 2，实际 ${apiVersion}）`);
+  }
 
   const game = { state: createGame(), tradeTarget: 2, tradeKind: 'near' };
   const view = createView(host, game);

@@ -100,6 +100,57 @@ describe('开放 API 是单向出口', () => {
     expect("readonly api: 2;".replace('2', '2')).not.toContain('readonly api: 1;');
   });
 
+  /**
+   * 2026-11-15 补：模组原来只查 `host.api !== 1`，不查开放 API 版本。
+   * 结果是 modApi 从 2 升到 3 时，模组会**静默**用错形状，到运行期才崩 ——
+   * 和 host.api 那套防呆不对称。现在两边都要在 mount 入口挡住。
+   */
+  it('模组 mount 入口同时校验 host.api 与 modApi.version', () => {
+    const idx = stripComments(read('public/mods/grand-map/index.js'));
+    expect(idx).toContain('host.api !== 1');
+    expect(idx).toContain('host.modApi');
+    expect(idx).toContain('.version');
+    // 要求 >= 2，而不是 === 2：开放 API 只增不改，向后兼容的版本应该照跑
+    expect(idx).toMatch(/apiVersion\s*<\s*2/);
+    // 反证：只查 host.api 的旧写法必须被认出来
+    const old = 'if (!host || host.api !== 1) { throw new Error("x"); }';
+    expect(/modApi\.version|apiVersion/.test(old)).toBe(false);
+  });
+
+  /**
+   * `remote` 字段从来没有实现过（2026-11-15 查证）。留着字段是为了清单格式稳定，
+   * 但**写了必须吵一句** —— 否则模组作者会以为远程热更新能用，实际仍读本地文件。
+   */
+  it('未实现的 remote 字段：清单里写了就要 warn，不能静默生效', () => {
+    const host = read('src/arena/modHost.ts');
+    const fn = host.slice(host.indexOf('export async function loadManifest'));
+    expect(fn).toContain('m.remote');
+    expect(fn).toContain('尚未实现');
+    // 反证：把 warn 删掉、remote 又留着，就是"说了能热更新其实没做"
+    expect(stripComments(fn)).not.toContain('await fetch(m.remote)');
+    expect(host).toContain('remote?: string | null;');
+  });
+
+  /**
+   * `unmount()` 原来声明了但**全项目 0 个调用点**（模组那边的清理是死代码）。
+   * 现在挂在 pagehide / beforeunload 上，幂等、且清理抛错不许拦住导航。
+   */
+  it('unmount 接在 pagehide / beforeunload 上，且只跑一次', () => {
+    const host = read('src/arena/modHost.ts');
+    expect(host).toContain("addEventListener('pagehide'");
+    expect(host).toContain("addEventListener('beforeunload'");
+    expect(host).toContain('hookTeardown(mod)');
+    // 两个钩子可能先后都触发：必须幂等
+    expect(host).toContain('let done = false');
+    expect(host).toContain('if (done) return;');
+    // 清理抛错只记一笔，不能拦住页面离开
+    expect(host).toContain('不影响离开页面');
+    expect(host).toContain("typeof mod.unmount !== 'function'");
+    // 反证：声明了却没人调用的旧状态必须被认出来
+    const declOnly = 'interface X { unmount?(): void; }';
+    expect(declOnly).not.toContain('hookTeardown');
+  });
+
   it('modDeps 具名注入 modApi，且没把 three 整包塞回来', () => {
     const deps = stripComments(read('src/arena/modDeps.ts'));
     expect(deps).toContain('export const modApi');

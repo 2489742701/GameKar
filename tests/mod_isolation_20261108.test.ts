@@ -191,17 +191,92 @@ describe('模组自身不静态依赖主程序（允许内部相对 import）', 
     expect(all).not.toContain('setInterval');
   });
 
-  it('反证：若模组用了 host.three，每个成员都必须在 modDeps 白名单里', () => {
+  /**
+   * 注入面白名单（2026-11-15 补齐）。
+   *
+   * 原来这条只扫 `T.*`（three），`A.*`（modAssets）和 `API.*`（modApi）是**无锁**的 ——
+   * 实测在 view.js 里写一行 `A.ThisMemberDoesNotExist`，42 条锁全绿，直到运行期才崩。
+   * 而架构文档 §2.4 记的第一次事故（`T.Group is not a constructor`）正是同一类问题。
+   *
+   * ⚠️ 难点：注入到模组的句柄有**两种**传递方式，只认第一种会漏掉一半文件：
+   *   ① `const A = host.assets`  —— view.js 用的；
+   *   ② 函数形参 `export function createSky(T, ...)` 由 view.js 传 `T` 进来 —— sky.js / hand.js 用的。
+   * 早先的版本只扫 `T.*` 且按字面别名，所以 sky.js 里的 `T.NopeGroup` 和 hand.js 里的
+   * `api.NotARealMember` 都**静默通过**（实测）。现在两种都认，且逐文件解析各自的绑定。
+   */
+  it('反证：模组用到的每一个注入成员（three / assets / modApi）都必须真的注入了', () => {
     const deps = read('src/arena/modDeps.ts');
-    const block = deps.slice(deps.indexOf('export const modThree'), deps.indexOf('export const modEngine'));
-    const provided = new Set([...block.matchAll(/^\s*(\w+),?\s*$/gm)].map((m) => m[1]!));
-    const missingOf = (used: string[]) => used.filter((k) => !provided.has(k));
-    expect(provided.size).toBeGreaterThan(5);
-    for (const src of modSources()) {
-      const used = [...new Set([...src.matchAll(/\bT\.(\w+)/g)].map((x) => x[1]!))];
-      expect(missingOf(used), `模组用到的 three 成员没注入：${used.join(', ')}`).toEqual([]);
+    /** 从 `export const <name> = { ... }` 里抠出键名 */
+    const keysOf = (name: string): Set<string> => {
+      const start = deps.indexOf(`export const ${name}`);
+      expect(start, `modDeps.ts 里找不到 ${name}`).toBeGreaterThanOrEqual(0);
+      const end = deps.indexOf('\n};', start);
+      const block = deps.slice(start, end);
+      return new Set([...block.matchAll(/^\s+(\w+)\s*[,:]/gm)].map((m) => m[1]!));
+    };
+    const byKind = {
+      T: keysOf('modThree'),
+      A: keysOf('modAssets'),
+      API: keysOf('modApi'),
+    };
+    for (const [kind, keys] of Object.entries(byKind)) {
+      expect(keys.size, `modThree/modAssets/modApi 里的 ${kind} 一个成员都没解析出来`).toBeGreaterThan(2);
     }
-    // 反证：把没注入的成员塞回去，判据必须抓到
-    expect(missingOf(['WebGLRenderer', 'NotInjected'])).toEqual(['NotInjected']);
+
+    // 逐文件的"别名 → 注入种类"映射。两种来源都收：
+    //   显式绑定：const T = host.three / const A = host.assets / const API = host.modApi
+    //   形参绑定：由 view.js 把自己的绑定当实参传进 createSky(T,...) / createHand(API,...)
+    const kindOfAlias = new Map<string, string>([
+      ['T', 'T'], ['A', 'A'], ['API', 'API'],
+      // 形参名到种类的对应：createHand(api, ...) 收的是 host.modApi
+      ['api', 'API'],
+    ]);
+
+    const violations: string[] = [];
+    let scanned = 0;
+    for (const src of modSources()) {
+      const code = stripComments(src);
+      // 显式绑定优先：文件自己声明了什么就用什么（防止把别的变量误判成注入）
+      const declared = new Map<string, string>();
+      for (const [, alias, prop] of code.matchAll(/const\s+(\w+)\s*=\s*host\.(\w+)/g)) {
+        const kind = prop === 'three' ? 'T' : prop === 'assets' ? 'A' : prop === 'modApi' ? 'API' : null;
+        if (kind) declared.set(alias!, kind);
+      }
+      // 形参注入：扫 `export function name(<形参列表>)` 里出现的已知注入名
+      for (const [, params] of code.matchAll(/export function \w+\s*\(([^)]*)\)/g)) {
+        for (const raw of params!.split(',')) {
+          const name = raw.trim().split(/[\s=]/)[0]!;
+          if (!name || declared.has(name)) continue;
+          const kind = kindOfAlias.get(name);
+          if (kind) declared.set(name, kind);
+        }
+      }
+
+      for (const [alias, kind] of declared) {
+        const used = [...new Set(
+          [...code.matchAll(new RegExp(`\\b${alias}\\.(\\w+)`, 'g'))].map((m) => m[1]!),
+        )];
+        scanned += used.length;
+        const keys = byKind[kind as keyof typeof byKind]!;
+        for (const member of used) {
+          if (!keys.has(member)) violations.push(`${alias}.${member}（${kind} 注入面里没有 ${member}）`);
+        }
+      }
+    }
+    expect(scanned, '一个注入成员都没扫到，判据失效了').toBeGreaterThan(40);
+    expect(violations, `模组用了没注入的成员：\n  ${violations.join('\n  ')}`).toEqual([]);
+  });
+
+  it('反证：这条白名单判据本身抓得住缺成员（喂假数据必须红）', () => {
+    const provided = new Set(['Group', 'Mesh', 'Scene']);
+    const missingOf = (used: string[]): string[] => used.filter((k) => !provided.has(k));
+    expect(missingOf(['Group', 'Scene'])).toEqual([]);
+    expect(missingOf(['Group', 'ThisMemberDoesNotExist'])).toEqual(['ThisMemberDoesNotExist']);
+    // 而 modDeps 的真实白名单里，确实没这个成员 —— 与上面一致
+    expect(read('src/arena/modDeps.ts')).not.toContain('ThisMemberDoesNotExist');
+    // 形参路径也必须被覆盖：sky.js / hand.js 是靠实参注入的，不能只锁显式 const 绑定
+    const sky = stripComments(read('public/mods/grand-map/sky.js'));
+    expect(sky).toMatch(/export function createSky\(\s*\w+/);
+    expect(sky).toContain('T.');
   });
 });

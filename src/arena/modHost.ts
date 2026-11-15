@@ -30,7 +30,13 @@ export interface ModEntry {
    * 加一句 `&& !m.dev` 就能一处关掉全部开发版入口。
    */
   dev?: boolean;
-  /** 预留：远程 HTTPS 增量更新。第一版忽略，见架构文档 §4。 */
+  /**
+   * **尚未实现**（2026-11-15 明确）。留着字段是为了将来做远程 HTTPS 增量更新时
+   * 不用改清单格式；`loadManifest()` 现在**不读它**，写了也不会生效。
+   *
+   * 留着而不是删掉的理由：清单是**对外格式**，模组作者会照着写。
+   * 所以这里必须让"写了也没用"这件事有声音 —— 见 `loadManifest()` 里的 warn。
+   */
   remote?: string | null;
 }
 
@@ -69,7 +75,7 @@ export async function loadManifest(): Promise<ModEntry[]> {
     if (!res.ok) return [];
     const data = (await res.json()) as ModManifest;
     if (data.version !== 1 || !Array.isArray(data.mods)) return [];
-    return data.mods.filter(
+    const accepted = data.mods.filter(
       (m) =>
         m &&
         ID_RE.test(m.id) &&
@@ -77,6 +83,16 @@ export async function loadManifest(): Promise<ModEntry[]> {
         m.api === HOST_API &&
         typeof m.name === 'string',
     );
+    // `remote` 是**没有实现**的字段。清单里写了它的人会以为热更新能用，
+    // 所以宁可吵一句，也不要安静地按本地文件加载。每个模组最多 warn 一次。
+    for (const m of accepted) {
+      if (m.remote) {
+        console.warn(
+          `[modHost] 模组 "${m.id}" 的 remote 字段**尚未实现**，本次仍按本地 /mods/ 加载：${m.remote}`,
+        );
+      }
+    }
+    return accepted;
   } catch (err) {
     console.warn('[modHost] 模组清单读不到（按"没装模组"处理）：', err);
     return [];
@@ -182,10 +198,44 @@ export async function mountMod(id: string): Promise<void> {
       return;
     }
     await mod.mount(host);
+    hookTeardown(mod);
   } catch (err) {
     console.warn(`[modHost] 模组 ${id} 加载失败：`, err);
     showFallback(`${entry.name} 加载失败：${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * 把模组的 `unmount()` 接到**真正会发生的时刻**（2026-11-15 补）。
+ *
+ * 起因：`unmount?()` 在契约里躺了很久，模组也老老实实实现了完整的清理
+ * （停循环、dispose 场景、删探针钩子），但**全项目 0 个调用点** —— 死代码。
+ *
+ * 为什么不用「运行时卸载模组」那条路：`ArenaApp` 没有整体 dispose，
+ * 硬做就得改主程序（见架构文档 §2）。但**页面正在离开**是另一回事：
+ * 这时不做任何"切回主程序"的假设，只是让 WebGL 上下文、rAF、window 监听
+ * 在该释放的时候放掉 —— 尤其手机上，WebView 返回/切后台时能省掉一轮泄漏。
+ *
+ * 两个钩子都挂上，因为它们的触发时机不重叠：
+ *   `pagehide` —— 前进/后退、关标签、移动端切后台（最可靠的那个）
+ *   `beforeunload` —— 桌面端刷新/关闭，某些浏览器只给这一个
+ * 用 once + 幂等标记，保证只跑一次（两个钩子可能先后都触发）。
+ */
+function hookTeardown(mod: GamekarMod): void {
+  if (typeof mod.unmount !== 'function') return;
+  let done = false;
+  const run = (): void => {
+    if (done) return;
+    done = true;
+    try {
+      mod.unmount?.();
+    } catch (err) {
+      // 清理失败只记一笔：这时候页面已经在走了，不能因此拦住导航
+      console.warn('[modHost] 模组 unmount 抛错（已被吞掉，不影响离开页面）：', err);
+    }
+  };
+  window.addEventListener('pagehide', run, { once: true });
+  window.addEventListener('beforeunload', run, { once: true });
 }
 
 /**

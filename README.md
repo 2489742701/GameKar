@@ -17,7 +17,7 @@
 ```bash
 npm install
 npm run dev          # http://localhost:5173
-npm run check        # 类型检查 + 927 条回归（914 主套件 + 13 条文档数值锁）
+npm run check        # 类型检查 + 933 条回归（918 主套件 + 15 条文档数值锁）
 npm run test:mod     # 模组自带 40 条（node --test，已含在 check 里）
 npm run build        # 产物在 dist/，three 单独分包
 ```
@@ -103,7 +103,7 @@ src/
 └─ styles/            base.css（全部 token）· layout.css（横竖屏网格）· arena.css（对战 HUD）· start.css（开始菜单）
 tests/                grid · random · terrain · world · gacha · data · geometry · placement · dudes ·
                       roster · rally · combat · rounds · theme · readouts · repair · walk · icons ·
-                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 927 条
+                      arena · ruins · cameraId · models · damage · loop · audio · stand · ai · needIcons · banner —— 共 933 条
                       （含 P-101 新增的 `docs_numbers_20261115`：README/玩法说明里的数字必须和 config 对得上）
                       另有模组自带回归 40 条（`public/mods/grand-map/tests/`，`npm run test:mod`，已并入 check）
 tools/                preview_models.mjs：离线等轴预览器，按**游戏同一比例**把五栋楼渲染成 PNG 排版图
