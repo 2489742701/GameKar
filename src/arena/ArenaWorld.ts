@@ -1778,6 +1778,46 @@ export class ArenaWorld {
       const goal = this.coreOf(u.side === 'blue' ? 'red' : 'blue');
       const gx = goal ? goal.col + goal.cols / 2 : this.field.cols / 2;
       const gz = goal ? goal.row + goal.rows / 2 : this.field.rows / 2;
+
+      /**
+       * **步兵护送攻城器械**（2026-11-16 用户："在有攻城器械的情况下，步兵会守在
+       * 攻城器械旁边，也站在那个范围外"）。
+       *
+       * 只对**普通兵种**生效（`!st.siege`），而且只在"附近真的有己方攻城器械"时
+       * （`SIEGE_AI.escort` 格内）。三件事：
+       *
+       * ① 站到器械旁边（稍微靠里一点，挡在它与塔之间）；
+       * ② **不越过器械所在的"安全线"** —— 器械停在塔射程外，步兵跟着它也就不会
+       *    自己冲进塔里去送死（这正是原来存活率只有 9% 的主因）；
+       * ③ 有敌人贴脸时照旧还手（上面的开火分支先跑，这里只管走位）。
+       *
+       * 为什么不给步兵也加"撤退"：那会让整条兵线在塔前一齐后退，推兵线彻底停了。
+       * 步兵只要**别比车更靠前**就够，被塔打是这份工作的代价。
+       */
+      if (!st.siege) {
+        const escort = this.nearestAllySiege(u);
+        if (escort) {
+          const ex = escort.x;
+          const ez = escort.z;
+          // 靠里方向 = 从器械指向敌塔（没有塔就指向对方大本营）
+          const tower = this.nearestTowerRange(u);
+          const dirX = tower ? tower.x - ex : gx - ex;
+          const dirZ = tower ? tower.z - ez : gz - ez;
+          const len = Math.hypot(dirX, dirZ) || 1;
+          const standX = ex + (dirX / len) * SIEGE_AI.escortLead;
+          const standZ = ez + (dirZ / len) * SIEGE_AI.escortLead;
+          const dx = standX - u.x;
+          const dz = standZ - u.z;
+          const d = Math.hypot(dx, dz);
+          // 已经站到位（0.4 格内）就停住 —— 别在器械旁边抖
+          if (d > 0.4) {
+            const step = Math.min(d, st.speed * dt);
+            this.stepUnit(u, (dx / d) * step, (dz / d) * step);
+          }
+          continue;
+        }
+      }
+
       const tx = foe ? foe.x : gx;
       const tz = foe ? foe.z : gz;
       const dist = Math.hypot(tx - u.x, tz - u.z);
@@ -1939,6 +1979,24 @@ export class ArenaWorld {
       const edge = Math.max(0, d - Math.max(b.cols, b.rows) / 2);
       if (edge > seek) continue;
       if (!best || edge < best.dist) best = { dist: edge, x: c.x, z: c.z, building: b };
+    }
+    return best;
+  }
+
+  /**
+   * **离我最近的己方攻城器械**（2026-11-16，给步兵护送用）。
+   *
+   * 只在 `SIEGE_AI.escort` 格内返回 —— 地图另一头的车不该把整条兵线拽回来。
+   * 返回 null = 附近没有车，步兵走原来的推线逻辑。
+   */
+  private nearestAllySiege(u: ArenaUnit): ArenaUnit | null {
+    let best: ArenaUnit | null = null;
+    let bd = SIEGE_AI.escort;
+    for (const o of this.units) {
+      if (o === u || o.side !== u.side || o.hp <= 0) continue;
+      if (!statsOf(o.defId).siege) continue;
+      const d = Math.hypot(o.x - u.x, o.z - u.z);
+      if (d < bd) { bd = d; best = o; }
     }
     return best;
   }
@@ -2399,6 +2457,17 @@ export class ArenaWorld {
       // 容器读数直接复用 `supplyOf()`：AI 和 HUD 读同一份，不会算出两套账
       supply: this.supplyOf(side),
       rerollIn: p.aiRerollIn,
+      // 法术的目标密度（2026-11-16）：AI 靠它判断"这一发够不够本"
+      spellTargets: this.spellTargetDensity(side),
+      /**
+       * 场上兵种构成（2026-11-16）：AI 靠它判断"该不该出攻城器械"。
+       * 攻城车没有步兵掩护就是白送（血薄），这条读数让 AI 会打配合。
+       */
+      army: (() => {
+        const mine = this.units.filter((u) => u.side === side && u.hp > 0);
+        const siege = mine.filter((u) => statsOf(u.defId).siege).length;
+        return { squads: mine.length - siege, siege, alive: mine.length };
+      })(),
     };
     const action = decide(view);
     if (action.kind === 'reroll') {
@@ -2419,6 +2488,55 @@ export class ArenaWorld {
       : this.randomSpot(p.side, card);
     if (!cell) return;
     this.playCardOf(p, slot, cell.col, cell.row);
+  }
+
+  /**
+   * **AI 眼里的"法术目标密度"**（2026-11-16）。
+   *
+   * 对每种法术，扫一遍敌方目标，算"一发大概能覆盖多少个"：
+   * - `units`：取**最密的那一团**能罩住几个兵（不是全场总数——散在两头没用）；
+   * - `towers` / `buildings`：同理，取最密处。
+   *
+   * 为什么取"最密"而不是"平均"：AI 只有一发，它该知道**最好那一发**值多少，
+   * 而不是拿平均密度做决策（那会永远算出"不值"）。
+   *
+   * 三个数按三类法术分开算 ⇒ 返回值是**各法术各自的最优**，AI 按手里的卡去取。
+   * 实现上返回的是"最大半径那一版"的读数（导弹 2.6 最宽），
+   * 对半径更小的法术它会略偏乐观 —— 这是刻意的：宁可高估一点也别让 AI 永远不放法术。
+   */
+  private spellTargetDensity(side: Side): { units: number; towers: number; buildings: number } {
+    const foe = side === 'blue' ? 'red' : 'blue';
+    // 用最大半径采样；每个候选点统计圈内目标数
+    const radius = Math.max(...Object.values(SPELL).map((s) => s.radius));
+    let units = 0;
+    let towers = 0;
+    let buildings = 0;
+
+    for (const u of this.units) {
+      if (u.side !== foe || u.hp <= 0) continue;
+      let n = 0;
+      for (const o of this.units) {
+        if (o.side !== foe || o.hp <= 0) continue;
+        if (Math.hypot(o.x - u.x, o.z - u.z) <= radius) n++;
+      }
+      if (n > units) units = n;
+    }
+    for (const b of this.buildings.values()) {
+      if (b.side !== foe || b.hp <= 0 || b.kind === 'core') continue;
+      const c = this.buildingCenter(b);
+      let nt = 0;
+      let nb = 0;
+      for (const o of this.buildings.values()) {
+        if (o.side !== foe || o.hp <= 0 || o.kind === 'core') continue;
+        const oc = this.buildingCenter(o);
+        if (Math.hypot(oc.x - c.x, oc.z - c.z) > radius + 1.5) continue;
+        if (o.kind === 'arrowTower' || o.kind === 'cannonTower') nt++;
+        else nb++;
+      }
+      if (nt > towers) towers = nt;
+      if (nb > buildings) buildings = nb;
+    }
+    return { units, towers, buildings };
   }
 
   /**

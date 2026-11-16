@@ -169,6 +169,15 @@ describe('③ 站位：开火时必须在塔的射程外', () => {
 
     let minDist = Number.POSITIVE_INFINITY;
     run(w, 40, () => {
+      /**
+       * ⚠️ **只统计塔还活着的那些帧**：这台车在 40 秒里把塔**拆掉了**
+       * （440 血 ÷ 20 dps ≈ 22 秒，实测 40 秒内倒地），塔一没
+       * `nearestTowerRange()` 就返回 null，车自然继续往里走 —— 那不是"进了危险圈"，
+       * 是"危险源已经不存在了"。
+       *
+       * 早先没加这个条件，断言读到的是塔倒塌之后的位置，红得莫名其妙。
+       */
+      if (!w.buildings.has(tower.id)) return;
       if (cannon.hp > 0) minDist = Math.min(minDist, distTo(cannon, tower));
     });
 

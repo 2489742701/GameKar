@@ -26,7 +26,7 @@
  */
 
 import {
-  AI, ECONOMY, REROLL, SUPPLY,
+  AI, ECONOMY, REROLL, SPELL, SUPPLY,
   armySupplyOf, buildingPopOf,
   type ArenaCard, type BuildingKind,
 } from './config';
@@ -53,6 +53,40 @@ export interface AiView extends AiHandView {
   supply?: SupplyView;
   /** 距下次可刷新还有几秒（≤0 才能刷） */
   rerollIn?: number;
+  /**
+   * **法术的目标密度**（2026-11-16）：敌人在场上的分布有多密。
+   *
+   * 三项都是"一发法术平均能覆盖多少个"的粗估 —— 世界层按法术的半径扫一遍算出来，
+   * AI 只读结果。不传 ⇒ 法术按"打不到东西"处理（不会乱放）。
+   *
+   * ⚠️ 为什么不传具体坐标：AI 是**纯函数**，不该读世界状态；
+   * 传"密度"这种已经聚合过的读数，既够决策，又保住了可测性。
+   */
+  spellTargets?: {
+    /** 一团兵平均能吃几个 */
+    units: number;
+    /** 能顺带打到几座塔 */
+    towers: number;
+    /** 能顺带打到几栋普通楼 */
+    buildings: number;
+  };
+  /**
+   * **场上的兵种构成**（2026-11-16 用户："多使用攻城器械，然后让步兵配合攻城器械"）。
+   *
+   * AI 该像玩家一样打配合：**攻城器械在射程外拆楼、步兵在前排挡刀并清守军**。
+   * 单出攻城器械会被守军点名（血量薄：火炮 90 / 弩箭 70）；
+   * 单出步兵又拆不动塔（弓箭手 13 dps，拆 440 血的箭塔要 34 秒）。
+   *
+   * 所以 AI 要知道自己场上有没有"肉盾"，来防止**孤零零地出一台车送死**。
+   */
+  army?: {
+    /** 场上己方普通部队数（可当前排） */
+    squads: number;
+    /** 场上己方攻城器械数 */
+    siege: number;
+    /** 场上己方部队总数 */
+    alive: number;
+  };
 }
 
 /** ② 决策输出：三选一，`think()` 只认这三种。 */
@@ -60,6 +94,53 @@ export type AiAction =
   | { kind: 'reroll' }
   | { kind: 'play'; slot: number }
   | { kind: 'wait' };
+
+/**
+ * 一张法术牌**大概值多少金**（2026-11-16，AI 会用法术的核心）。
+ *
+ * 输入是"这一发能打到什么"，输出是折算价值。AI 拿它跟卡价比：
+ * `value >= cost * AI.spell.worthRatio` 才值得打。
+ *
+ * 为什么按目标**个数**而不是按血量：AI 视角里"打死一个兵"和"打残三个兵"价值不同，
+ * 但精确算残血收益需要读每个目标的血量，那会让这段逻辑和世界层耦合。
+ * 按个数 + 固定系数是**刻意保守**的估法：低估比高估安全（宁可少打一发，也别拿 20 金砸一个兵）。
+ *
+ * @param spell 法术 id（`SPELL` 的键）
+ * @param units 能命中的敌方部队数
+ * @param towers 能命中的敌方防御塔数
+ * @param buildings 能命中的敌方普通建筑数
+ */
+export function spellValue(
+  spell: string,
+  units: number,
+  towers: number,
+  buildings: number,
+): number {
+  const spec = SPELL[spell];
+  if (!spec) return 0;
+  const w = AI.spell;
+  // 法术打不到的那一类直接不计（导弹砸兵 = 0 价值，这也是它"不该砸兵"的数学表达）
+  const unitScore = spec.vsUnits && spec.unitScale > 0 ? units * w.unitValue * spec.unitScale : 0;
+  const towerScore = spec.vsBuildings ? towers * w.towerValue : 0;
+  const buildingScore = spec.vsBuildings ? buildings * w.buildingValue : 0;
+  return unitScore + towerScore + buildingScore;
+}
+
+/**
+ * 这一发法术值不值得打（AI 用）。
+ *
+ * `cost` 传卡价。返回 true 表示"够本且有赚头"。
+ */
+export function worthCasting(
+  card: ArenaCard,
+  units: number,
+  towers: number,
+  buildings: number,
+): boolean {
+  if (card.kind !== 'spell' || !card.spell) return false;
+  const value = spellValue(card.spell, units, towers, buildings);
+  return value >= card.cost * AI.spell.worthRatio;
+}
 
 const nonNull = (hand: (ArenaCard | null)[]): ArenaCard[] =>
   hand.filter((c): c is ArenaCard => c !== null);
@@ -94,6 +175,25 @@ export function canPlay(card: ArenaCard, s?: SupplyView): boolean {
  * 顺序是**先能站住、再能产兵、最后才是堆军队**；从 2026-10-31 起，
  * **民居/磨坊排在"盖新楼"前面**：每座塔要 1 座民居、每座兵营要 1 磨坊 + 1 民居，
  * 名额不够时盖出来的楼是停摆的（塔不开火、兵营不出兵），那 6/12 金就是白花。
+ *
+ * ## 科技线的取舍（2026-11-16 用户："选科技线要平衡，科技的前置建筑实际上都很占地方"）
+ *
+ * 早先的清单里**完全没有**齿轮工厂 / 兽人巢穴 / 法术工厂 —— AI 从不主动盖科技楼，
+ * 只能靠随机发牌撞上（实测工厂只出现在 23% 的对局里）。现在补进去，并且**按取舍排序**：
+ *
+ * 三条线的真实代价（每样 1 座 + 配套民居）：
+ *
+ * | 线 | 前置 | 解锁 | 额外开销 |
+ * | --- | --- | --- | --- |
+ * | 基础 | 兵营 | 全部地面军队 | 1 磨坊 + 1 民居 |
+ * | 空军/攻城 | 齿轮工厂（4×3） | 三架飞行器 + 两辆攻城车 | **12 格**，最贵的一栋 |
+ * | 兽人 | 兽人巢穴 | 兽人小队（不占人口、吃双份面包） | 9 格，但兵不占人口 |
+ * | 法术 | 法术工厂 | 剑雨（专杀兵） | 9 格 + **吃 1 面包** |
+ *
+ * 全科技要 **75 格 / 100 金**，而 3 分钟只有约 105 金入账 ⇒ **不可能全走**。
+ * 所以清单里的顺序就是 AI 的取舍：**先基础、再看局势补一条线**，
+ * 具体选哪条由 `techPick()` 按"我现在缺什么打法"决定（缺前排→兽人；
+ * 缺拆楼→工厂；对面兵多→法工）。
  */
 export function wishList(count: (kind: BuildingKind | 'core') => number): string[] {
   const towers = count('arrowTower') + count('cannonTower');
@@ -115,12 +215,70 @@ export function wishList(count: (kind: BuildingKind | 'core') => number): string
     if (mills < barracks) out.push('mill');
     out.push('barracks');
   }
+  /**
+   * **科技前置排在这里**：基础防线（2 塔 + 2 兵营）立起来之后才考虑分支。
+   * 早于这一步去盖工厂，等于"兵线还没成型就把钱压进一条可能用不上的线"。
+   */
+  const tech = techPick(count);
+  for (const id of tech) out.push(id);
   // 到这里建筑都齐了：剩下的全出军队，贵的排前面
   out.push(
     'mech', 'mobileCannon', 'knightsBig', 'orcsBig', 'mages', 'archersBig',
     'ballista', 'priests', 'knights', 'golem', 'orcs', 'archers',
   );
+  /**
+   * **法术排在军队之后**（2026-11-16）：它们只在 `assess()` 判定"够本"时才真的出，
+   * 所以排最后不会挤掉军队 —— 但如果手里有法术、场上又正好有一团兵/几座塔，
+   * `chooseCard` 会因为"够本的牌里它排位最高"而选它（此时军队都被容器卡住了）。
+   *
+   * 顺序：火球（通用、便宜）→ 剑雨（专杀兵）→ 导弹（贵、专拆楼）。
+   */
+  out.push('fireball', 'arrowRain', 'missile');
   return out;
+}
+
+/**
+ * **科技线取舍**（2026-11-16）：返回"这一局该补哪条前置建筑"，最多一条。
+ *
+ * 三条线不可能都走（75 格 / 100 金 vs 3 分钟 105 金收入），所以这里是**唯一一处**
+ * 决定取舍的地方。判据全是算得出来的账，不靠手感：
+ *
+ * - **齿轮工厂**：解锁三架飞行器 + 两辆攻城车。适用"对面楼多、我拆不动"
+ *   —— 攻城车射程长能白嫖塔，飞行器绕开地面防线。代价最高（12 格 + 16 金）。
+ * - **兽人巢穴**：兽人**不占人口**，只吃双份面包。适用"人口被建筑占满、
+ *   想加兵但挤不出人口"。这是唯一能绕过人口上限的兵源。
+ * - **法术工厂**：解锁剑雨（专杀兵、半径 2.2）。适用"对面兵海、我需要清场"。
+ *   额外吃 1 面包，所以面包紧的时候要犹豫。
+ *
+ * 都不满足 ⇒ 返回空数组（不乱花钱）。
+ */
+export function techPick(count: (kind: BuildingKind | 'core') => number): string[] {
+  const has = (k: BuildingKind): boolean => count(k) > 0;
+  // 已经走过三条线里的一条就不再追加：全科技在当前经济下不可能
+  if (has('gearFactory') || has('orcLair') || has('spellForge')) return [];
+
+  const barracks = count('barracks');
+  const towers = count('arrowTower') + count('cannonTower');
+  const houses = count('house');
+  const mills = count('mill');
+  // 防线没成型不谈分支：这时盖科技楼会被直接拆掉，钱白花
+  if (barracks < 1 || towers < 1) return [];
+
+  /**
+   * 优先级（踩过的教训：AI 原来一条都不盖，于是"科技"实际上只有玩家会用）：
+   * 1. **兽人巢穴**：不占人口，是"建筑把人口吃满"时的唯一解 —— 这条最普适，排第一；
+   * 2. **齿轮工厂**：最贵，只有"兵线推不动、需要远程拆迁"时才值得；
+   * 3. **法术工厂**：吃面包，面包紧时反而拖累经济。
+   */
+  if (houses >= barracks + towers + 1 && mills >= 1) {
+    // 人口压力：民居数量已经跟不上要干活的楼 ⇒ 走"不占人口"的兽人线
+    if (houses <= barracks + towers) return ['orcLair'];
+    // 拆楼压力：起了两座塔还推不动（塔多说明对面在防） ⇒ 走攻城线
+    if (towers >= 2) return ['gearFactory'];
+    // 默认走法术线：剑雨成本最低（8 金一张），清兵最直接
+    return ['spellForge'];
+  }
+  return [];
 }
 
 /**
@@ -192,7 +350,43 @@ export type CardAssess = 'ok' | 'unwise' | 'blocked';
 
 export function assess(card: ArenaCard, view: AiView): CardAssess {
   if (!canPlay(card, view.supply)) return 'blocked';
-  if (card.kind !== 'building') return 'ok';
+
+  /**
+   * **法术要"够本"才算出牌**（2026-11-16 用户："强化一下 AI 也要会用法术"）。
+   *
+   * 判据和 `worthCasting` 同源：这一发折算价值 ≥ 卡价 × `worthRatio` 才 `ok`。
+   * 不够本 ⇒ `unwise`（落得下去但不该出）。这样 AI 不会拿 20 金的导弹去砸一个兵，
+   * 也不会因为手里攥着法术就放着不出 —— 只要场上有货就打。
+   *
+   * 没传 `spellTargets` ⇒ 按"打不到东西"处理，法术一律 `unwise`（不乱放）。
+   */
+  if (card.kind === 'spell') {
+    const t = view.spellTargets;
+    if (!t) return 'unwise';
+    return worthCasting(card, t.units, t.towers, t.buildings) ? 'ok' : 'unwise';
+  }
+
+  // 法术的判断在上面；这里只剩军队与建筑
+  if (card.kind !== 'building') {
+    /**
+     * **攻城器械要有步兵掩护**（2026-11-16 用户："多使用攻城器械，
+     * 然后让步兵配合攻城器械"）。
+     *
+     * 为什么这不是"少用"而是"会用"：
+     * - 攻城车血量薄（火炮 90 / 弩箭 70），**孤零零出**会被守军点名两下就没了，
+     *   25 金买个 3 秒的烟花；
+     * - 有步兵在前排挡刀，它能站在塔射程外一发一发拆 —— 这才是它的价值。
+     *
+     * 判据：场上己方**步兵数为 0 且这张是攻城卡** ⇒ `unwise`（先出步兵）。
+     * 注意"步兵为 0"而不是"步兵少于车"：后者会让 AI 永远在补步兵，一台车都出不来。
+     */
+    if (card.kind === 'siege') {
+      const a = view.army;
+      // 没有 army 读数（旧调用点）⇒ 不拦，保持向后兼容
+      if (a && a.squads === 0) return 'unwise';
+    }
+    return 'ok';
+  }
 
   const towers = view.count('arrowTower') + view.count('cannonTower');
   const barracks = view.count('barracks');
