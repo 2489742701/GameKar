@@ -275,6 +275,75 @@ export const UNITS: Record<string, UnitDef> = {
     stockInitial: 2,
   }),
 
+  /**
+   * **兽人坦克**（2026-11-16，P-109）—— 用户："再增加一些坦克单位，比如说兽人坦克，
+   * 兽人巨人，血量高，攻击力低，可以用来当肉盾"。
+   *
+   * 定位是**纯肉盾**，两个数把它和别的兵分开：
+   * - `hp` 高得离谱（220，仅次于机器巨人 300），但 `attack` 只有 6；
+   * - 有 `defense` 8（和机器巨人同级），所以箭塔 9 伤打它只有 1 点 —— 扛塔主力。
+   *
+   * 为什么需要它：实测一局出 54 个兵只活 5.5 个（存活率 10%），根因是
+   * 箭塔 12 dps 打弓箭手 2.8 秒就死。肉盾的作用不是杀人，是**把塔的火力吸过来**，
+   * 让后面的弓箭手 / 攻城车能站住输出。
+   *
+   * 代价（防"纯堆肉盾"）：攻 6 意味着它自己几乎拆不动楼、清不掉兵，
+   * 单出它就是一块会走的血包 —— 必须配输出单位。
+   */
+  orcTank: U({
+    id: 'orcTank',
+    name: '兽人坦克',
+    blurb: '血厚防高的肉盾，站前面替输出挡刀。攻击很低，别指望它拆楼。',
+    role: 'tank',
+    faction: 'own',
+    hp: 220,
+    attack: 6,
+    defense: 8,
+    range: 1.3,
+    speed: 0.9,
+    cooldown: 1.8,
+    sight: 4.4,
+    attackAnim: 'shield',
+    idleAnim: 'idleShield',
+    anims: [...COMBAT_ANIMS('shield', 'idleShield'), 'knocked'],
+    headBands: [[64, 71], [128, 149]],
+    faceBand: [1, 30],
+    heightTiles: 1.75,
+    trainSeconds: 20,
+    stockInitial: 1,
+  }),
+
+  /**
+   * **兽人巨人**（2026-11-16，P-109）—— 比坦克更大更硬，代价是更慢、更贵。
+   *
+   * 和坦克的分工：
+   * - 坦克（220 血 / 攻 6 / 速度 0.9）：**量多**，铺前面一排；
+   * - 巨人（380 血 / 攻 10 / 速度 0.7 / 高 2.1 格）：**量少**，一台就能挡住一条线，
+   *   但走得慢，跟不上快攻 —— 这是"什么时候用它"的取舍点。
+   */
+  orcGiant: U({
+    id: 'orcGiant',
+    name: '兽人巨人',
+    blurb: '一台就顶一排的巨兽。血极厚、走得慢，攻击依然不高。',
+    role: 'tank',
+    faction: 'own',
+    hp: 380,
+    attack: 10,
+    defense: 9,
+    range: 1.5,
+    speed: 0.7,
+    cooldown: 2.1,
+    sight: 4.6,
+    attackAnim: 'shield',
+    idleAnim: 'idleShield',
+    anims: [...COMBAT_ANIMS('shield', 'idleShield'), 'knocked'],
+    headBands: [[64, 71], [128, 149]],
+    faceBand: [1, 30],
+    heightTiles: 2.1,
+    trainSeconds: 26,
+    stockInitial: 1,
+  }),
+
   priest: U({
     id: 'priest',
     name: '牧师',

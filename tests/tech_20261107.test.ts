@@ -222,8 +222,8 @@ describe('齿轮工厂 4×3（设计文档 C 节）', () => {
     expect(w.hasBuilt('blue', 'gearFactory')).toBe(true);
   });
 
-  it('卡池 31 张（P-093 商行 + P-104 三种法术 + 法术工厂）；工厂不需要后勤配给', () => {
-    expect(CARDS).toHaveLength(31);
+  it('卡池 33 张（P-093 商行 + P-104 法术 + P-109 兽人坦克/巨人）；工厂不需要后勤配给', () => {
+    expect(CARDS).toHaveLength(33);
     const w = new ArenaWorld({ seed: 307 });
     const b = built(w, 'gearFactory');
     expect(w.isStaffed(b.id)).toBe(true); // 被动科技，不挂「缺民居」

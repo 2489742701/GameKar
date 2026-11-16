@@ -221,10 +221,23 @@ export function wishList(count: (kind: BuildingKind | 'core') => number): string
    */
   const tech = techPick(count);
   for (const id of tech) out.push(id);
-  // 到这里建筑都齐了：剩下的全出军队，贵的排前面
+  /**
+   * **军队顺序：肉盾在前、输出在后、法术最后**（2026-11-16，P-109）。
+   *
+   * 肉盾（兽人坦克 / 巨人）排在最前：**没有它们挡刀，输出单位活不到开火**
+   * （实测存活率只有 10%，箭塔 2.8 秒打死一个弓箭手）。
+   * 但它们排在所有**建筑**之后 —— 前期没兵线时先出肉盾等于把钱扔在塔下。
+   *
+   * 顺序含义（越靠前越想要）：
+   *   坦克 → 巨人 → 机器巨人 → 攻城车 → 大队 → 其它输出 → 杂兵
+   */
   out.push(
-    'mech', 'mobileCannon', 'knightsBig', 'orcsBig', 'mages', 'archersBig',
-    'ballista', 'priests', 'knights', 'golem', 'orcs', 'archers',
+    // ---- 肉盾：先站住，才谈输出
+    'orcTank', 'orcGiant', 'mech', 'golem',
+    // ---- 攻城：拆楼主力（有步兵掩护才出，见 assess）
+    'mobileCannon', 'ballista',
+    // ---- 输出
+    'knightsBig', 'orcsBig', 'mages', 'archersBig', 'priests', 'knights', 'orcs', 'archers',
   );
   /**
    * **法术排在军队之后**（2026-11-16）：它们只在 `assess()` 判定"够本"时才真的出，
