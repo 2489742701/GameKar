@@ -18,7 +18,10 @@ import { describe, expect, it } from 'vitest';
 import { BUILDINGS } from '@game/data/buildings';
 import { CARDS as OLD_CARDS } from '@game/data/cards';
 import { UNITS } from '@game/data/units';
-import { CARDS, ECONOMY, MATCH, NO_BUILD, TOWER, FIELD, ORC_LAIR, HAND } from '@arena/config';
+import {
+  CARDS, ECONOMY, MATCH, NO_BUILD, TOWER, FIELD, ORC_LAIR, HAND,
+  SPELL, MOBILE, BALLISTA, CORE,
+} from '@arena/config';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const read = (p: string): string => readFileSync(ROOT + p, 'utf8');
@@ -203,5 +206,72 @@ describe('玩法说明：面向玩家的那份也不能漂', () => {
     const total = MATCH.seconds + MATCH.overtimeSeconds;
     expect(guide).toContain(`${MATCH.seconds / 60} 分钟`);
     expect(guide).toContain(`总 ${total / 60} 分钟`);
+  });
+});
+
+/**
+ * **对战模式手册**（`docs/对战模式手册_20261116.md`，2026-11-16）——
+ * 它既是技术文档也是攻略，里面的数字**全是玩家会照着打的**，
+ * 所以和 README 一样必须跟代码对齐。
+ *
+ * 只锁"玩家真会照着做"的那几个数，不锁解释性文字：
+ * 塔血塔伤、法术三档、攻城射程、拆楼倍率、经济基础数。
+ */
+describe('对战模式手册：攻略数字必须和 config 一致', () => {
+  const manual = read('/docs/对战模式手册_20261116.md');
+  const manualNumbers = (): string => manual;
+
+  it('塔的数值（本版刚调过，最容易过期）', () => {
+    const q = [{ label: '箭塔', t: TOWER.arrow }, { label: '炮塔', t: TOWER.cannon }];
+    for (const { label, t } of q) {
+      expect(manualNumbers(), `${label}血量`).toContain(`**${t.hp}**`);
+      expect(manualNumbers(), `${label}伤害`).toContain(`**${t.damage} 伤**`);
+      expect(manualNumbers(), `${label}射程`).toContain(`射程 ${t.range}`);
+    }
+  });
+
+  it('法术三档：价格、半径、伤害都在表里', () => {
+    for (const c of CARDS.filter((x) => x.kind === 'spell')) {
+      const spec = SPELL[c.spell!]!;
+      expect(manual, `${c.id} 价格`).toContain(`**${c.cost} 金**`);
+      expect(manual, `${c.id} 半径`).toContain(`${spec.radius} 格`);
+    }
+    // 导弹的 150 是用户点名的数，单独钉
+    expect(manual).toContain(`150 × 2.2 = **330**`);
+  });
+
+  it('攻城器械射程（白嫖的全部依据）', () => {
+    expect(manual).toContain(`${MOBILE.range}`);
+    expect(manual).toContain(`${BALLISTA.range}`);
+    // 两个都必须真的超过箭塔，否则"白嫖"是空话
+    expect(MOBILE.range).toBeGreaterThan(TOWER.arrow.range);
+    expect(BALLISTA.range).toBeGreaterThan(TOWER.arrow.range);
+  });
+
+  it('肉盾两个单位的关键数（血 / 价 / 血每金）', () => {
+    const tank = UNITS['orcTank']!;
+    const giant = UNITS['orcGiant']!;
+    expect(manual).toContain(`**${tank.hp}**`);
+    expect(manual).toContain(`**${giant.hp}**`);
+    // 价格的"血每金"必须算得对（这是攻略里说服玩家买它的理由）
+    const tankCard = CARDS.find((c) => c.id === 'orcTank')!;
+    const giantCard = CARDS.find((c) => c.id === 'orcGiant')!;
+    expect(manual, '坦克血每金').toContain((tank.hp / tankCard.cost).toFixed(1));
+    expect(manual, '巨人血每金').toContain((giant.hp / giantCard.cost).toFixed(1));
+  });
+
+  it('经济与时长基础数', () => {
+    expect(manual).toContain(`| 开局金币 | ${ECONOMY.start} |`);
+    expect(manual).toContain(`| 金币上限 | ${ECONOMY.cap} |`);
+    expect(manual).toContain(`| 常规时间 | ${MATCH.seconds} 秒 |`);
+    expect(manual).toContain(`| 大本营 | ${CORE.hp} 血 |`);
+    expect(manual).toContain(`| 手牌 | ${HAND.size} 张`);
+  });
+
+  it('反证：改一个数而没改文档，这条会红', () => {
+    // 模拟"代码改了、文档没跟"：把箭塔血量换成一个文档里没有的数
+    const fake = manual.replaceAll(`**${TOWER.arrow.hp}**`, '**999**');
+    expect(fake).not.toContain(`**${TOWER.arrow.hp}**`);
+    expect(fake.length).toBe(manual.length - `**${TOWER.arrow.hp}**`.length + '**999**'.length - (`**${TOWER.arrow.hp}**`.length - '**999**'.length));
   });
 });
